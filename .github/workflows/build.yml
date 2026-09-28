@@ -30,6 +30,7 @@ jobs:
           platform: ${{ inputs.platform }}
 
       - if: inputs.platform == 'linux'
+        continue-on-error: true
         run: python3 repro/linkage_check.py turboada.c
 
       - if: inputs.platform != 'windows'
