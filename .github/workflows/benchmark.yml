@@ -1,0 +1,58 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - turboada.c
+      - turboada-runtime.ada
+      - turboada-runtime-legacy.ada
+      - makefile
+      - make.bat
+      - test.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: benchmark (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/toolchain
+        with:
+          platform: linux
+
+      - run: make ta
+
+      - name: run benchmark
+        env:
+          FORCE: '1'
+          TSV_DIR: bench-results
+        run: |
+          mkdir -p bench-results
+          bash test.sh bench all 2>&1 | tee bench-results/bench.txt
+          {
+            echo '### Benchmark'
+            echo '```'
+            sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' bench-results/bench.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench-results
+          if-no-files-found: warn

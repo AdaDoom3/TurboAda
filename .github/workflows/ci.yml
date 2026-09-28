@@ -1,4 +1,4 @@
-name: Windows
+name: CI
 
 on:
   push:
@@ -8,12 +8,19 @@ on:
     paths-ignore: ['**.md', 'readme-images/**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: windows-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  windows:
+  suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux, macos, windows]
     uses: ./.github/workflows/build.yml
     with:
-      platform: windows
+      platform: ${{ matrix.platform }}
