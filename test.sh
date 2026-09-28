@@ -992,7 +992,7 @@ run_debug_tests(){
     local line tail_line p f d
     line=$(sh debug/run.sh "$TURBOADA" 2>&1) || true
     [[ -n ${RESULTS_DIR:-} ]] && printf '%s\n' "$line" > "$RESULTS_DIR/debug.log"
-    printf '%s\n' "$line" | { grep -E '^(FAILED|  ---|    )' || true; } | sed 's/^/  /
+    printf '%s\n' "$line" | { grep -E '^(FAILED|  ---|    )' || true; } | sed 's/^/  /'
     tail_line=$(printf '%s\n' "$line" | tail -1)
     p=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); p=${p:-0}
     f=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); f=${f:-0}
