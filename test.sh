@@ -115,7 +115,6 @@ load_watch_start(){
     ( while :; do loadavg; sleep 2; done > "$LOAD_SAMPLES" 2>/dev/null ) &
     LOAD_WATCH=$!
 }
-# Not a command substitution: a subshell would lose both values.
 load_watch_stop(){
     local pk
     LOAD_LAST=0
@@ -143,10 +142,6 @@ case $(uname -s 2>/dev/null) in
     *)                      HOST_TARGET=linux ;;
 esac
 
-# $2 names the directory to take, so that a tree holding one suite but not
-# the other does not have to be unpacked whole.  -o is deliberate for the
-# suites tests.zip owns; the suites git tracks are not in the archive at
-# all, so unpacking can never overwrite a tracked file with a stale copy.
 unpack(){
     if command -v unzip >/dev/null; then
         unzip -qo "$1" "$2/*"
@@ -174,8 +169,6 @@ find_timeout(){
     local candidate found
     for candidate in ${TIMEOUT:+"$TIMEOUT"} timeout gtimeout /usr/bin/timeout; do
         found=$(command -v "$candidate" 2>/dev/null) || continue
-        # Windows ships an unrelated System32\timeout.exe, so ask for the
-        # behaviour rather than trusting the name.
         "$found" -k 1 1 true >/dev/null 2>&1 && { printf '%s' "$found"; return 0; }
     done
     return 1
@@ -247,11 +240,8 @@ acats_setup(){
     START_MS=$(now_ms)
     mkdir -p test_results acats_logs
 
-    # acats is the suite every run is built on and must be present. The rest
-    # are optional extras -- their runners no-op on an absent directory -- so a
-    # suite that is in neither the checkout nor tests.zip is skipped, not fatal.
     local suite
-    for suite in acats extensions project debug acats-bonus; do
+    for suite in acats extensions project debug acats-bonus fuzz; do
         unpack_suite "$PWD" "$suite" && continue
         [[ $suite == acats ]] && die \
             "$suite is missing and tests.zip does not carry it; it is tracked in git -- restore it with: git checkout -- $suite"
@@ -938,10 +928,6 @@ run_extension_tests(){
     return 0
 }
 
-# A case with a `.known' file beside it is expected to fail and is counted
-# apart, so a recorded gap stays visible without reddening the suite -- and
-# a `.known' case that starts passing is reported as a failure, because the
-# marker has become the lie.
 run_project_tests(){
     PROJ_PASS=0 PROJ_FAIL=0 PROJ_KNOWN=0
     [[ -d project ]] || { printf '  %sno project/ directory%s\n' "$DIM" "$OFF"; return 0; }
@@ -972,14 +958,6 @@ run_project_tests(){
     return 0
 }
 
-#  The acats-bonus suite: ACATS 4.2 tests for the post-Ada-83 features,
-#  sanitized to Ada 83 plus the one feature under test, and -- in
-#  acats-bonus/untagged -- tests of no feature at all, whose only post-83
-#  construct was a tagged type nothing in them dispatched on.
-#  A test either passes or fails.  There used to be a third bucket:
-#  acats-bonus/STATUS carried `pending' rows and run.sh refused to fail the
-#  tests underneath them, which held 57 tests of five unimplemented
-#  features outside the count entirely.
 run_bonus_tests(){
     BONUS_PASS=0 BONUS_FAIL=0
     [[ -d acats-bonus ]] || { printf '  %sno acats-bonus/ directory%s\n' "$DIM" "$OFF"; return 0; }
@@ -999,9 +977,6 @@ run_bonus_tests(){
     return 0
 }
 
-# A case whose feature the driver still refuses is `pending', not failed --
-# the debugging campaign's -g and --dump-* land on sibling branches -- and
-# the moment a flag parses, its cases grade for real.
 run_debug_tests(){
     DBG_PASS=0 DBG_FAIL=0 DBG_PEND=0
     [[ -d debug ]] || { printf '  %sno debug/ directory%s\n' "$DIM" "$OFF"; return 0; }
@@ -1029,9 +1004,6 @@ run_debug_tests(){
     return 0
 }
 
-# The reproducers: every program a fix was landed with, under repro/, run
-# in isolation and judged by the expectation lines in its own header --
-# the conventions are at the top of repro/run.sh.
 run_repro_tests(){
     REPRO_PASS=0 REPRO_FAIL=0
     [[ -f repro/run.sh ]] || { printf '  %sno repro/run.sh%s\n' "$DIM" "$OFF"; return 0; }
@@ -1055,16 +1027,11 @@ run_repro_tests(){
     return 0
 }
 
-# The fuzz corpus: the feature-matrix swarm's generated A/B/C tests under
-# fuzz/, one directory per cell.  Written against the Reference Manual and
-# not the compiler, so fuzz/KNOWN lists every test that fails today with
-# the verdict it drew; a new verdict, or a listed test that now passes,
-# fails the suite (see fuzz/run.sh).
 run_fuzz_tests(){
-    FUZZ_PASS=0 FUZZ_FAIL=0 FUZZ_KNOWN=0
+    FUZZ_PASS=0 FUZZ_FAIL=0
     [[ -f fuzz/run.sh ]] || { printf '  %sno fuzz/run.sh%s\n' "$DIM" "$OFF"; return 0; }
 
-    heading "FUZZ" "the feature-matrix corpus: every feature alone and crossed with every other, judged by class, failures held to fuzz/KNOWN"
+    heading "FUZZ" "the feature-matrix corpus: every feature alone and crossed with every other, judged by class"
 
     local line tail_line
     line=$(bash fuzz/run.sh "$ADA83" 2>&1) || true
@@ -1072,21 +1039,17 @@ run_fuzz_tests(){
     tail_line=$(printf '%s\n' "$line" | tail -1)
     FUZZ_PASS=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); FUZZ_PASS=${FUZZ_PASS:-0}
     FUZZ_FAIL=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); FUZZ_FAIL=${FUZZ_FAIL:-0}
-    FUZZ_KNOWN=$(sed -n 's/.*[^0-9]\([0-9]\+\) known.*/\1/p' <<<"$tail_line"); FUZZ_KNOWN=${FUZZ_KNOWN:-0}
 
-    local fuzz_total=$((FUZZ_PASS + FUZZ_FAIL + FUZZ_KNOWN))
+    local fuzz_total=$((FUZZ_PASS + FUZZ_FAIL))
     printf '\n  %s%s%s\n' "$BOLD" "$tail_line" "$OFF"
     rate_bar FUZZ "$FUZZ_PASS" "$((fuzz_total > 0 ? fuzz_total : 1))"
 
     [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' FZ=%d/%d FZF=%d FZK=%d\n' "$FUZZ_PASS" "$fuzz_total" "$FUZZ_FAIL" "$FUZZ_KNOWN" \
+        printf ' FZ=%d/%d FZF=%d\n' "$FUZZ_PASS" "$fuzz_total" "$FUZZ_FAIL" \
             >> "$RESULTS_DIR/test_summary.txt"
     return 0
 }
 
-#  The last four measure the language extensions whose cost a test cannot
-#  show: each is legal Ada 95 as well, so
-#  GNAT compiles the same program as the reference.
 ALL_PROGRAMS="sieve matmul lu recurse strings numerics checks exceptions memory tasking taskflood taskselect taskelse indirect monitor finalizer wraparound"
 
 describe(){ case $1 in
@@ -1109,16 +1072,10 @@ describe(){ case $1 in
     taskelse)   echo "selective wait with an else part, fixed poll count" ;;
 esac; }
 
-# Programs whose output must match GNAT's byte for byte. numerics is exempt:
-# it accumulates a fixed point value forty million times, and Ada 83 lets an
-# implementation choose its own `small` for such a type, so the two totals are
-# both correct and different (132 against 720 here). Every other program is
-# held to identical output, and a difference there is an error, not a footnote.
 comparable(){ case $1 in numerics) return 1 ;; *) return 0 ;; esac; }
 
 concurrent(){ case $1 in tasking|taskflood|taskselect|taskelse) return 0 ;; *) return 1 ;; esac; }
 
-#  The feature half of each pair.
 extended(){ case $1 in indirect|monitor|finalizer|wraparound) return 0 ;; *) return 1 ;; esac; }
 
 measure(){
@@ -1146,8 +1103,6 @@ measure(){
 med(){ local -a v=(); read -r -a v <<<"$1"; printf '%s' "${v[0]:-x}"; }
 rsd(){ local -a v=(); read -r -a v <<<"$1"; printf '%s' "${v[1]:-0}"; }
 
-# Which CPUs, not how many: --cpuset-cpus=4,5 gives two CPUs numbered 4 and 5,
-# where taskset -c 1 fails and the pinning the method rests on is silently lost.
 allowed_cpus(){
     local list part a b i
     list=$(taskset -pc $$ 2>/dev/null | sed 's/.*: *//')
@@ -1176,8 +1131,6 @@ bench_pinning(){
     CPUS=(); mapfile -t CPUS < <(allowed_cpus)
     [ ${#CPUS[@]} -gt 0 ] || CPUS=(0)
     BENCH_CPU=${BENCH_CPU:-${CPUS[${#CPUS[@]}-1]}}
-    # A polling `select ... else' on one core measures the scheduler, not the
-    # code, so a program with tasks gets a pair.
     BENCH_CPUS_TASK=${BENCH_CPUS_TASK:-}
     if [ -z "$BENCH_CPUS_TASK" ]; then
         if [ ${#CPUS[@]} -ge 2 ]
@@ -1736,7 +1689,6 @@ begin
 end;
 EOF
 
-
     cat > "$BENCH_WORK/src/monitor.ada" <<'EOF'
 with TEXT_IO; use TEXT_IO;
 procedure Monitor is
@@ -1767,7 +1719,6 @@ begin
    Put_Line ("monitor:" & Integer'Image (Total));
 end;
 EOF
-
 
     cat > "$BENCH_WORK/src/finalizer.ada" <<'EOF'
 with ADA.FINALIZATION; use ADA.FINALIZATION;
@@ -1807,7 +1758,6 @@ begin
 end;
 EOF
 
-
     cat > "$BENCH_WORK/src/wraparound.ada" <<'EOF'
 with TEXT_IO; use TEXT_IO;
 procedure Wraparound is
@@ -1829,7 +1779,6 @@ begin
    Put_Line ("wraparound:" & Integer'Image (Total));
 end;
 EOF
-
 
     local p
     for p in $ALL_PROGRAMS; do cp "$BENCH_WORK/src/$p.ada" "$BENCH_WORK/src/$p.adb"; done
@@ -2184,6 +2133,9 @@ arguments, runs every test.
 Commands:
   run [SELECTOR]     run the suite and print a report (the default)
   check [SELECTOR]   run, then diff against the baseline; exit 1 on regression
+  ci                 run every test, print the first failures' logs, write the
+                     step summary when GitHub Actions asks, exit 1 on any failure
+                     or on a test that never ran
   bless [SELECTOR]   run, then write the results as the new baseline
   list [SELECTOR]    list the tests a selector expands to
   extensions         run only the extension tests
@@ -2200,8 +2152,8 @@ Commands:
                      with, under repro/, run in isolation and judged by the
                      expectation lines in its header (see repro/run.sh)
   fuzz               run only the fuzz corpus: the feature-matrix swarm's
-                     generated A/B/C tests under fuzz/, each failure held to
-                     the verdict fuzz/KNOWN records for it (see fuzz/run.sh)
+                     generated A/B/C tests under fuzz/; what ships is what
+                     passes, so every one must (see fuzz/run.sh)
   bench [MODE]       measure rather than test; see Benchmark modes below
   help               display this help and exit
 
@@ -2274,6 +2226,40 @@ ID is unique to the run, so concurrent runs do not overwrite one another.
 TEXT
 }
 
+show_first_failures(){
+    [[ -f ${RESULTS_TSV:-} ]] || return 0
+    local name detail stage
+    awk -F'\t' '$3 != "pass" && ++n <= 3 { print $1 "\t" $4 }' "$RESULTS_TSV" |
+    while IFS=$'\t' read -r name detail; do
+        echo "--- $name  $detail"
+        for stage in err out; do
+            [[ -s $LOGS_DIR/$name.$stage ]] || continue
+            echo "  [$stage]"; head -6 "$LOGS_DIR/$name.$stage" | sed 's/^/    /'
+        done
+        for stage in bind link; do
+            [[ -s $LOGS_DIR/$name.$stage ]] || continue
+            echo "  [$stage]"; tail -20 "$LOGS_DIR/$name.$stage" | sed 's/^/    /'
+        done
+    done
+}
+
+run_ci(){
+    run_selector all "ACATS RUN — all"
+    run_extension_tests; run_project_tests; run_bonus_tests
+    run_debug_tests; run_repro_tests; run_fuzz_tests
+    local summary="$RESULTS_DIR/test_summary.txt" failed skipped
+    [[ -f $summary ]] || { echo "::error::the suite produced no summary; it did not run to completion"; exit 1; }
+    [[ -n ${GITHUB_STEP_SUMMARY:-} ]] &&
+        { printf '### %s\n```\n' "${CI_PLATFORM:-$(uname -s)}"; cat "$summary"; printf '```\n'; } >> "$GITHUB_STEP_SUMMARY"
+    failed=$(sed -n 's/.*[[:space:]]F=\([0-9]\{1,\}\).*/\1/p' "$summary")
+    skipped=$(sed -n 's/.*[[:space:]]S=\([0-9]\{1,\}\).*/\1/p' "$summary")
+    local counts="${failed:-0} ACATS failed, ${skipped:-0} never ran, ${EXT_FAIL:-0} extension, ${PROJ_FAIL:-0} project, ${BONUS_FAIL:-0} bonus, ${DBG_FAIL:-0} debug, ${REPRO_FAIL:-0} reproducer, ${FUZZ_FAIL:-0} fuzz failures"
+    (( ${failed:-0} + ${skipped:-0} + ${EXT_FAIL:-0} + ${PROJ_FAIL:-0} + ${BONUS_FAIL:-0} + ${DBG_FAIL:-0} + ${REPRO_FAIL:-0} + ${FUZZ_FAIL:-0} )) || { echo "$counts"; return 0; }
+    show_first_failures
+    echo "::error::${CI_PLATFORM:-$(uname -s)}: $counts"
+    exit 1
+}
+
 main(){
     if [[ ${1:-} == bench ]]; then shift; bench_main "$@"; return; fi
 
@@ -2294,6 +2280,7 @@ main(){
                      run_fuzz_tests
                  fi ;;
         q)       run_selector "${1:-c32}" "ACATS RUN — ${1:-c32}" ;;
+        ci)      run_ci ;;
         check)   run_selector "${1:-all}" "ACATS CHECK — ${1:-all}"
                  [[ ${1:-all} == all ]] && { run_extension_tests; run_project_tests; run_bonus_tests; run_debug_tests; run_repro_tests; run_fuzz_tests; }
                  compare_to_baseline

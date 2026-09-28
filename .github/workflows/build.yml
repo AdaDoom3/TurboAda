@@ -1,9 +1,5 @@
 name: build
 
-# Shared body of the three per-platform CI workflows. They are separate
-# workflows so each platform gets its own badge; a badge names a workflow, not
-# one leg of a matrix.
-
 on:
   workflow_call:
     inputs:
@@ -11,141 +7,41 @@ on:
         description: linux, macos or windows
         required: true
         type: string
-      runner:
-        description: GitHub-hosted runner image to build on
-        required: true
-        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
-    name: build + acats
-    runs-on: ${{ inputs.runner }}
+    name: build + suite
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-latest","windows":"windows-latest"}')[inputs.platform] }}
+    timeout-minutes: 120
+    env:
+      CI_PLATFORM: ${{ inputs.platform }}
     steps:
       - uses: actions/checkout@v5
 
-      # lli and llvm-link are what test.sh runs the suite with.
-      - name: Install test tools (Linux)
-        if: inputs.platform == 'linux'
-        shell: bash
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm
-          for tool in lli llvm-link; do
-            command -v "$tool" >/dev/null && continue
-            found=$(find /usr/lib/llvm-*/bin /usr/bin -maxdepth 1 -name "${tool}-*" 2>/dev/null | sort -V | tail -1)
-            [[ -n $found ]] && sudo ln -sf "$found" "/usr/local/bin/$tool"
-          done
-          command -v lli && command -v llvm-link
-
-      # macOS has no timeout(1) — test.sh accepts coreutils' gtimeout — and its
-      # /bin/bash is 3.2, too old for the suite. Workers run as bare `bash -c`,
-      # so the newer bash must come first on PATH.
-      - name: Install test tools (macOS)
-        if: inputs.platform == 'macos'
-        shell: bash
-        run: |
-          brew install llvm coreutils bash
-          echo "$(brew --prefix)/bin"     >> "$GITHUB_PATH"
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-
-      # release: false reuses the MSYS2 already on the image. clang and lld are
-      # the C driver turboada links finished programs with: it emits thread-local
-      # storage as COFF weak externals, which GNU ld cannot resolve, so gcc
-      # fails every link with "relocation truncated to fit" against __ss_first
-      # and friends. unzip is not in base-devel.
-      - name: Install test tools (Windows)
-        if: inputs.platform == 'windows'
-        uses: msys2/setup-msys2@v2
+      - uses: ./.github/actions/toolchain
         with:
-          msystem: MINGW64
-          release: false
-          update: true
-          install: >-
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-lld
-            base-devel
-            unzip
+          platform: ${{ inputs.platform }}
 
-      - name: Build (Linux/macOS)
-        if: inputs.platform != 'windows'
-        shell: bash
+      - if: inputs.platform == 'linux'
+        run: python3 repro/linkage_check.py turboada.c
+
+      - if: inputs.platform != 'windows'
         run: make ta
 
-      - name: Build (Windows)
-        if: inputs.platform == 'windows'
+      - if: inputs.platform == 'windows'
         shell: cmd
         run: make.bat
 
-      # turboada looks for turboada-runtime.ada beside its own executable; the make
-      # targets leave the binary in bin-<platform>/ and the runtime at the root.
-      - name: Place the runtime beside the compiler
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ inputs.platform }}" == windows ]]; then
-            cp turboada-runtime.ada bin-windows/
-          else
-            cp turboada-runtime.ada bin-${{ inputs.platform }}/
-          fi
+      - if: inputs.platform != 'windows'
+        run: bash test.sh ci
 
-      - name: Run ACATS (Linux/macOS)
-        if: inputs.platform != 'windows'
-        shell: bash
-        run: bash test.sh run all
-
-      - name: Run ACATS (Windows)
-        if: inputs.platform == 'windows'
+      - if: inputs.platform == 'windows'
         shell: msys2 {0}
-        run: bash test.sh run all
-
-      # `test.sh run` always exits 0, and a skipped test never ran at all, so
-      # both counts have to be checked or a wholly broken suite shows green.
-      # A full run ends with the extension stage, whose failures land in the
-      # same summary as XF.
-      - name: Report and gate on the results
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          summary=$(ls -t test_results/*/test_summary.txt 2>/dev/null | head -1 || true)
-          if [[ -z $summary ]]; then
-            echo "::error::the suite produced no summary; it did not run to completion"
-            exit 1
-          fi
-          { echo "### ACATS — ${{ inputs.platform }}"; echo '```'
-            cat "$summary"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          cat "$summary"
-
-          failed=$(sed -n 's/.*[[:space:]]F=\([0-9]\{1,\}\).*/\1/p' "$summary")
-          skipped=$(sed -n 's/.*[[:space:]]S=\([0-9]\{1,\}\).*/\1/p' "$summary")
-          ext_failed=$(sed -n 's/.*[[:space:]]XF=\([0-9]\{1,\}\).*/\1/p' "$summary")
-          : "${failed:=0}" "${skipped:=0}" "${ext_failed:=0}"
-          if (( ext_failed )); then
-            echo "::error::${{ inputs.platform }}: $ext_failed extension test(s) failed"
-          fi
-          (( failed || skipped || ext_failed )) || exit 0
-
-          # test.sh reports only a category and sends the real diagnostics to
-          # per-test logs, so print those for the first few.
-          results=$(ls -t test_results/*/results.tsv 2>/dev/null | head -1 || true)
-          logs=$(ls -td acats_logs/*/ 2>/dev/null | head -1 || true)
-          if [[ -n $results ]]; then
-            awk -F'\t' '$3 != "pass" && ++n <= 3 { print $1 "\t" $4 }' "$results" \
-            | while IFS=$'\t' read -r name detail; do
-                echo "--- $name  $detail"
-                # Compiler diagnostics lead with the root cause; the bind and
-                # link logs end with it, after one line per driver tried.
-                for stage in err out; do
-                  [[ -s "$logs/$name.$stage" ]] || continue
-                  echo "  [$stage]"; head -6 "$logs/$name.$stage" | sed 's/^/    /'
-                done
-                for stage in bind link; do
-                  [[ -s "$logs/$name.$stage" ]] || continue
-                  echo "  [$stage]"; tail -20 "$logs/$name.$stage" | sed 's/^/    /'
-                done
-              done
-          fi
-          (( failed || skipped )) &&
-            echo "::error::${{ inputs.platform }}: $failed failed, $skipped never ran"
-          exit 1
+        run: bash test.sh ci

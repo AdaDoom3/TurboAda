@@ -1,9 +1,5 @@
 name: Release
 
-# A release is cut by pushing a tag on main; nothing publishes on ordinary
-# pushes. Versioning is classic two-part (0.9, 1.0, 1.1), and turboada.c holds the
-# number in TURBOADA_VERSION_MAJOR / _MINOR, read by .github/version.sh.
-
 on:
   push:
     tags: ['v*']
@@ -11,6 +7,10 @@ on:
 
 permissions:
   contents: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   verify:
@@ -23,213 +23,70 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read the version out of turboada.c
-        id: version
-        shell: bash
+      - id: version
         run: echo "version=$(./.github/version.sh)" >> "$GITHUB_OUTPUT"
 
-      # Only a tag push can publish, so only a tag push has to pass the gate.
-      # A manual run is a dry run off a branch: it builds and checks the
-      # archives, and stops before `publish`.
-      - name: Tag must match turboada.c, sit on main, and be unreleased
-        if: github.event_name == 'push'
+      - if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          set -euo pipefail
-          tag_name="${GITHUB_REF_NAME}"
-          source_version="${{ steps.version.outputs.version }}"
-
-          if [[ $tag_name != "v$source_version" ]]; then
-            echo "::error file=turboada.c::tag $tag_name does not match the compiled version v$source_version. Retag, or fix TURBOADA_VERSION_MAJOR/_MINOR."
-            exit 1
-          fi
-
+          [[ $GITHUB_REF_NAME == "v$VERSION" ]] ||
+            { echo "::error file=turboada.c::tag $GITHUB_REF_NAME does not match the compiled version v$VERSION; retag, or fix TURBOADA_VERSION_MAJOR/_MINOR"; exit 1; }
           git fetch --no-tags origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$tag_name points at a commit that is not on main."
-            exit 1
-          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "::error::$GITHUB_REF_NAME points at a commit that is not on main"; exit 1; }
+          ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            { echo "::error::a release for $GITHUB_REF_NAME already exists; versions are published once"; exit 1; }
 
-          if gh release view "$tag_name" >/dev/null 2>&1; then
-            echo "::error::a release for $tag_name already exists; versions are published once."
-            exit 1
-          fi
-
-  # `make package` builds the compiler, the platform artwork and the VS Code
-  # extension into bin-<platform>/; the repository's bin-dll.zip holds only
-  # the vendored DLLs Windows loads at run time, and this job packs the full
-  # release archive from the folder. The extension is not published
-  # separately: every archive carries a copy.
   package:
     name: package (${{ matrix.platform }})
-    needs: [verify]
-    runs-on: ${{ matrix.runner }}
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux
-            runner: ubuntu-latest
-          - platform: macos
-            runner: macos-latest
-          - platform: windows
-            runner: windows-latest
+        platform: [linux, macos, windows]
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-latest","windows":"windows-latest"}')[matrix.platform] }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
-      # The runners carry no LLVM. ta dlopens libLLVM to emit native code,
-      # so without it the packaged compiler cannot get past --ir.
-      - name: Install the toolchain (Linux)
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends llvm
-
-      - name: Install the toolchain (macOS)
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          brew install llvm
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-
-      # The clang on the image targets MSVC, so it drives lld-link and rejects
-      # the mingw spellings ada83 emits (-lm, -Wl,--stack). MINGW64 clang and
-      # lld are the combination that links: ada83 puts thread-local storage in
-      # COFF weak externals, which GNU ld cannot resolve either.
-      - name: Install the toolchain (Windows)
-        if: matrix.platform == 'windows'
-        id: msys2
-        uses: msys2/setup-msys2@v2
+      - id: toolchain
+        uses: ./.github/actions/toolchain
         with:
-          msystem: MINGW64
-          release: false
-          update: true
-          install: >-
-            mingw-w64-x86_64-llvm
-            mingw-w64-x86_64-clang
-            mingw-w64-x86_64-lld
-            zip
+          platform: ${{ matrix.platform }}
 
-      - name: Package (Linux/macOS)
-        if: matrix.platform != 'windows'
-        shell: bash
+      - if: matrix.platform == 'windows'
+        run: echo '${{ steps.toolchain.outputs.mingw }}' >> "$GITHUB_PATH"
+
+      - if: matrix.platform != 'windows'
         run: make package TARGET=${{ matrix.platform }}
 
-      - name: Package (Windows)
-        if: matrix.platform == 'windows'
+      - if: matrix.platform == 'windows'
         shell: cmd
         run: make.bat package
 
-      # Only now, so that make.bat still compiles with the image's gcc: ada83
-      # links through system(), which inherits this PATH, and the MINGW64
-      # clang has to win over the MSVC-targeting one in the image.
-      - name: Put MINGW64 ahead of the image toolchain
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: echo '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin' >> "$GITHUB_PATH"
-
-      # The make scripts stop at bin-<platform>/; the release archive that
-      # ships is packed here from everything they staged.
-      - name: Pack the release archive (Linux/macOS)
-        if: matrix.platform != 'windows'
-        shell: bash
-        run: |
-          mkdir -p dist
-          cd bin-${{ matrix.platform }} && zip -qr ../dist/bin-${{ matrix.platform }}.zip .
-
-      # The image's git-bash has no zip, so this runs in the MSYS2 shell that
-      # installed one.
-      - name: Pack the release archive (Windows)
-        if: matrix.platform == 'windows'
-        shell: msys2 {0}
-        run: |
-          mkdir -p dist
-          cd bin-windows && zip -qr ../dist/bin-windows.zip .
-
-      # The archives are built with different flags from CI, and on macOS as a
-      # universal binary CI never produces, so what ships is not what the suite
-      # ran against. Unpack it and take the compiler through a real compile,
-      # link and run.
-      - name: Check the packaged archive
-        shell: bash
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-        run: |
-          set -euo pipefail
-          rm -rf verify && mkdir verify
-          unzip -q dist/bin-${{ matrix.platform }}.zip -d verify
-          cd verify
-
-          case "${{ matrix.platform }}" in
-            windows) compiler=./ta.exe ;;
-            *)       compiler=./ta ;;
-          esac
-          chmod +x "$compiler" 2>/dev/null || true
-
-          "$compiler" --version
-          "$compiler" --version | grep -qxF "ta $VERSION"
-
-          printf '%s\n' \
-            'WITH TEXT_IO;' \
-            'PROCEDURE HELLO IS' \
-            'BEGIN' \
-            '   TEXT_IO.PUT_LINE ("packaged TurboAda works");' \
-            'END HELLO;' > hello.adb
-          "$compiler" hello.adb -o hello
-          program=./hello
-          [[ -x $program ]] || program=./hello.exe
-          "$program" | grep -qx "packaged TurboAda works"
-
-      # A universal binary missing a slice still runs on the machine that built
-      # it, so the only way to catch that is to ask.
-      - name: Check the macOS binary is universal
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          archs=$(lipo -archs verify/ta)
-          echo "slices: $archs"
-          for want in arm64 x86_64; do
-            grep -qw "$want" <<<"$archs" \
-              || { echo "::error::bin-macos.zip is missing the $want slice (has: $archs)"; exit 1; }
-          done
-
-      # ta.exe loads LLVM-C.dll at run time; without it the archive is inert
-      # on any machine that does not already have LLVM.
-      - name: Check the Windows archive carries its DLLs
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          unzip -l dist/bin-windows.zip | grep -qi 'LLVM-C\.dll' \
-            || { echo "::error::bin-windows.zip does not contain LLVM-C.dll"; exit 1; }
-
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.platform }}
-          path: dist/bin-${{ matrix.platform }}.zip
+          name: builds-${{ matrix.platform }}
+          path: builds/bin-${{ matrix.platform }}.zip
           if-no-files-found: error
 
   publish:
     name: publish
-    needs: [package]
+    needs: package
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: dist-*
-          path: dist
+          pattern: builds-*
+          path: builds
           merge-multiple: true
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          prerelease: false
           make_latest: true
           generate_release_notes: true
-          files: dist/*
+          files: builds/*

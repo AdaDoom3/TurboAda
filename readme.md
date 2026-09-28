@@ -13,8 +13,8 @@
 
 | | |
 |---|---|
-| Compiler | `turboada.c`, 111k lines, no generated code, no third-party source |
-| Runtime | `turboada-runtime.ada`, 3k lines of Ada |
+| Compiler | `turboada.c`, 113k lines, no generated code, no third-party source |
+| Runtime | `turboada-runtime.ada`, 3k lines of Ada; `turboada-runtime-legacy.ada`, 14k lines of strings and containers |
 | Language | all of MIL-STD-1815A: tasking, generics, fixed point, representation clauses |
 | Additional features | protected types, controlled types, child units, general and anonymous access, contracts and more; `-ada83` turns them off |
 | Conformance | 3561 / 3561, ACATS 1.11; 234 / 234 of the post-83 tests |
@@ -27,7 +27,7 @@ unpack the archive for your platform: `bin-linux.zip`, `bin-macos.zip` or
 `bin-windows.zip`
 
 ```ada
-use Text_IO;
+with Text_IO; use Text_IO;
 procedure Hello is
   begin
     Put_Line ("Hello, Ada world!");
@@ -60,19 +60,26 @@ unpacked it.
 | Windows  | `make.bat` | GCC or Clang; offers to fetch Zig if neither is installed |
 
 Every script writes what it builds into `bin-<target>/` - `bin-linux/ta`,
-`bin-macos/ta`, `bin-windows\ta.exe` with the DLLs it loads beside it.
-The DLLs are vendored in `bin-libraries.zip`, which holds nothing else; the
-release workflow zips each finished `bin-<target>/` into the archives it
-publishes.
+`bin-macos/ta`, `bin-windows\ta.exe` with `LLVM-C.dll` beside it. That DLL
+is the official Windows build from the llvm-project release (22.1.8), vendored
+in `bin-libraries.zip`, which holds nothing else; it imports only Windows
+system DLLs, and `ta.exe` is linked statically, so the Windows package needs
+nothing installed: no MinGW runtime, no pthread. Each package script zips
+its finished `bin-<target>/` into `builds/` and proves the archive: the
+compiler answers its version and builds a program; the release workflow
+publishes what the scripts made.
 
-`turboada-runtime.ada` holds the standard library, and the compiler looks for it
-beside its own executable.
+`turboada-runtime.ada` holds the standard library, and
+`turboada-runtime-legacy.ada` the predefined string and container packages
+of the later standards (`Ada.Strings.Unbounded`, `Ada.Containers.Vectors`
+and the rest); the compiler looks for both beside its own executable, and
+reads the second only for a program that names one of its units.
 
 | Platform | Command | Produces |
 | -------- | ------- | -------- |
-| Linux    | `make package` | `bin-linux/`, extension and artwork included |
-| macOS    | `osascript make.applescript package` | `bin-macos/`, both slices together |
-| Windows  | `make.bat package` | `bin-windows/`, DLLs included |
+| Linux    | `make package` | `builds/bin-linux.zip`, extension and artwork included |
+| macOS    | `osascript make.applescript package` | `builds/bin-macos.zip`, both slices together |
+| Windows  | `make.bat package` | `builds/bin-windows.zip`, `LLVM-C.dll` included |
 
 ## Conformance
 
@@ -101,10 +108,10 @@ ANSI/MIL-STD-1815A, and refuses them.
 
 | Area | What is there |
 |------|---------------|
-| Concurrency | protected types, objects and entries; task discriminants |
+| Concurrency | protected types, objects and entries, with timed and conditional entry calls and `requeue`; `delay until`; asynchronous select (`select ... then abort`); access to protected operations; task discriminants |
 | Types | controlled types (`Ada.Finalization`) without tagged types; general access types, `aliased`, `'Access`; anonymous access types, access discriminants and their accessibility checks; access-to-subprogram types; subtype predicates |
-| Program structure | child units, public and private, with their visibility rules; `Ada.`-prefixed names for the predefined units; a context-clause `use` that implies its `with` (available in GNAT under `-gnatX`; prefixed (dot) calls |
-| Expressions | if, case and quantified expressions; expression functions; null procedures; user-defined literals |
+| Program structure | child units, public and private, with their visibility rules; `Ada.`-prefixed names for the predefined units; a context-clause `use` that implies its `with` (as GNAT admits under `-gnatX`); prefixed (dot) calls |
+| Expressions | if, case, quantified and declare expressions; raise expressions; expression functions; null procedures; user-defined literals; delta aggregates for records and arrays; iterated component associations with a choice list or `for ... of` |
 | Contracts | `Pre`, `Post`, `Assert` and `Predicate`, with the aspects that carry them |
 | Iteration | `for ... of` over arrays and containers; user-defined iterators; generalized references and indexing |
 | Statements | `continue`, `goto ... when`, `raise ... with` and `Ada.Exceptions` |
@@ -112,61 +119,80 @@ ANSI/MIL-STD-1815A, and refuses them.
 | Input-output | streams: `'Read`, `'Write`, `Stream_Size`, user streams, `Stream_IO` |
 | Systems | `Volatile` and `Atomic` (RM C.6) |
 
-Note: Tagged types and dispatching are delibritaly excluded from the subset. 
+Note: Tagged types and dispatching are deliberately excluded from the subset.
 
 ## Benchmarks
 
 Run time of the generated code at `-O2`, against GNAT 13.3.0 (GCC
-`13.3.0-6ubuntu2~24.04.1`), on Linux x86_64 with 4 cpus (Intel Xeon @ 2.80 GHz).
+`13.3.0-6ubuntu2~24.04.1`), on Linux x86_64 with 4 cpus (Intel Xeon @ 2.80 GHz),
+measured on 2026-09-28. Each figure is the median ± MAD of 25 interleaved runs,
+pinned to a core after warmup. The whole run is done twice, and a ratio is shown
+only where both runs tell the compilers apart and agree with each other; here
+every published ratio moved by 3% or less between them. Raw data is in
+`bench/runs-2026-09-28/`.
 
 | Program | Stresses | ta (s) | gnat (s) | Ratio | Result |
 |---------|----------|----------:|---------:|------:|-------:|
-| **exceptions** | raise, propagate, handle | `0.021 ± 0.000` | `3.518 ± 0.009` | `0.01` | **168× faster** |
-| **lu** | LU decomposition, float division | `0.062 ± 0.001` | `0.220 ± 0.002` | `0.28` | **3.5× faster** |
-| **memory** | allocation and deallocation | `0.116 ± 0.000` | `0.248 ± 0.002` | `0.47` | **2.1× faster** |
-| **taskelse** | selective wait with an else part | `0.042 ± 0.001` | `0.088 ± 0.001` | `0.48` | **2.1× faster** |
-| **finalizer** † | controlled types, finalisation on scope exit | `0.025 ± 0.000` | `0.050 ± 0.000` | `0.50` | **2.0× faster** |
-| **indirect** † | calls through a subprogram pointer | `0.059 ± 0.001` | `0.097 ± 0.000` | `0.61` | **1.6× faster** |
-| **taskflood** | task creation and termination | `0.385 ± 0.002` | `0.499 ± 0.002` | `0.77` | **1.3× faster** |
-| **strings** | slices and character work | `0.043 ± 0.000` | `0.052 ± 0.000` | `0.83` | **1.2× faster** |
-| **wraparound** † | modular arithmetic at the type's top | `0.054 ± 0.000` | `0.064 ± 0.000` | `0.84` | **1.2× faster** |
-| **checks** | range and index checks in a hot loop | `0.159 ± 0.000` | `0.184 ± 0.000` | `0.86` | **1.2× faster** |
-| **numerics** | fixed point and 12-digit float \* | `0.070 ± 0.000` | `0.081 ± 0.000` | `0.86` | **1.2× faster** |
-| **monitor** † | protected object, read and update | `0.402 ± 0.001` | `0.413 ± 0.001` | `0.97` | **1.03× faster** |
-| **sieve** | integer arrays, index checks | `0.052 ± 0.000` | `0.054 ± 0.000` | — | *indistinguishable* |
-| **matmul** | dense float, nested loops | `0.026 ± 0.000` | `0.025 ± 0.000` | — | *indistinguishable* |
-| **recurse** | call and return | `0.017 ± 0.000` | `0.020 ± 0.000` | — | *indistinguishable* |
+| **exceptions** | raise, propagate, handle | `0.030 ± 0.001` | `4.901 ± 0.125` | `0.01` | **163× faster** |
+| **tasking** | rendezvous throughput | `0.927 ± 0.271` | `7.514 ± 0.307` | `0.12` | **8.1× faster** |
+| **memory** | allocation and deallocation | `0.105 ± 0.001` | `0.397 ± 0.006` | `0.26` | **3.8× faster** |
+| **lu** | LU decomposition, float division | `0.080 ± 0.003` | `0.241 ± 0.011` | `0.33` | **3.0× faster** |
+| **finalizer** † | controlled types, finalization on scope exit | `0.025 ± 0.000` | `0.050 ± 0.001` | `0.50` | **2.0× faster** |
+| **taskelse** | selective wait with an else part | `0.049 ± 0.002` | `0.097 ± 0.001` | `0.51` | **2.0× faster** |
+| **numerics** | fixed point and 12-digit float \* | `0.085 ± 0.001` | `0.153 ± 0.001` | `0.56` | **1.8× faster** |
+| **indirect** † | calls through a subprogram pointer | `0.071 ± 0.001` | `0.106 ± 0.002` | `0.67` | **1.5× faster** |
+| **taskflood** | task creation and termination | `0.362 ± 0.017` | `0.467 ± 0.013` | `0.78` | **1.3× faster** |
+| **checks** | range and index checks in a hot loop | `0.176 ± 0.004` | `0.208 ± 0.010` | `0.85` | **1.2× faster** |
+| **wraparound** † | modular arithmetic at the type's top | `0.055 ± 0.001` | `0.064 ± 0.000` | `0.86` | **1.2× faster** |
+| **strings** | slices and character work | `0.059 ± 0.000` | `0.067 ± 0.002` | `0.88` | **1.1× faster** |
+| **monitor** † | protected object, read and update | `0.507 ± 0.006` | `0.530 ± 0.015` | — | *a tie* |
+| **sieve** | integer arrays, index checks | `0.059 ± 0.000` | `0.059 ± 0.001` | — | *indistinguishable* |
+| **matmul** | dense float, nested loops | `0.030 ± 0.001` | `0.029 ± 0.002` | — | *indistinguishable* |
+| **recurse** | call and return | `0.022 ± 0.001` | `0.025 ± 0.001` | — | *indistinguishable* |
+
+† a feature beyond Ada 83, on by default.
+
+\* the printed totals differ between the compilers, because the standard lets a
+fixed point type choose its own small.
+
+`monitor` separated from GNAT in one run only, so it is listed as a tie.
+`taskselect` is measured but not listed: it polls a selective wait until a
+partner arrives, so its time depends on the scheduler rather than the code, and
+`taskelse` covers the same construct with a fixed number of polls.
+
+Rerun it with `bash test.sh bench codegen`. The harness refuses to measure above
+a load average of 2.
 
 ## VSCode Extension
 
-`ta --lsp` serves the Language Server Protocol on stdin and stdout, so
-hovers, completions and diagnostics come from the same code that passes
-ACATS. The extension finds the compiler on your PATH - or fetches the
-latest release on its own.
+The compiler is its own language server (`ta --lsp`), so hovers,
+completions and diagnostics come from the same code that passes ACATS.
+The extension finds the compiler on your PATH or downloads the latest
+release for you.
 
 | | |
 |:--:|:--:|
 | ![Diagnostics](readme-images/shot-diagnostics.png) | ![Quick fixes](readme-images/shot-quickfix.png) |
-| The compiler's diagnostics, notes included | Quick fixes built from its own suggestions |
+| Diagnostics as you type | Quick fixes from the compiler's own suggestions |
 | ![Scenario variables](readme-images/shot-scenario.png) | ![Build and run](readme-images/shot-build.png) |
-| GPR scenario variables switch from the sidebar | Build, watch progress, run in the terminal |
+| Scenario values from the status bar | Build progress in the view and the status bar |
 
-Build and run the project without leaving the editor — the sidebar reads
-`.gpr` and `.gpj` project files, tracks build progress unit by unit, and
-runs the result in the integrated terminal.
+Build and run without leaving the editor. The project view reads `.gpr`
+and `.gpj` files, shows build progress unit by unit, and runs the result
+in the integrated terminal.
 
-**Ada 83: New Project** scaffolds a buildable project from one name —
-a `.gpr` with a typed scenario variable, a `src/` directory, and a main
-that prints a line:
+**TurboAda: New Project** creates a project from a name: a `.gpr` with a
+typed scenario variable, a `src/` directory and a main that prints a
+line:
 
 ![New Project](readme-images/new-project.gif)
 
-Error messages can be read in another language. `turboada.language` picks one,
-and anything but English hands the message to the editor's model.
+Error messages can be shown in another language. Set `turboada.language`;
+anything but English is translated by the editor's language model.
 
 | `turboada.language` | |
 | ---------------- | --- |
-| `en` | English, as the compiler writes it — no model, no request |
+| `en` | English, straight from the compiler |
 | `es` | Spanish |
 | `fr` | French |
 | `de` | German |
@@ -177,13 +203,13 @@ and anything but English hands the message to the editor's model.
 
 | Setting | |
 | ------- | --- |
-| `turboada.compilerPath` | Location of `ta` and where `${workspaceFolder}` gets substituted |
+| `turboada.compilerPath` | Path to `ta`; `${workspaceFolder}` is substituted |
 | `turboada.includePaths` | Directories for with-ed units |
-| `turboada.language` | Language error messages are read in |
+| `turboada.language` | Language for error messages |
 | `turboada.formatOnType` | Reindent each line as you type it |
-| `turboada.formatOnSave` | Reformat the whole file as it is saved, by asking a model |
+| `turboada.formatOnSave` | Reformat the whole file on save, using a language model |
 | `turboada.formatStrength` | How much a reformat may change: `indentation`, `layout` or `style` |
-| `turboada.trace.server` | Write the protocol traffic to the output channel |
+| `turboada.trace.server` | Log the language server traffic to the output channel |
 
 ## Use
 
@@ -265,7 +291,7 @@ $1 = (depth => 3, label => "climb")
 
 The ACATS tests are in `tests.zip` and unzipped on first use. The
 reproducers under `repro/` — the program each fix was landed with, about
-1,100 of them — are a suite of their own. They run at the end of every
+1,200 of them — are a suite of their own. They run at the end of every
 full run, or alone in under a minute.
 
 ```sh
@@ -275,6 +301,7 @@ bash test.sh run c45 # One group
 bash test.sh check   # Run, then diff against the baseline
 bash test.sh bonus   # The post-83 features
 bash test.sh repro   # The reproducers, judged by the headers in each file
+bash test.sh fuzz    # The 6,003 generated feature-matrix tests; every one must pass
 bash test.sh bench   # Measure instead of test
 bash test.sh help
 ```

@@ -87,7 +87,7 @@ end binaryFolderFor
 
 on executableFor(chosenPlatform)
 	if chosenPlatform is windowsPlatform() then return "ta.exe"
-	return "ada83"
+	return "ta"
 end executableFor
 
 on artworkFor(chosenPlatform)
@@ -187,7 +187,7 @@ on buildIcons(directory, chosenPlatform)
 	set icnsLength to pngLength + 16
 	set dataLength to icnsLength + 4
 	do shell script "mkdir -p " & quoted form of (stagePath & "/__MACOSX")
-	set fileHandle to openForWriting(stagePath & "/__MACOSX/._ada83")
+	set fileHandle to openForWriting(stagePath & "/__MACOSX/._ta")
 	try
 		writeBigInteger(fileHandle, 333319)
 		writeBigInteger(fileHandle, 131072)
@@ -234,7 +234,7 @@ on sharedLibrariesFor(chosenPlatform)
 end sharedLibrariesFor
 
 on librariesArchive()
-	return "bin-dll.zip"
+	return "bin-libraries.zip"
 end librariesArchive
 
 on toolchainHintFor(chosenPlatform)
@@ -396,7 +396,7 @@ on extensionSteps(chosenPlatform)
 	return {"command -v zip >/dev/null || { echo 'zip is needed to package'; exit 1; }", ¬
 		"rm -rf staging/vsix", ¬
 		"mkdir -p staging/vsix/extension/syntaxes " & binFolder, ¬
-		"cp turboada-icon.png staging/vsix/extension/", ¬
+		"cp turboada-icon.png turboada-logo.png staging/vsix/extension/", ¬
 		"if [ -f turboada-manual.md ]; then", ¬
 		"  cp turboada-manual.md staging/vsix/extension/", ¬
 		"else", ¬
@@ -458,8 +458,8 @@ end resourceObjectSteps
 
 on launcherSteps(chosenPlatform)
 	if launcherFor(chosenPlatform) is "" then return {}
-	return {"printf '%s\\n' '[Desktop Entry]' 'Type=Application' 'Name=Ada 83' 'Comment=Ada 83 compiler' " & ¬
-		"'Exec=ada83 %F' 'Icon=turboada-icon' 'Terminal=true' 'Categories=Development;Building;' > " & ¬
+	return {"printf '%s\\n' '[Desktop Entry]' 'Type=Application' 'Name=TurboAda' 'Comment=TurboAda compiler' " & ¬
+		"'Exec=ta %F' 'Icon=turboada-icon' 'Terminal=true' 'Categories=Development;Building;' > " & ¬
 		binaryFolderFor(chosenPlatform) & "/" & launcherFor(chosenPlatform)}
 end launcherSteps
 
@@ -470,10 +470,11 @@ on sharedLibrarySteps(chosenPlatform)
 end sharedLibrarySteps
 
 on buildProgram()
-	set binaryPath to binaryFolderFor(macosPlatform()) & "/ada83"
+	set binaryPath to binaryFolderFor(macosPlatform()) & "/ta"
 	return guardedProgram({"mkdir -p " & binaryFolderFor(macosPlatform()), ¬
-		"gcc -O3 -Wall -std=gnu2x -o " & binaryPath & " turboada.c -lpthread", ¬
-		"test -f turboada-runtime.ada || echo 'turboada-runtime.ada is not here; ada83 needs it beside the executable.'", ¬
+		"gcc -O3 -Wall -std=gnu2x -o " & binaryPath & " turboada.c", ¬
+		"cp turboada-runtime.ada " & binaryFolderFor(macosPlatform()) & "/ || echo 'turboada-runtime.ada is not here; ta needs it beside the executable.'", ¬
+		"cp turboada-runtime-legacy.ada " & binaryFolderFor(macosPlatform()) & "/ || echo 'turboada-runtime-legacy.ada is not here; ta serves the Ada.Strings and Ada.Containers units from it.'", ¬
 		"echo", ¬
 		"echo 'Built " & binaryPath & ".'", ¬
 		"echo 'Compile a program with:  ./" & binaryPath & " myprogram.ada -o myprogram'"}, ¬
@@ -488,16 +489,37 @@ on vsixProgram(chosenPlatform)
 		"Building the extension failed; the message above says why.")
 end vsixProgram
 
+on archiveSteps(chosenPlatform)
+	set binFolder to binaryFolderFor(chosenPlatform)
+	set archivePath to "builds/bin-" & chosenPlatform & ".zip"
+	set steps to {"mkdir -p builds && rm -f " & archivePath, ¬
+		"( cd " & binFolder & " && zip -qr ../" & archivePath & " . )", ¬
+		"rm -rf staging/proof && mkdir -p staging/proof && unzip -q " & archivePath & " -d staging/proof"}
+	if chosenPlatform is macosPlatform() then
+		set steps to steps & {"archs=$(lipo -archs staging/proof/ta); for want in arm64 x86_64; do echo \"$archs\" | grep -qw $want || { echo '" & archivePath & " is missing the '$want' slice'; exit 1; }; done", ¬
+			"version=$(bash .github/version.sh)", ¬
+			"( cd staging/proof && chmod +x ta && ./ta --version | grep -xF \"ta $version\" >/dev/null ) || { echo \"the packaged compiler does not answer 'ta $version'\"; exit 1; }", ¬
+			"printf '%s\\n' 'with Text_IO;' 'procedure Hello is' 'begin' '  Text_IO.Put_Line (\"packaged ta works\");' 'end Hello;' > staging/proof/hello.adb", ¬
+			"( cd staging/proof && ./ta hello.adb -o hello && ./hello | grep -xF 'packaged ta works' >/dev/null ) || { echo 'the packaged compiler cannot build and run a program'; exit 1; }", ¬
+			"printf '%s\\n' 'with Ada.Strings.Fixed, Text_IO;' 'procedure Legacy is' 'begin' '  Text_IO.Put_Line (Ada.Strings.Fixed.Trim (\"  legacy units served  \", Ada.Strings.Both));' 'end Legacy;' > staging/proof/legacy.adb", ¬
+			"( cd staging/proof && ./ta legacy.adb -o legacy && ./legacy | grep -xF 'legacy units served' >/dev/null ) || { echo 'the packaged compiler cannot serve turboada-runtime-legacy.ada'; exit 1; }"}
+	else if chosenPlatform is windowsPlatform() then
+		set steps to steps & {"unzip -l " & archivePath & " | grep -qi 'LLVM-C\\.dll' || { echo '" & archivePath & " does not carry LLVM-C.dll'; exit 1; }", ¬
+			"! unzip -l " & archivePath & " | grep -qi 'libwinpthread\\|libgcc_s\\|libstdc++\\|libiconv\\|libxml2\\|libzstd\\|zlib1' || { echo '" & archivePath & " carries a MinGW runtime DLL'; exit 1; }", ¬
+			"echo '" & archivePath & " was built for windows and cannot run here'"}
+	else
+		set steps to steps & {"echo '" & archivePath & " was built for linux and cannot run here'"}
+	end if
+	return steps & {"rm -rf staging/proof", "echo 'Packaged " & archivePath & ".'"}
+end archiveSteps
+
 on packageProgram(chosenPlatform)
 	set binFolder to binaryFolderFor(chosenPlatform)
 	return guardedProgram(extensionSteps(chosenPlatform) & sharedLibraryGuardSteps(chosenPlatform) & ¬
 		sliceGuardSteps(chosenPlatform) & resourceObjectSteps(chosenPlatform) & ¬
 		chosenRouteSteps(chosenPlatform) & compileSteps(chosenPlatform) & ¬
-		{"cp turboada-runtime.ada " & binFolder & "/"} & launcherSteps(chosenPlatform) & ¬
-		sharedLibrarySteps(chosenPlatform) & ¬
-		{"rm -rf staging", ¬
-		"echo 'Packaged " & binFolder & ":'", ¬
-		"ls -1 " & binFolder}, ¬
+		{"cp turboada-runtime.ada turboada-runtime-legacy.ada " & binFolder & "/"} & launcherSteps(chosenPlatform) & ¬
+		sharedLibrarySteps(chosenPlatform) & {"rm -rf staging"} & archiveSteps(chosenPlatform), ¬
 		"Packaging failed; the message above says why.")
 end packageProgram
 
@@ -518,6 +540,7 @@ on run argv
 		end if
 		if chosenAction is "package" then
 			requireFile(directory, "turboada-runtime.ada")
+			requireFile(directory, "turboada-runtime-legacy.ada")
 			requireFile(directory, iconSourceFor())
 		end if
 		if chosenAction is not "build" then

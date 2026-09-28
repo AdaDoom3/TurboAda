@@ -42,6 +42,7 @@
 /acats/
 /extensions/
 /debug/
+/fuzz/
 
 # What a test run produces: one directory per run under each of these, plus
 # the compiled report package.
@@ -66,3 +67,4 @@ gmon.out
 /swarm/*/work/
 __pycache__/
 acats-bonus/acats42/
+/builds/

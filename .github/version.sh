@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Reads the release version out of turboada.c, which is the single source of
-# truth (TURBOADA_VERSION_MAJOR / _MINOR). Versioning is classic two-part —
-# 0.9, then 1.0, 1.1 — not semantic versioning, so there is no patch field.
-# Used by the release workflow's tag check. Run it by hand to see what the
-# tree currently claims.
-#
-#   ./.github/version.sh          -> 0.9
-#   ./.github/version.sh number   -> 9     (comparable integer)
 
 set -euo pipefail
 
