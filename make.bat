@@ -158,9 +158,10 @@ echo Packaged %ARCHIVE%.
 exit /b 0
 
 :prove
-call :version
+call :version || exit /b 1
 "staging\proof\ta.exe" --version | "%SystemRoot%\System32\findstr.exe" /x /c:"ta %VERSION%" >nul || (
-    echo The packaged compiler does not answer 'ta %VERSION%'.
+    echo The packaged compiler does not answer 'ta %VERSION%'; it answered:
+    "staging\proof\ta.exe" --version
     exit /b 1
 )
 > "staging\proof\hello.adb" (
@@ -202,10 +203,17 @@ popd
 exit /b 0
 
 :version
-for /f "tokens=3" %%V in ('"%SystemRoot%\System32\findstr.exe" /r /c:"^#define TURBOADA_VERSION_MAJOR" %SOURCE%') do set "MAJOR=%%V"
-for /f "tokens=3" %%V in ('"%SystemRoot%\System32\findstr.exe" /r /c:"^#define TURBOADA_VERSION_MINOR" %SOURCE%') do set "MINOR=%%V"
+set "MAJOR="
+set "MINOR="
+for /f "tokens=3" %%V in ('%SystemRoot%\System32\findstr.exe /r /c:"^#define TURBOADA_VERSION_MAJOR" %SOURCE%') do set "MAJOR=%%V"
+for /f "tokens=3" %%V in ('%SystemRoot%\System32\findstr.exe /r /c:"^#define TURBOADA_VERSION_MINOR" %SOURCE%') do set "MINOR=%%V"
 set "VERSION=%MAJOR%.%MINOR%"
+if not defined MAJOR goto version_missing
+if not defined MINOR goto version_missing
 exit /b 0
+:version_missing
+echo Cannot read TURBOADA_VERSION_MAJOR/_MINOR from %SOURCE%.
+exit /b 1
 
 :native
 call :require %SOURCE%  || exit /b 1
