@@ -1,16 +1,6 @@
 CC     = gcc
 CFLAGS = -O3 -Wall -std=gnu2x
-# turboada.c only touches pthread on the non-Windows branch; Windows uses
-# CreateThread and needs no thread library. Some toolchains (e.g. GNAT's
-# mingw gcc) ship no libpthread at all, so probe for it rather than assume:
-# keep -lpthread only when a trivial program links against it, and drop it
-# otherwise. On glibc/macOS it stays (a harmless stub); on Windows it goes.
-LIBS   = $(shell printf 'int main(void){return 0;}' \
-                 | $(CC) -x c - -lpthread -o /dev/null 2>/dev/null \
-                 && echo -lpthread)
 
-# Stage lines in the manner of test-bench.sh: dimmed on a terminal, plain
-# text when piped, so CI logs and redirected output stay free of ANSI codes.
 STAGE = if [ -t 1 ]; then printf '  \033[2m%s\033[0m\n' "$(1)"; \
         else printf '  %s\n' "$(1)"; fi
 
@@ -35,6 +25,8 @@ LINUX_CROSS_COMPILER := $(or \
   x86_64-linux-gnu-gcc)
 
 RUNTIME     = turboada-runtime.ada
+LEGACY      = turboada-runtime-legacy.ada
+RUNTIMES    = $(RUNTIME) $(LEGACY)
 MANUAL      = turboada-manual.md
 VSIX        = turboada.vsix
 BUNDLE      = turboada-extension.html
@@ -79,8 +71,7 @@ ICON_RSRC = Icns=`wc -c < $(BIN_DIR)/$(ICON).icns`; Data=$$((Icns + 4)); \
 
 Slice_Path       = $(if $1,staging/$(EXECUTABLE)-$1,$(BIN_DIR)/$(EXECUTABLE))
 Compile_Slice    = $(COMPILER) $(COMPILER_FLAGS) $(if $1,-arch $1) \
-                   -o $(call Slice_Path,$1) turboada.c $(RESOURCE_OBJECT) \
-                   $(LINK_LIBRARIES)
+                   -o $(call Slice_Path,$1) turboada.c $(RESOURCE_OBJECT)
 SLICES           = $(foreach Architecture,$(ARCHITECTURES),\
                      $(call Slice_Path,$(Architecture)))
 BUILD_EXECUTABLE = $(if $(SLICES),\
@@ -113,11 +104,8 @@ COMPILER_macos            = $(if $(CROSS),o64-clang,$(CC))
 COMPILER_windows          = x86_64-w64-mingw32-gcc
 COMPILER_FLAGS_linux      = -O3 -Wall -g0 -std=gnu17 -march=x86-64 -mtune=generic
 COMPILER_FLAGS_macos      = -O3 -Wall -g0 -std=gnu2x
-COMPILER_FLAGS_windows    = -O2 -Wall -g0 -std=gnu2x
+COMPILER_FLAGS_windows    = -O2 -Wall -g0 -std=gnu2x -static
 ARCHITECTURES_macos       = arm64 x86_64
-LINK_LIBRARIES_linux      = -lpthread
-LINK_LIBRARIES_macos      = -lpthread
-LINK_LIBRARIES_windows    =
 SUFFIX_windows            = .exe
 ARTWORK_linux             = $(ICON).png
 ARTWORK_macos             = $(ICON).icns
@@ -134,7 +122,7 @@ SHARED_LIBRARIES_windows  = *.dll
 $(if $(COMPILER_$(TARGET)),,\
   $(error TARGET is '$(TARGET)'; it must be linux, macos or windows))
 
-$(foreach Role,COMPILER COMPILER_FLAGS LINK_LIBRARIES SUFFIX ARTWORK LAUNCHER \
+$(foreach Role,COMPILER COMPILER_FLAGS SUFFIX ARTWORK LAUNCHER \
                RESOURCE_COMPILER SHARED_LIBRARIES ARCHITECTURES,\
   $(eval $(Role) := $($(Role)_$(TARGET))))
 
@@ -145,26 +133,55 @@ BIN_DIRS         = bin-linux bin-macos bin-windows
 LIBRARY_SOURCE   = bin-libraries.zip
 EXECUTABLE       = ta$(SUFFIX)
 HOST_BINARY      = bin-$(HOST_TARGET)/ta
-HOST_RUNTIME     = bin-$(HOST_TARGET)/$(RUNTIME)
+HOST_RUNTIMES    = $(addprefix bin-$(HOST_TARGET)/,$(RUNTIMES))
 RESOURCE_OBJECT  = $(if $(RESOURCE_COMPILER),staging/$(ICON).o)
 
 LIPO := $(shell command -v lipo || command -v llvm-lipo || \
                 command -v "$$(llvm-config --bindir 2>/dev/null)/llvm-lipo")
 SUDO := $(shell [ $$(id -u) -eq 0 ] || echo sudo)
 
+ARCHIVE       = builds/bin-$(TARGET).zip
+PROOF         = staging/proof
+VERSION      := $(shell bash .github/version.sh)
+MINGW_RUNTIME = 'libwinpthread\|libgcc_s\|libstdc++\|libiconv\|libxml2\|libzstd\|zlib1'
+
+PROVE_CONTENTS_linux   = :
+PROVE_CONTENTS_macos   = archs=$$($(LIPO) -archs $(PROOF)/ta); \
+                         for want in $(ARCHITECTURES); do echo "$$archs" | grep -qw $$want || \
+                           { echo "$(ARCHIVE) is missing the $$want slice (has: $$archs)"; exit 1; }; done
+PROVE_CONTENTS_windows = unzip -l $(ARCHIVE) | grep -qi 'LLVM-C\.dll' || \
+                           { echo "$(ARCHIVE) does not carry LLVM-C.dll"; exit 1; }; \
+                         ! unzip -l $(ARCHIVE) | grep -qi $(MINGW_RUNTIME) || \
+                           { echo "$(ARCHIVE) carries a MinGW runtime DLL"; exit 1; }
+PROVE_RUNS = $(if $(CROSS),echo "$(ARCHIVE) was built for $(TARGET) and cannot run here",\
+  cd $(PROOF) && chmod +x $(EXECUTABLE) && \
+  { ./$(EXECUTABLE) --version | grep -xF "ta $(VERSION)" >/dev/null || \
+    { echo "the packaged compiler does not answer 'ta $(VERSION)'"; exit 1; }; } && \
+  printf '%s\n' 'with Text_IO;' 'procedure Hello is' 'begin' \
+    '  Text_IO.Put_Line ("packaged ta works");' 'end Hello;' > hello.adb && \
+  ./$(EXECUTABLE) hello.adb -o hello && \
+  { ./hello | grep -xF "packaged ta works" >/dev/null || \
+    { echo "the packaged compiler cannot build and run a program"; exit 1; }; } && \
+  printf '%s\n' 'with Ada.Strings.Fixed, Text_IO;' 'procedure Legacy is' 'begin' \
+    '  Text_IO.Put_Line (Ada.Strings.Fixed.Trim ("  legacy units served  ", Ada.Strings.Both));' \
+    'end Legacy;' > legacy.adb && \
+  ./$(EXECUTABLE) legacy.adb -o legacy && \
+  { ./legacy | grep -xF "legacy units served" >/dev/null || \
+    { echo "the packaged compiler cannot serve $(LEGACY)"; exit 1; }; })
+
 all: ta provision-llvm
 
-ta: $(HOST_BINARY) $(HOST_RUNTIME)
+ta: $(HOST_BINARY) $(HOST_RUNTIMES)
 
 $(HOST_BINARY): turboada.c
 	@mkdir -p $(@D)
 	@$(call STAGE,compiling turboada.c with $(CC))
-	$(CC) $(CFLAGS) $(WHOLE_PROGRAM) $(TUNE) -o $@ $< $(LIBS)
+	$(CC) $(CFLAGS) $(WHOLE_PROGRAM) $(TUNE) -o $@ $<
 	@echo "Built $@."
 
-$(HOST_RUNTIME): $(RUNTIME)
+$(HOST_RUNTIMES): bin-$(HOST_TARGET)/%: %
 	@mkdir -p $(@D)
-	@$(call STAGE,copying $(RUNTIME) beside the compiler)
+	@$(call STAGE,copying $< beside the compiler)
 	cp $< $@
 
 provision-llvm:
@@ -177,11 +194,7 @@ provision-llvm:
 	 $(LLVM_INSTALL); \
 	 echo "libLLVM not found; install your system's llvm package"
 
-# `package` fills bin-<target>/ with everything a release carries: the
-# compiler, the runtime, the extension, the platform artwork, and — on
-# Windows — the vendored DLLs unpacked from bin-libraries.zip, which holds
-# nothing else. The release workflow zips the folder itself.
-package: turboada.c $(RUNTIME) $(ICON_SOURCE) $(BIN_DIR)/$(VSIX)
+package: turboada.c $(RUNTIMES) $(ICON_SOURCE) $(BIN_DIR)/$(VSIX)
 	@command -v $(firstword $(COMPILER)) >/dev/null || { \
 	  echo "packaging for $(TARGET) needs $(firstword $(COMPILER))"; exit 1; }
 	@test -z "$(SHARED_LIBRARIES)" || test -f $(LIBRARY_SOURCE) || { \
@@ -197,13 +210,21 @@ package: turboada.c $(RUNTIME) $(ICON_SOURCE) $(BIN_DIR)/$(VSIX)
 	    | $(RESOURCE_COMPILER) -O coff -o $(RESOURCE_OBJECT); }
 	@$(call STAGE,compiling turboada.c for $(TARGET))
 	$(BUILD_EXECUTABLE)
-	cp $(RUNTIME) $(BIN_DIR)/
+	cp $(RUNTIMES) $(BIN_DIR)/
 	test -z "$(LAUNCHER)" || printf '%s\n' '[Desktop Entry]' 'Type=Application' \
 	  'Name=TurboAda' 'Comment=TurboAda compiler' 'Exec=ta %F' 'Icon=$(ICON)' \
 	  'Terminal=true' 'Categories=Development;Building;' > $(BIN_DIR)/$(LAUNCHER)
 	test -z "$(SHARED_LIBRARIES)" || \
 	  unzip -qoj $(LIBRARY_SOURCE) '$(SHARED_LIBRARIES)' -d $(BIN_DIR)
-	@echo "Packaged $(BIN_DIR)/:"; ls -1 $(BIN_DIR)
+	@$(call STAGE,packing $(ARCHIVE))
+	@mkdir -p builds && rm -f $(ARCHIVE)
+	cd $(BIN_DIR) && zip -qr $(abspath $(ARCHIVE)) .
+	@$(call STAGE,proving $(ARCHIVE))
+	rm -rf $(PROOF) && mkdir -p $(PROOF) && unzip -q $(ARCHIVE) -d $(PROOF)
+	$(PROVE_CONTENTS_$(TARGET))
+	$(PROVE_RUNS)
+	rm -rf $(PROOF)
+	@echo "Packaged $(ARCHIVE):"; unzip -l $(ARCHIVE) | tail -n +4
 
 vsix: $(BIN_DIR)/$(VSIX)
 	@echo "Built $<:"; unzip -l $< | tail -n +4
@@ -212,10 +233,7 @@ $(BIN_DIR)/$(VSIX): $(BUNDLE) $(ICON).png $(wildcard $(MANUAL))
 	@command -v zip >/dev/null || { echo "zip is needed to package"; exit 1; }
 	@mkdir -p $(BIN_DIR)
 	rm -rf staging/vsix && mkdir -p staging/vsix/extension/syntaxes
-	cp $(ICON).png staging/vsix/extension/
-	@test -f turboada-logo.png \
-	  && cp turboada-logo.png staging/vsix/extension/ \
-	  || echo "turboada-logo.png is missing; the README logo won't render"
+	cp $(ICON).png turboada-logo.png staging/vsix/extension/
 	@test -f $(MANUAL) && cp $(MANUAL) staging/vsix/extension/ \
 	  || echo "$(MANUAL) is missing; packaging without the manual search tool"
 	@$(call STAGE,splitting $(BUNDLE))
@@ -239,7 +257,7 @@ $(BIN_DIR)/$(VSIX): $(BUNDLE) $(ICON).png $(wildcard $(MANUAL))
 
 clean: clean-test
 	rm -f ta ta.exe $(VSIX)
-	rm -rf staging $(BIN_DIRS)
+	rm -rf staging builds $(BIN_DIRS)
 
 clean-test:
 	rm -rf test_results acats_logs acats/report.ll

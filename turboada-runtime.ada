@@ -210,6 +210,14 @@ package body Text_IO is
   function C_Tmpfile return System.Address;
   pragma Import (C, C_Tmpfile, "tmpfile");
 
+  function C_Fgets (Buffer : System.Address; Size : Integer; Stream : System.Address) return System.Address;
+  pragma Import (C, C_Fgets, "fgets");
+
+  function C_Memchr (Buffer : System.Address; Value : Integer; Length : Integer) return System.Address;
+  pragma Import (C, C_Memchr, "memchr");
+  function C_Strlen (Buffer : System.Address) return Integer;
+  pragma Import (C, C_Strlen, "strlen");
+
   function C_Stdin return System.Address;
   pragma Import (C, C_Stdin, "__ada_stdin");
 
@@ -249,6 +257,9 @@ package body Text_IO is
   Next_FCB              :          Integer        := 4;
   Null_Address          : constant System.Address := System.Null_Address;
   Put_Line_Buffer_Limit : constant Integer        := 4096;
+  Get_Line_Chunk        : constant Integer        := 512;
+
+
   procedure To_C_String (S : String; Buffer : out String) is
     J : Integer := 1;
     begin
@@ -261,9 +272,9 @@ package body Text_IO is
   function Open_Mode_String (Mode : File_Mode) return String is
     begin
       case Mode is
-        when In_File => return "r" & Character'Val (0);
-        when Out_File => return "w+" & Character'Val (0);
-        when Append_File => return "a+" & Character'Val (0);
+        when In_File => return "rb" & Character'Val (0);
+        when Out_File => return "w+b" & Character'Val (0);
+        when Append_File => return "a+b" & Character'Val (0);
       end case;
     end;
   procedure Reset_Position (Table_Slot : Integer) is
@@ -1098,44 +1109,109 @@ package body Text_IO is
     begin
       Put ((Handle => Current_Output_Slot), Item);
     end;
+  --  The next run of a line, in one call.  fgets stops after a line
+  --  terminator and never reads past one, and Want is never more than the
+  --  room left, so the stream is left exactly where the caller expects it.
+  --  How many characters arrived is read back two ways: fgets writes its
+  --  NUL over the sentinel at the end only when the run filled the
+  --  request, and otherwise a seekable stream says so itself or memchr
+  --  finds the NUL that closes the run.
+  procedure Read_Run (Table_Slot : Integer; Stage : in out String;
+                      Want : Integer; Got : out Integer) is
+    Mark : Integer;
+    begin
+      Got := 0;
+      if File_Control_Blocks (Table_Slot).Stream = Null_Address then
+        return;
+      end if;
+      Mark := C_Ftell (File_Control_Blocks (Table_Slot).Stream);
+      Stage (Want + 1) := Character'Val (1);
+      if C_Fgets (Stage'Address, Want + 1,
+                  File_Control_Blocks (Table_Slot).Stream) = Null_Address then
+        return;
+      end if;
+      if Stage (Want + 1) = Character'Val (0) then
+        Got := Want;
+      elsif Mark >= 0 then
+        Got := C_Ftell (File_Control_Blocks (Table_Slot).Stream) - Mark;
+      else
+        Got := C_Strlen (Stage'Address);
+      end if;
+    end;
   procedure Get_Line (File : File_Type; Item : out String; Last : out Natural) is
-    Table_Slot :          Integer := File.Handle;
-    C          :          Integer;
+    Table_Slot : constant Integer := File.Handle;
     First_Slot : constant Integer := Integer (Item'First);
     Last_Slot  : constant Integer := Integer (Item'Last);
-    I          :          Integer;
+    Stage      :          String (1 .. Get_Line_Chunk + 1);
+    I          :          Integer := First_Slot;
+    C          :          Integer;
+    Got, Keep  :          Integer;
+    Ended      :          Boolean;
     begin
       Require_Open (Table_Slot);
       if File_Control_Blocks (Table_Slot).Mode /= In_File then
         raise Mode_Error;
       end if;
       Last := Natural (First_Slot - 1);
-      I := First_Slot;
       while I <= Last_Slot loop
-        C := Raw_Get (Table_Slot);
+        --  One character on its own first: it settles end of file, and it
+        --  clears any character a look-ahead left behind, so the bulk read
+        --  below starts where the stream really is.
+        C := Raw_Peek (Table_Slot);
         if C < 0 then
           if I = First_Slot then
             raise End_Error;
           end if;
           exit;
         end if;
+        C := Raw_Get (Table_Slot);
         if C = 10 then
           File_Control_Blocks (Table_Slot).Col := 1;
           File_Control_Blocks (Table_Slot).Line := File_Control_Blocks (Table_Slot).Line + 1;
           exit;
-        end if;
-        if C = 13 then
-          null;
         elsif C = 12 then
           File_Control_Blocks (Table_Slot).Col := 1;
           File_Control_Blocks (Table_Slot).Line := 1;
           File_Control_Blocks (Table_Slot).Page := File_Control_Blocks (Table_Slot).Page + 1;
           exit;
-        else
+        elsif C /= 13 then
           Item (I) := Character'Val (C);
           Last := Natural (I);
           I := I + 1;
           File_Control_Blocks (Table_Slot).Col := File_Control_Blocks (Table_Slot).Col + 1;
+        end if;
+        if I <= Last_Slot and then File_Control_Blocks (Table_Slot).Look_Count = 0 then
+          Read_Run (Table_Slot, Stage,
+                    Integer'Min (Get_Line_Chunk, Last_Slot - I + 1), Got);
+          Keep  := Got;
+          Ended := Got > 0 and then Stage (Got) = Character'Val (10);
+          if Ended then
+            Keep := Keep - 1;
+          end if;
+          if C_Memchr (Stage'Address, 13, Keep) = Null_Address then
+            if Keep > 0 then
+              Item (I .. I + Keep - 1) := Stage (1 .. Keep);
+              Last := Natural (I + Keep - 1);
+              I := I + Keep;
+              File_Control_Blocks (Table_Slot).Col :=
+                File_Control_Blocks (Table_Slot).Col + Keep;
+            end if;
+          else
+            for K in 1 .. Keep loop
+              if Stage (K) /= Character'Val (13) then
+                Item (I) := Stage (K);
+                Last := Natural (I);
+                I := I + 1;
+                File_Control_Blocks (Table_Slot).Col :=
+                  File_Control_Blocks (Table_Slot).Col + 1;
+              end if;
+            end loop;
+          end if;
+          if Ended then
+            File_Control_Blocks (Table_Slot).Col := 1;
+            File_Control_Blocks (Table_Slot).Line := File_Control_Blocks (Table_Slot).Line + 1;
+            exit;
+          end if;
         end if;
       end loop;
     end;

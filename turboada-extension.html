@@ -2,6 +2,1142 @@
 <meta charset="utf-8">
 <title>TurboAda for Visual Studio Code</title>
 
+<script id="README.md" type="text/markdown">
+<p align="center"><img src="turboada-logo.png" alt="TurboAda" width="220"></p>
+
+# TurboAda for Visual Studio Code
+
+TurboAda is a native-code Ada 2022 compiler built on LLVM.
+
+![A Mars rover example](https://raw.githubusercontent.com/AdaDoom3/Ada83/main/readme-images/shot-mars-rover.png)
+
+| | |
+|---|---|
+| ![Diagnostics as you type](https://raw.githubusercontent.com/AdaDoom3/Ada83/main/readme-images/shot-diagnostics.png) | ![A spelling fix offered as a quick fix](https://raw.githubusercontent.com/AdaDoom3/Ada83/main/readme-images/shot-quickfix.png) |
+| ![Picking a scenario variable](https://raw.githubusercontent.com/AdaDoom3/Ada83/main/readme-images/shot-scenario.png) | ![The project view and a build](https://raw.githubusercontent.com/AdaDoom3/Ada83/main/readme-images/shot-build.png) |
+
+## Getting a compiler
+
+The extension looks for `ta` in this order: the `turboada.compilerPath`
+setting, a `bin-linux/`, `bin-macos/` or `bin-windows/` folder in the
+workspace, then your PATH. If none of those work, it offers to download a
+release or let you point at one. A project can also name its compiler with
+`IDE'Compiler_Command`.
+
+Downloads go into the extension's own storage, are checked with
+`--version` before use, and include `turboada-runtime.ada`, which has to
+be next to the executable.
+
+## Starting a project
+
+**TurboAda: New Project** asks for a kind and a name, then writes a
+`.gpr` with a typed scenario variable, a `src/` folder and a main that
+prints a line. `Ctrl+Alt+Shift+B` builds it.
+
+## Writing code
+
+- **Diagnostics** appear as you type and come straight from the compiler.
+  A misspelled name gets one error, not a cascade, and a spelling
+  suggestion becomes a one-click fix. Related declarations are linked in
+  the Problems panel.
+- **Navigation:** go to definition, find references, rename (`F2`),
+  document highlights and workspace symbols, across every source folder
+  the project knows about. Units from the runtime open in
+  `turboada-runtime.ada` like any other.
+- **Hover, completion and signature help.** After a dot you get exactly
+  the record's components, the protected object's operations or the
+  package's declarations. Signature help opens on `(` and follows each `,`.
+- **Semantic highlighting** from the compiler, so a type and a variable
+  with the same name can be coloured differently.
+- Syntax highlighting, file icons for `.ada`, `.ads`, `.adb`, `.gpr` and
+  `.gpj`, outline, folding, snippets, and formatting (on demand, on save,
+  or reindent as you type).
+- A file with CRLF line endings gets a warning on its first line; the
+  compiler wants LF.
+
+## Building
+
+`Ctrl+Alt+B` builds the current file and `Ctrl+Alt+C` checks it without
+producing output.
+
+The ▶ button at the top right of the editor runs or debugs the main you
+are looking at. Without a project it builds the file on its own and runs
+it. **Run** and **Debug** also appear above every main procedure.
+
+## Projects
+
+A single `.gpr` or `.gpj` at the workspace root is picked up
+automatically. Otherwise set `turboada.projectFile` or run **TurboAda:
+Select Project**.
+
+- **Build Project** (`Ctrl+Alt+Shift+B`) compiles and links; **Build
+  Main** builds one main.
+- **Show Build Plan** prints what the project resolves to without
+  building anything.
+- **Clean Project** removes the compiler's own outputs from `Object_Dir`
+  and `Exec_Dir`, after asking.
+
+### The project view
+
+The turbocharger icon in the activity bar opens the project view. The
+scenario variables come first, then the main programs with inline
+**Build**, **Run** and **Debug** buttons, then the project itself: its
+sources, imported projects and settings. A build shows its progress
+across the top of the view and in the status bar, where a click stops it.
+  
+## Scenario variables
+
+Projects take their settings from `external (...)`, and a typed variable
+lists the values it accepts:
+
+```ada
+type Build_Kind is ("debug", "release");
+Build : Build_Kind := external ("BUILD", "debug");
+```
+
+The status bar shows the current values, such as `MODE: Flight`. Click it,
+or run **TurboAda: Set Scenario Variable** (`Ctrl+Alt+X`), to change one.
+A typed variable offers only its literals, with the current value and the
+default marked; an untyped one opens a text box. Your choice is saved in
+`turboada.scenario`, passed to every build as `-X NAME=VALUE`, and the
+language server restarts over the source directories that scenario
+selects.
+
+## Debugging
+
+Press `F5`, run **TurboAda: Debug Main**, or click **Debug** on a main in
+the project view. The extension rebuilds the main with `-g` and starts it
+under the compiler's own debug adapter (`ta --dap`, with lldb-dap
+underneath). Breakpoints, stepping, variables and expressions all use Ada
+names: a function breakpoint on `mars.rover.try_step` works as written,
+and records print as aggregates. While the program is stopped, a **Tasks**
+view lists its tasks and their states.
+
+A `launch.json` is optional; without one, `F5` debugs the project's first
+main. `turboada.debugAdapterPath` substitutes any other DAP executable,
+and a project's `IDE'Debugger_Command` is honoured too.
+
+The same works in the terminal: `ta --debug prog` gives you `break
+unit.subprogram`, `print record` and `tasks`. For gdb, build with
+`-ggdb`; gdb 14 and later then understands the Ada names. Both flags
+default the build to `-O0`.
+
+## Working with AI assistants
+
+The extension gives chat assistants a `search_turboada_manual` tool, so
+they answer from the language manual rather than from memory of a later
+Ada, and its chat instructions say exactly what this compiler accepts.
+**Suggest Fix** proposes a repair as a diff and applies it only if you
+approve and it compiles. Diagnostics can be translated into your language
+with `turboada.language`.
+
+## Commands
+
+<!-- BEGIN GENERATED: commands -->
+| Command | Keys | Identifier |
+|---|---|---|
+| TurboAda: New Project |  | `turboada.newProject` |
+| TurboAda: Build File | `ctrl+alt+b` / `cmd+alt+b` | `turboada.build` |
+| TurboAda: Check File | `ctrl+alt+c` / `cmd+alt+c` | `turboada.check` |
+| TurboAda: Build Project | `ctrl+alt+shift+b` / `cmd+alt+shift+b` | `turboada.buildProject` |
+| TurboAda: Build Main |  | `turboada.buildMain` |
+| TurboAda: Show Build Plan |  | `turboada.showPlan` |
+| TurboAda: Clean Project |  | `turboada.cleanProject` |
+| TurboAda: Select Project |  | `turboada.selectProject` |
+| TurboAda: Set Scenario Variable | `ctrl+alt+x` / `cmd+alt+x` | `turboada.setScenario` |
+| TurboAda: Reformat File |  | `turboada.reformat` |
+| TurboAda: Suggest Fix |  | `turboada.suggestFix` |
+| TurboAda: Refresh Project View |  | `turboada.refreshProjectView` |
+| TurboAda: Set Variable |  | `turboada.setScenarioVariable` |
+| TurboAda: Build |  | `turboada.buildMainWithProgress` |
+| TurboAda: Run |  | `turboada.runMain` |
+| TurboAda: Debug Main |  | `turboada.debugMain` |
+| TurboAda: Debug |  | `turboada.debugMainWithProgress` |
+| TurboAda: Download Compiler |  | `turboada.updateCompiler` |
+| TurboAda: Locate Compiler |  | `turboada.chooseCompiler` |
+| TurboAda: Restart Language Server |  | `turboada.restartServer` |
+| TurboAda: Show Server Log |  | `turboada.showOutput` |
+<!-- END GENERATED: commands -->
+
+## Settings
+
+<!-- BEGIN GENERATED: settings -->
+| Setting | Default | What it does |
+|---|---|---|
+| `turboada.compilerPath` | `"ta"` | Where the compiler is. |
+| `turboada.downloadBase` | `"https://raw.githubusercontent.com/AdaDoom3/Ada83/main"` | Where to fetch the compiler from. |
+| `turboada.debugAdapterPath` |  | Another debug adapter, should you prefer your own. |
+| `turboada.enable` | `true` | Check the program as you type. |
+| `turboada.languageExtensions` | `true` | Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... |
+| `turboada.requestTimeout` | `15000` | How long to wait for an answer, in milliseconds. |
+| `turboada.workspaceRequestTimeout` | `120000` | The same, for a search across the workspace. |
+| `turboada.includePaths` | `[]` | Further places to look for with-ed units. |
+| `turboada.projectFile` |  | Your project file. |
+| `turboada.scenario` | `{}` | Scenario variables, passed as -X NAME=VALUE. |
+| `turboada.formatOnType` | `false` | Reindent each line as you type it, two spaces to a level. |
+| `turboada.formatOnSave` | `false` | Reformat the whole file on save. |
+| `turboada.formatStrength` | `"style"` | How far a reformat may go. |
+| `turboada.language` | `"en"` | Which language to read errors in. |
+| `turboada.syncDelay` | `120` | How long to wait after you stop typing, in milliseconds. |
+| `turboada.trace.server` | `"off"` | Log the traffic between the editor and the language server. |
+<!-- END GENERATED: settings -->
+
+## Snippets
+
+<!-- BEGIN GENERATED: snippets -->
+| Prefix | Expands to |
+|---|---|
+| `procedure` | A procedure body |
+| `function` | A function body |
+| `package` | A package specification |
+| `packagebody` | A package body |
+| `for` | A for loop |
+| `while` | A while loop |
+| `if` | An if statement |
+| `case` | A case statement |
+| `declare` | A block statement with declarations |
+| `record` | A record type declaration |
+| `exception` | An exception handler |
+| `hello` | A complete program |
+| `generic` | A generic procedure and its body |
+| `genericpackage` | A generic package specification |
+| `tasktype` | A task type, its entry and its body |
+| `task` | A single task and its body |
+| `accept` | An accept statement with a body |
+| `select` | A selective wait with a terminate alternative |
+| `selectdelay` | A timed entry call |
+| `selectelse` | A selective wait whose else part runs when no rendezvous is ready |
+| `variant` | A record type with a variant part |
+| `enum` | An enumeration type |
+| `array` | An unconstrained array type |
+| `subtype` | A constrained subtype |
+| `fixed` | A fixed point type |
+| `float` | A floating point type |
+| `access` | An access type |
+| `private` | A private type and its full declaration |
+| `exceptiondecl` | An exception declaration |
+| `raise` | A raise statement |
+| `loop` | A named loop with an exit |
+| `textio` | A main procedure that writes a line |
+| `integerio` | An instantiation of Text_IO.Integer_IO |
+| `pragma` | A pragma |
+| `for use` | A record representation clause |
+| `exprfunc` | An expression function |
+| `pre` | A procedure with a precondition and a postcondition |
+| `predicate` | A subtype with a predicate |
+| `ifexpr` | An if expression |
+| `forall` | A quantified expression |
+| `forof` | A loop over the components of an array or container |
+| `protected` | A protected type, its entry and its body |
+| `controlled` | A controlled type and its finalization |
+<!-- END GENERATED: snippets -->
+
+## Dialect
+
+By default the compiler accepts a set of later constructs: protected
+types, controlled types, child units, general and anonymous access,
+contracts and predicates, expression functions, user-defined literals,
+indexing and iteration, streams, and the rest listed under
+`turboada.languageExtensions`.
+
+## Requirements
+
+- Visual Studio Code 1.95 or later, or a compatible editor.
+- The `ta` compiler, with `turboada-runtime.ada` beside it. The download
+  takes care of both.
+- For debugging, a compiler that supports `--dap` and lldb-dap on PATH,
+  or another DAP adapter named in `turboada.debugAdapterPath`.
+
+## More information
+
+- [Compiler and source](https://github.com/AdaDoom3/Ada83)
+- [Issue tracker](https://github.com/AdaDoom3/Ada83/issues)
+- [Language reference](https://github.com/AdaDoom3/Ada83/blob/main/turboada-manual.md)
+</script>
+
+<script id="package.json" type="application/json">
+{
+  "name": "turboada",
+  "displayName": "TurboAda",
+  "description": "An Ada compiler and a place to work in it. Native code through LLVM, and every answer in the editor comes from the compiler itself.",
+  "version": "1.1.0",
+  "publisher": "turboada",
+  "license": "SEE LICENSE IN ../readme.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AdaDoom3/Ada83.git"
+  },
+  "homepage": "https://github.com/AdaDoom3/Ada83#readme",
+  "bugs": {
+    "url": "https://github.com/AdaDoom3/Ada83/issues"
+  },
+  "qna": false,
+  "keywords": [
+    "ada",
+    "turboada",
+    "MIL-STD-1815A",
+    "compiler",
+    "llvm"
+  ],
+  "galleryBanner": {
+    "color": "#1e2430",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Snippets",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:turboada",
+    "onLanguageModelTool:search_turboada_manual",
+    "onDebugResolve:turboada",
+    "onDebugInitialConfigurations",
+    "workspaceContains:**/*.ada",
+    "workspaceContains:**/*.adb",
+    "workspaceContains:**/*.ads",
+    "workspaceContains:**/*.gpr",
+    "workspaceContains:**/*.gpj"
+  ],
+  "icon": "turboada-icon.png",
+  "main": "./turboada-extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "turboada",
+          "title": "TurboAda",
+          "icon": "./turboada-icon-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "turboada": [
+        {
+          "id": "turboada.projectView",
+          "name": "Project",
+          "contextualTitle": "TurboAda",
+          "icon": "./turboada-icon-activity.svg",
+          "when": "turboada.relevant"
+        }
+      ],
+      "debug": [
+        {
+          "id": "turboada.tasksView",
+          "name": "Tasks",
+          "contextualTitle": "TurboAda",
+          "icon": "./turboada-icon-activity.svg",
+          "when": "turboada.relevant"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "turboada.projectView",
+        "when": "turboada.compiler == missing",
+        "contents": "TurboAda needs its compiler, ta, to check and build your code.\n[Download Compiler](command:turboada.updateCompiler)\n[Locate Compiler](command:turboada.chooseCompiler)"
+      },
+      {
+        "view": "turboada.projectView",
+        "when": "turboada.compiler == found",
+        "contents": "No project is open. Create one, or choose a .gpr or .gpj you already have.\n[New Project](command:turboada.newProject)\n[Select Project](command:turboada.selectProject)\nTo run a single file, open it and use the Run button at the top right of the editor."
+      },
+      {
+        "view": "turboada.tasksView",
+        "when": "!turboada.debugging",
+        "contents": "The program's tasks appear here while it is stopped in the debugger.\n[Debug Main](command:turboada.debugMain)"
+      },
+      {
+        "view": "turboada.tasksView",
+        "when": "turboada.debugging",
+        "contents": "No tasks to show. Pause the program or stop at a breakpoint to see its tasks."
+      },
+      {
+        "view": "explorer",
+        "contents": "Create a new Ada project.\n[New Ada Project](command:turboada.newProject)",
+        "when": "workspaceFolderCount == 0"
+      }
+    ],
+    "configurationDefaults": {
+      "[turboada]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "explorer.fileNesting.patterns": {
+        "*.ada": "${capture}.ali, ${capture}.native.ll, ${capture}.native.ali",
+        "*.adb": "${capture}.ali, ${capture}.native.ll, ${capture}.native.ali"
+      }
+    },
+    "languages": [
+      {
+        "id": "turboada",
+        "aliases": [
+          "Ada",
+          "ada"
+        ],
+        "extensions": [
+          ".ada",
+          ".adb",
+          ".ads"
+        ],
+        "icon": {
+          "light": "./turboada-icon-source.svg",
+          "dark": "./turboada-icon-source.svg"
+        },
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "gpr",
+        "aliases": [
+          "GNAT Project",
+          "gpr"
+        ],
+        "extensions": [
+          ".gpr"
+        ],
+        "icon": {
+          "light": "./turboada-icon-project.svg",
+          "dark": "./turboada-icon-project.svg"
+        },
+        "configuration": "./language-configuration-gpr.json"
+      },
+      {
+        "id": "gpj",
+        "aliases": [
+          "Green Hills Project",
+          "gpj"
+        ],
+        "extensions": [
+          ".gpj"
+        ],
+        "firstLine": "^#!gbuild",
+        "icon": {
+          "light": "./turboada-icon-project.svg",
+          "dark": "./turboada-icon-project.svg"
+        },
+        "configuration": "./language-configuration-gpj.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "turboada",
+        "scopeName": "source.ada",
+        "path": "./syntaxes/turboada.tmLanguage.json"
+      },
+      {
+        "language": "gpr",
+        "scopeName": "source.gpr",
+        "path": "./syntaxes/gpr.tmLanguage.json"
+      },
+      {
+        "language": "gpj",
+        "scopeName": "source.gpj",
+        "path": "./syntaxes/gpj.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "turboada",
+        "label": "TurboAda File Icons",
+        "path": "./turboada-file-icons.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "turboada",
+        "path": "./snippets.json"
+      }
+    ],
+    "configuration": {
+      "title": "TurboAda",
+      "properties": {
+        "turboada.compilerPath": {
+          "type": "string",
+          "default": "ta",
+          "description": "Path to the ta compiler. Leave it empty to have the extension find one. turboada-runtime.ada must be in the same folder."
+        },
+        "turboada.downloadBase": {
+          "type": "string",
+          "default": "https://raw.githubusercontent.com/AdaDoom3/Ada83/main",
+          "description": "Base URL the compiler is downloaded from. Point it at a mirror if you keep one."
+        },
+        "turboada.debugAdapterPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a different debug adapter. Leave it empty to use the compiler's own, which understands Ada names."
+        },
+        "turboada.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the program as you type."
+        },
+        "turboada.languageExtensions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... of loops, continue, raise ... with, delta aggregates, the <> box and iterated component associations in aggregates, private extensions, requeue, delay until, streams, Atomic and Volatile, defaults for generic formals, dot notation for a call on its first parameter, Ada. names for the predefined units, and a use clause that stands for its with clause. Turn it off to compile strict Ada 83 (-ada83), where each of these is an error.",
+          "scope": "resource"
+        },
+        "turboada.requestTimeout": {
+          "type": "number",
+          "default": 15000,
+          "description": "How long to wait for the language server to answer, in milliseconds."
+        },
+        "turboada.workspaceRequestTimeout": {
+          "type": "number",
+          "default": 120000,
+          "description": "The same for workspace-wide searches, which read every file and take longer."
+        },
+        "turboada.includePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra directories to search for with-ed units. The file's own folder and the workspace root are always searched."
+        },
+        "turboada.projectFile": {
+          "type": "string",
+          "default": "",
+          "description": "The project file to use. A single .gpr at the workspace root is found automatically; with several, pick one from the status bar."
+        },
+        "turboada.scenario": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Scenario variables, passed to the compiler as -X NAME=VALUE. Names are case-sensitive.",
+          "scope": "resource"
+        },
+        "turboada.formatOnType": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reindent each line as you type it, two spaces per level."
+        },
+        "turboada.formatOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reformat the whole file on save. This uses a language model, and the result is kept only if it still compiles."
+        },
+        "turboada.formatStrength": {
+          "type": "string",
+          "enum": [
+            "indentation",
+            "layout",
+            "style"
+          ],
+          "enumDescriptions": [
+            "Only the leading whitespace of each line.",
+            "All whitespace: indentation, alignment and where long lines break.",
+            "Everything the manual specifies, including casing and where comments sit."
+          ],
+          "default": "style",
+          "description": "How far a reformat may go."
+        },
+        "turboada.language": {
+          "type": "string",
+          "enum": [
+            "en",
+            "es",
+            "fr",
+            "de",
+            "zh-CN",
+            "ja",
+            "hi",
+            "lolcat"
+          ],
+          "enumDescriptions": [
+            "English, as the compiler writes it. Nothing is asked of anything.",
+            "Spanish",
+            "French",
+            "German",
+            "Chinese (Simplified)",
+            "Japanese",
+            "Hindi",
+            "Lolcat"
+          ],
+          "default": "en",
+          "description": "The language to show error messages in. Anything but English is translated by a language model; the English version appears first."
+        },
+        "turboada.syncDelay": {
+          "type": "number",
+          "default": 120,
+          "description": "How long to wait after you stop typing before checking the file, in milliseconds."
+        },
+        "turboada.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the traffic between the editor and the language server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "turboada.newProject",
+        "title": "New Project",
+        "category": "TurboAda",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "turboada.build",
+        "title": "Build File",
+        "category": "TurboAda",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "turboada.check",
+        "title": "Check File",
+        "category": "TurboAda",
+        "icon": "$(check)"
+      },
+      {
+        "command": "turboada.buildProject",
+        "title": "Build Project",
+        "category": "TurboAda",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "turboada.buildMain",
+        "title": "Build Main",
+        "category": "TurboAda",
+        "icon": "$(run)"
+      },
+      {
+        "command": "turboada.showPlan",
+        "title": "Show Build Plan",
+        "category": "TurboAda",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "turboada.cleanProject",
+        "title": "Clean Project",
+        "category": "TurboAda",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "turboada.selectProject",
+        "title": "Select Project",
+        "category": "TurboAda",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "turboada.setScenario",
+        "title": "Set Scenario Variable",
+        "category": "TurboAda",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "turboada.reformat",
+        "title": "Reformat File",
+        "category": "TurboAda",
+        "icon": "$(symbol-ruler)"
+      },
+      {
+        "command": "turboada.suggestFix",
+        "title": "Suggest Fix",
+        "category": "TurboAda",
+        "icon": "$(lightbulb-sparkle)"
+      },
+      {
+        "command": "turboada.refreshProjectView",
+        "title": "Refresh Project View",
+        "category": "TurboAda",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "turboada.setScenarioVariable",
+        "title": "Set Variable",
+        "category": "TurboAda",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "turboada.buildMainWithProgress",
+        "title": "Build",
+        "category": "TurboAda",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "turboada.runMain",
+        "title": "Run Main",
+        "category": "TurboAda",
+        "icon": "$(run)"
+      },
+      {
+        "command": "turboada.debugMain",
+        "title": "Debug Main",
+        "category": "TurboAda",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "turboada.debugMainWithProgress",
+        "title": "Debug",
+        "category": "TurboAda",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "turboada.updateCompiler",
+        "title": "Download Compiler",
+        "category": "TurboAda",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "turboada.chooseCompiler",
+        "title": "Locate Compiler",
+        "category": "TurboAda",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "turboada.restartServer",
+        "title": "Restart Language Server",
+        "category": "TurboAda",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "turboada.showOutput",
+        "title": "Show Server Log",
+        "category": "TurboAda",
+        "icon": "$(output)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "turboada.refreshProjectView",
+          "when": "view == turboada.projectView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "turboada.buildMainWithProgress",
+          "when": "view == turboada.projectView && turboada.hasProject",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "turboada.buildMainWithProgress",
+          "when": "view == turboada.projectView && viewItem == turboadaMain",
+          "group": "inline@1"
+        },
+        {
+          "command": "turboada.runMain",
+          "when": "view == turboada.projectView && viewItem == turboadaMain",
+          "group": "inline@2"
+        },
+        {
+          "command": "turboada.debugMainWithProgress",
+          "when": "view == turboada.projectView && viewItem == turboadaMain",
+          "group": "inline@3"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "turboada.runMain",
+          "when": "resourceLangId == turboada",
+          "group": "navigation@1"
+        },
+        {
+          "command": "turboada.debugMain",
+          "when": "resourceLangId == turboada",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "turboada.build",
+          "when": "resourceLangId == turboada",
+          "group": "navigation@1"
+        },
+        {
+          "command": "turboada.check",
+          "when": "resourceLangId == turboada",
+          "group": "navigation@2"
+        },
+        {
+          "command": "turboada.showPlan",
+          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
+          "group": "navigation@1"
+        },
+        {
+          "command": "turboada.buildProject",
+          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "turboada.build",
+          "when": "resourceLangId == turboada"
+        },
+        {
+          "command": "turboada.check",
+          "when": "resourceLangId == turboada"
+        },
+        {
+          "command": "turboada.reformat",
+          "when": "resourceLangId == turboada"
+        },
+        {
+          "command": "turboada.suggestFix",
+          "when": "resourceLangId == turboada"
+        },
+        {
+          "command": "turboada.buildProject",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.buildMain",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.showPlan",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.cleanProject",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.refreshProjectView",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.setScenarioVariable",
+          "when": "false"
+        },
+        {
+          "command": "turboada.buildMainWithProgress",
+          "when": "false"
+        },
+        {
+          "command": "turboada.runMain",
+          "when": "false"
+        },
+        {
+          "command": "turboada.debugMain",
+          "when": "turboada.hasProject"
+        },
+        {
+          "command": "turboada.debugMainWithProgress",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "turboada.build",
+          "when": "resourceLangId == turboada",
+          "group": "turboada@1"
+        },
+        {
+          "command": "turboada.check",
+          "when": "resourceLangId == turboada",
+          "group": "turboada@2"
+        },
+        {
+          "command": "turboada.selectProject",
+          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
+          "group": "turboada@1"
+        },
+        {
+          "command": "turboada.showPlan",
+          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
+          "group": "turboada@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "turboada.check",
+          "when": "resourceLangId == turboada",
+          "group": "turboada@1"
+        },
+        {
+          "command": "turboada.suggestFix",
+          "when": "resourceLangId == turboada",
+          "group": "turboada@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "turboada.build",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "resourceLangId == turboada"
+      },
+      {
+        "command": "turboada.check",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c",
+        "when": "resourceLangId == turboada"
+      },
+      {
+        "command": "turboada.buildProject",
+        "key": "ctrl+alt+shift+b",
+        "mac": "cmd+alt+shift+b",
+        "when": "turboada.hasProject"
+      },
+      {
+        "command": "turboada.setScenario",
+        "key": "ctrl+alt+x",
+        "mac": "cmd+alt+x",
+        "when": "turboada.hasProject"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "turboada.start",
+        "title": "TurboAda",
+        "description": "Write, build and debug Ada with the compiler behind every feature.",
+        "steps": [
+          {
+            "id": "turboada.start.compiler",
+            "title": "Get a compiler",
+            "description": "The extension needs the `ta` compiler. It checks `turboada.compilerPath`, then `bin-<platform>/` in the workspace, then your PATH, and offers to download one if none is found. The status bar shows which one is in use.\n[Download the compiler](command:turboada.updateCompiler)\n[Set turboada.compilerPath](command:workbench.action.openSettings?%22turboada.compilerPath%22)",
+            "media": {
+              "image": "./turboada-logo.png",
+              "altText": "The TurboAda logo"
+            },
+            "completionEvents": [
+              "onSettingChanged:turboada.compilerPath",
+              "onCommand:turboada.updateCompiler"
+            ]
+          },
+          {
+            "id": "turboada.start.new",
+            "title": "Start a project",
+            "description": "New Project asks for a kind and a name, then creates a project that builds and runs right away.\n[New project](command:turboada.newProject)",
+            "media": {
+              "image": "./turboada-icon.png",
+              "altText": "The TurboAda icon"
+            },
+            "completionEvents": [
+              "onCommand:turboada.newProject"
+            ]
+          },
+          {
+            "id": "turboada.start.write",
+            "title": "Write a program",
+            "description": "Open a .ada, .adb or .ads file and type `hello` for a program that prints a line. There are snippets for packages, generics, tasks, variant records and more.\n[New Ada file](command:workbench.action.files.newUntitledFile?%7B%22languageId%22%3A%22turboada%22%7D)",
+            "media": {
+              "image": "./turboada-icon.png",
+              "altText": "The TurboAda icon"
+            }
+          },
+          {
+            "id": "turboada.start.build",
+            "title": "Build it",
+            "description": "Ctrl+Alt+B builds the current file and Ctrl+Alt+C checks it without building. Errors show up in the Problems panel.\n[Build this file](command:turboada.build)",
+            "media": {
+              "image": "./turboada-icon.png",
+              "altText": "The TurboAda icon"
+            }
+          },
+          {
+            "id": "turboada.start.project",
+            "title": "Select a project",
+            "description": "A project at the workspace root is picked up automatically; otherwise set `turboada.projectFile`. Its source folders are searched for with-ed units and each main gets a build task.\n[Select the active project](command:turboada.selectProject)",
+            "media": {
+              "image": "./turboada-icon.png",
+              "altText": "The TurboAda icon"
+            },
+            "completionEvents": [
+              "onCommand:turboada.selectProject"
+            ]
+          },
+          {
+            "id": "turboada.start.scenario",
+            "title": "Set the scenario",
+            "description": "Ctrl+Alt+X lists the project's scenario variables. A typed variable offers only the values its type allows. Your choice is passed to every build, and changing it rebuilds what needs rebuilding.\n[Set a scenario variable](command:turboada.setScenario)\n[Build the project](command:turboada.buildProject)",
+            "media": {
+              "image": "./turboada-scenario-mock.svg",
+              "altText": "A rendering of the scenario-variable picker (not a screenshot)"
+            },
+            "completionEvents": [
+              "onCommand:turboada.buildProject"
+            ]
+          },
+          {
+            "id": "turboada.start.debug",
+            "title": "Debug it",
+            "description": "F5, or the Debug button on a main, rebuilds it with `-g` and starts it in the debugger. Breakpoints, stepping and backtraces use Ada names.\n[Debug a main](command:turboada.debugMain)",
+            "media": {
+              "image": "./turboada-icon.png",
+              "altText": "The TurboAda icon"
+            },
+            "completionEvents": [
+              "onCommand:turboada.debugMain"
+            ]
+          },
+          {
+            "id": "turboada.start.manual",
+            "title": "Look things up in the standard",
+            "description": "The language manual ships with the extension. Chat assistants can search it, so they answer from the standard instead of from memory.\n[Show the server log](command:turboada.showOutput)",
+            "media": {
+              "image": "./turboada-logo.png",
+              "altText": "The TurboAda logo"
+            }
+          }
+        ]
+      }
+    ],
+    "chatInstructions": [
+      {
+        "name": "TurboAda",
+        "description": "What this compiler accepts, what it does not, and where to look things up.",
+        "path": "./turboada.instructions.md",
+        "when": "editorLangId == turboada"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "search_turboada_manual",
+        "toolReferenceName": "turboadaManual",
+        "displayName": "Search the TurboAda Manual",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(book)",
+        "tags": [
+          "ada",
+          "turboada"
+        ],
+        "userDescription": "Look a rule up in the bundled TurboAda reference manual.",
+        "modelDescription": "Searches the bundled reference manual and returns the matching clauses verbatim, each headed by its clause number and title. The manual is the full text of ANSI/MIL-STD-1815A, the 1983 standard; every construct this compiler admits beyond it is described in an Extension callout inside the clause it extends, and the style guide the formatter applies closes the manual. Use this tool whenever legality, semantics or wording is in question: whether a construct exists here at all, reserved words, syntax productions, visibility and scope, overload resolution, type and subtype rules, discriminants, generics, tasking, exceptions, representation clauses, attributes, pragmas, the predefined environment, or implementation permissions. It is also the way to read a clause you already know by number. Prefer it to recalling Ada from memory: most of Ada 95, 2005, 2012 and 2022 is not here, tagged types included, and what is here is exactly what the callouts describe. Query it with a clause number such as 4.5.7 or 13.1, or with the terms in question such as universal_integer, protected type, expression function or representation clause.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "A clause number such as 4.5.7, or the terms to look up, such as 'universal_integer' or 'overload resolution'."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "turboada",
+        "owner": "turboada",
+        "source": "turboada",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(\\S.*?):(\\d+):(\\d+):\\s+(error|warning|note|internal error):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "turboada",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "enum": [
+              "build",
+              "check",
+              "project",
+              "main",
+              "plan"
+            ],
+            "description": "build compiles the current file to an executable; check compiles it without writing output; project builds every main of the active project; main builds the one named in the task; plan prints what the project resolves to (-n) without building."
+          },
+          "main": {
+            "type": "string",
+            "description": "The main to build, as named in the project's Main attribute. Only the main task reads it; if left out, the project's first main is used."
+          }
+        }
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "turboada"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "turboada",
+        "label": "TurboAda",
+        "languages": [
+          "turboada"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The executable to debug. Build it with -g first, or use TurboAda: Debug Main, which does both."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [],
+                "description": "Command-line arguments for the program."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The working directory for the program. Defaults to the workspace folder."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false,
+                "description": "Stop at the program's entry point before running anything."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "turboada",
+            "request": "launch",
+            "name": "TurboAda: debug the main",
+            "program": "${workspaceFolder}/main",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "TurboAda: Debug Main",
+            "description": "Launch a main built with -g under the compiler's debug adapter (ta --dap).",
+            "body": {
+              "type": "turboada",
+              "request": "launch",
+              "name": "^\"TurboAda: debug ${1:main}\"",
+              "program": "^\"\\${workspaceFolder}/${1:main}\"",
+              "stopOnEntry": false
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+</script>
+
 <script id="turboada-extension.js">
 'use strict';
 
@@ -188,17 +1324,18 @@ const Send = (Message) => {
 };
 
 const Settle = (Message) =>
-  ((Resolve) => {
-     if (Resolve === undefined) return;
+  ((Waiting) => {
+     if (Waiting === undefined) return;
      Traced ('<-', Message);
      Awaiting.delete (Message.id);
-     Resolve (Message.result ?? null);
+     if (Message.error === undefined) Waiting.Resolve (Message.result ?? null);
+     else Waiting.Reject (new Error (Message.error.message));
    }) (Awaiting.get (Message.id));
 
 const Abandon_All = () =>
-  [...Awaiting.entries ()].forEach (([Id, Resolve]) => {
+  [...Awaiting.entries ()].forEach (([Id, Waiting]) => {
     Awaiting.delete (Id);
-    Resolve (null);
+    Waiting.Resolve (null);
   });
 
 const Receive = (Chunk) => {
@@ -226,8 +1363,8 @@ const Ask = (Build, Token, Patience) =>
   Session === null
     ? Promise.resolve (null)
     : ((Id) =>
-         new Promise ((Resolve) => {
-           Awaiting.set (Id, Resolve);
+         new Promise ((Resolve, Reject) => {
+           Awaiting.set (Id, { Resolve, Reject });
            Flush_Changes ();
            Send (Build (Id));
            const Abandon = (Notify) => () => {
@@ -287,6 +1424,7 @@ const Symbols_Of = Listed (Symbol_Of);
 const Completion_Kind_Table = {
   2: vscode.CompletionItemKind.Method,
   3: vscode.CompletionItemKind.Function,
+  5: vscode.CompletionItemKind.Field,
   6: vscode.CompletionItemKind.Variable,
   9: vscode.CompletionItemKind.Module,
   14: vscode.CompletionItemKind.Keyword,
@@ -303,7 +1441,7 @@ const Completion_Item_Of = (Reported) =>
   Object.assign (
     new vscode.CompletionItem (Reported.label,
                                Completion_Kind_Of (Reported.kind)),
-    { detail: Reported.detail });
+    { detail: Reported.detail, sortText: Reported.sortText });
 
 const Completions_Of = (Result) =>
   Result === null || Result === undefined
@@ -401,7 +1539,31 @@ const Is_Cancellable = (Given) =>
   Given !== null && typeof Given === 'object' &&
   typeof Given.onCancellationRequested === 'function';
 
+const At_Rename = (Document, Position, New_Name) =>
+  ({ ...At_Position (Document, Position), newName: New_Name });
+
+const Rename_Edit_Of = (Result) =>
+  Result === null || Result === undefined
+    ? null
+    : Workspace_Edit_Of (Result.changes);
+
+const Prepared_Rename_Of = (Result) =>
+  Result === null || Result === undefined || Result.range === undefined
+    ? null
+    : { range: Range_Of (Result.range), placeholder: Result.placeholder };
+
 const Registers = (Register) => (Provider) => Register (Ada_Selector, Provider);
+
+const Prepares_Rename = (Provider, Capabilities) =>
+  vscode.languages.registerRenameProvider (Ada_Selector,
+    (Capabilities.renameProvider ?? {}).prepareProvider === true
+      ? { ...Provider,
+          prepareRename: (Document, Position, Token) =>
+            Ask ((Id) => ({ id: Id, method: 'textDocument/prepareRename',
+                            params: At_Position (Document, Position) }),
+                 Token)
+              .then (Prepared_Rename_Of) }
+      : Provider);
 
 const Triggers = (Register, Name, Fallback) => (Provider, Capabilities) =>
   Register (Ada_Selector, Provider,
@@ -448,6 +1610,10 @@ const Language_Features = [
     Answer: Signature_Help_Of,
     Register: Triggers (vscode.languages.registerSignatureHelpProvider,
                         'signatureHelpProvider', ['(', ',']) },
+  { Capability: 'renameProvider',            Provides: 'provideRenameEdits',
+    Method: 'textDocument/rename',           Parameters: At_Rename,
+    Answer: Rename_Edit_Of,
+    Register: Prepares_Rename },
   { Capability: 'workspaceSymbolProvider',   Provides: 'provideWorkspaceSymbols',
     Method: 'workspace/symbol',              Parameters: For_Query,
     Answer: Workspace_Symbols_Of,            Patience: 'workspaceRequestTimeout',
@@ -705,14 +1871,14 @@ const Admitted_Constructs =
    'on an entry, user-defined literals, indexing and iteration, for ... of',
    'loops, continue, raise ... with, delta aggregates, the <> box and',
    'iterated component associations in aggregates, Ada.Exceptions, private',
-   'extensions, requeue, delay until, streams, Atomic and Volatile (Atomic',
-   'may name a protected type), defaults for generic formals, and a use',
-   'clause that stands for its with clause'].join (' ');
+   'extensions, requeue, delay until, the asynchronous select,',
+   'access-to-protected-subprogram types, streams, Atomic and Volatile',
+   '(Atomic may name a protected type), defaults for generic formals, and a',
+   'use clause that stands for its with clause'].join (' ');
 
 const Absent_Constructs =
   ['tagged types or anything that dispatches (no \'Class, abstract types,',
-   'interfaces or extension aggregates), no asynchronous select, no',
-   'access-to-protected-subprogram type, and no Ada.Containers,',
+   'interfaces or extension aggregates), and no Ada.Containers,',
    'Ada.Strings, Ada.Characters.Handling or Ada.Numerics'].join (' ');
 
 const Dialect_Rule = () =>
@@ -989,11 +2155,24 @@ const Suggestion_Action = (Document, Diagnostics) =>
       command: { command: 'turboada.suggestFix', title: 'Suggest Fix',
                  arguments: [Document, Diagnostics] } });
 
+const Compiler_Fixes = (Document, Range, Token) =>
+  Ask ((Id) => ({ id: Id, method: 'textDocument/codeAction',
+                  params: At_Selection (Document, Range) }), Token)
+    .then ((Result) => (Array.isArray (Result) ? Result : []));
+
+const Fixed_Lines = (Fixes) =>
+  new Set (Fixes.flatMap ((Fix) =>
+    Object.values (Fix.edit?.changes ?? {}).flat ()
+      .map (({ range }) => range.start.line)));
+
 const Suggestion_Provider = {
-  provideCodeActions: (Document, Range, Context) =>
-    ((Errors) =>
-       (Errors.length === 0 ? [] : [Suggestion_Action (Document, Errors)]))
-      (Context.diagnostics.filter (Is_An_Error)),
+  provideCodeActions: async (Document, Range, Context, Token) => {
+    const Errors = Context.diagnostics.filter (Is_An_Error);
+    if (Errors.length === 0) return [];
+    const Fixed = Fixed_Lines (await Compiler_Fixes (Document, Range, Token));
+    const Unfixed = Errors.filter (({ range }) => !Fixed.has (range.start.line));
+    return Unfixed.length === 0 ? [] : [Suggestion_Action (Document, Unfixed)];
+  },
 };
 
 const Suggestion_Registration = (Root) =>
@@ -1304,12 +2483,34 @@ const Complained_About = (Complaints, Text) => {
 
 let Project_Item = null;
 
-const Scenario_Summary = () =>
-  ((Set) =>
-     (Set.length === 0 ? ''
-      : Set.length === 1 ? ` ${Set[0][0]}=${Set[0][1]}`
-      : ` ${Set.length} set`))
-    (Object.entries (Scenario ()));
+let Scenario_Item = null;
+
+const Scenario_Shown_Value = (Variable) =>
+  Variable.Value ?? Variable.Default ?? 'not set';
+
+const Show_Scenario = () => {
+  if (Scenario_Item === null) return;
+  const Variables = Active_Project () === null
+    ? [] : (Sidebar_Model?.Variables ?? []);
+  if (Variables.length === 0) return void Scenario_Item.hide ();
+  const Unset = Variables.some ((Variable) =>
+    (Variable.Value ?? Variable.Default) === null);
+  Scenario_Item.text = `${Unset ? '$(warning)' : '$(symbol-enum)'} ` +
+    (Variables.length <= 2
+       ? Variables.map ((Variable) =>
+           `${Variable.Name}: ${Scenario_Shown_Value (Variable)}`)
+           .join ('  ')
+       : `${Variables.length} scenario variables`);
+  Scenario_Item.tooltip =
+    [...Variables.map ((Variable) =>
+       `${Variable.Name} = ${Scenario_Shown_Value (Variable)}`),
+     'Click to change the scenario.'].join ('\n');
+  Scenario_Item.command = Variables.length === 1
+    ? { command: 'turboada.setScenarioVariable', title: 'Set Variable',
+        arguments: [Variables[0]] }
+    : 'turboada.setScenario';
+  Scenario_Item.show ();
+};
 
 const Details_Spellings =
   ['VCS_Kind', 'Documentation_Dir', 'Gnat', 'Gnatlist', 'VCS_File_Check',
@@ -1326,9 +2527,7 @@ const Project_Tooltip = (Project) =>
      ? 'The compiler would not read it; see the Problems panel.'
      : `Mains: ${In_The_Root ('Main').join (', ') || 'none declared'}`,
    ...Project_Details (),
-   ...Object.entries (Scenario ())
-      .map (([Name, Value]) => `${Name} = ${Value}`),
-   'Click to set a scenario variable.'].join ('\n');
+   'Click to choose the project.'].join ('\n');
 
 const Show_Project = () => {
   if (Project_Item === null) return;
@@ -1338,9 +2537,8 @@ const Show_Project = () => {
   Project_Item.text = Project === null
     ? '$(list-tree) choose a project'
     : `${Project_Plan === null ? '$(error)' : '$(list-tree)'} ` +
-      `${path.basename (Project)}${Scenario_Summary ()}`;
-  Project_Item.command =
-    Project === null ? 'turboada.selectProject' : 'turboada.setScenario';
+      `${path.basename (Project)}`;
+  Project_Item.command = 'turboada.selectProject';
   Project_Item.tooltip = Project === null
     ? 'TurboAda: the workspace root holds more than one project file, so ' +
       'none is active. Click to choose one.'
@@ -1370,6 +2568,7 @@ const Variable_Of = (Reported) => ({
   Values:  Array.isArray (Reported.values) ? Reported.values.map (String) : [],
   Default: Reported.default ?? null,
   Value:   Reported.value ?? null,
+  Origin:  Reported.origin ?? null,
 });
 
 const Listed_Variables = async (Project) =>
@@ -1415,10 +2614,40 @@ const Task_Of = (Name, Title, Argument_List, Group, Extra) => {
     { group: Group });
 };
 
-const Build_Task = (Source_Path) =>
+const File_Executable = (Source_Path) =>
+  path.join (path.dirname (Source_Path),
+             Stem_Of (path.basename (Source_Path)) + Executable_Suffix);
+
+const Build_Task = (Source_Path, Debug, Extra) =>
   Task_Of ('build', 'build this file',
-           [...Extension_Arguments (), ...Include_Arguments (), Source_Path],
-           vscode.TaskGroup.Build);
+           [...Extension_Arguments (), ...Include_Arguments (),
+            ...(Debug === true ? ['-g'] : []),
+            Source_Path, '-o', File_Executable (Source_Path)],
+           vscode.TaskGroup.Build, Extra);
+
+let Task_Serial = 0;
+
+const Task_Outcome = async (Make) => {
+  const Serial = ++Task_Serial;
+  let Ended = null;
+  const Finished = new Promise ((Resolve) => { Ended = Resolve; });
+  const Watch = vscode.tasks.onDidEndTaskProcess ((Event) => {
+    if (Event.execution.task.definition.serial === Serial)
+      Ended (Event.exitCode);
+  });
+  try {
+    await vscode.tasks.executeTask (Make ({ serial: Serial }));
+    return await Finished;
+  } catch {
+    return -1;
+  } finally {
+    Watch.dispose ();
+  }
+};
+
+const File_Built = async (Source_Path, Debug) =>
+  (await Task_Outcome ((Extra) => Build_Task (Source_Path, Debug, Extra)))
+    === 0 ? File_Executable (Source_Path) : null;
 
 const Check_Task = (Source_Path) =>
   Task_Of ('check', 'check this file',
@@ -1525,7 +2754,7 @@ const Detail_Of = (Variable) =>
 
 const Variable_Item = (Variable) => ({
   label: Variable.Name,
-  description: Variable.Value ?? Variable.Default ?? 'not set',
+  description: Scenario_Shown_Value (Variable),
   detail: Detail_Of (Variable),
   Variable,
 });
@@ -1549,18 +2778,38 @@ const Named_Variable = async () =>
        { title: 'Scenario Variable',
          prompt: 'Case-sensitive, as spelled inside external (...).' }));
 
-const Unset_Value = { label: '$(discard) Project default' };
+const Unset_Value = { label: '$(discard) Project default', Unset: true };
 
-const Picked_Value = async (Variable) =>
-  ((Chosen) =>
-     (Chosen === undefined ? undefined
-      : Chosen.label === Unset_Value.label ? null
-      : Chosen.label))
-    (await vscode.window.showQuickPick (
-       [...Variable.Values.map ((Value) => ({ label: Value })),
-        ...(Scenario ()[Variable.Name] === undefined ? [] : [Unset_Value])],
-       { title: `TurboAda: ${Variable.Name}`,
-         placeHolder: 'Select a value' }));
+const Picked_From = (Items, Active, Options) =>
+  new Promise ((Resolve) => {
+    const Pick = Object.assign (vscode.window.createQuickPick (), Options,
+                                { items: Items });
+    if (Active !== undefined) Pick.activeItems = [Active];
+    Pick.onDidAccept (() => { Resolve (Pick.selectedItems[0]); Pick.hide (); });
+    Pick.onDidHide (() => { Resolve (undefined); Pick.dispose (); });
+    Pick.show ();
+  });
+
+const Value_Item = (Variable, Current) => (Value) => ({
+  label: Value,
+  description: [Value === Current ? '$(check) current' : '',
+                Value === Variable.Default ? 'default' : '']
+                 .filter ((Word) => Word !== '').join ('   '),
+  Value,
+});
+
+const Picked_Value = async (Variable) => {
+  const Current = Variable.Value ?? Variable.Default;
+  const Items =
+    [...Variable.Values.map (Value_Item (Variable, Current)),
+     ...(Scenario ()[Variable.Name] === undefined ? [] : [Unset_Value])];
+  const Chosen = await Picked_From (
+    Items, Items.find ((Item) => Item.Value === Current),
+    { title: `TurboAda: ${Variable.Name}`, placeholder: 'Select a value' });
+  return Chosen === undefined ? undefined
+       : Chosen.Unset === true ? null
+       : Chosen.Value;
+};
 
 const Written_Value = async (Variable) =>
   ((Given) =>
@@ -1703,7 +2952,7 @@ const Pinned_Compiler = () =>
         (Indexed_In_The_Root ("IDE'Compiler_Command", 'ada')[0]);
 
 const Compiler_Path = () =>
-  Pinned_Compiler () ?? Substituted (Configured ('compilerPath', 'turboada'));
+  Pinned_Compiler () ?? Substituted (Configured ('compilerPath', Compiler_Name));
 
 const Include_Paths = () =>
   [...new Set ([...Configured ('includePaths', []).map (Substituted),
@@ -1717,7 +2966,7 @@ const Analysis_Environment = () =>
   ((Paths) =>
      (Paths.length === 0
         ? undefined
-        : { ADA83_INCLUDE: Paths.join (path.delimiter) }))
+        : { TURBOADA_INCLUDE: Paths.join (path.delimiter) }))
     (Include_Paths ());
 
 const In_Flatpak_Sandbox = () => {
@@ -1747,8 +2996,8 @@ const Presentation = {
 
 const Show_State = (Status, State) => {
   const [Icon, Detail] = Presentation[State];
-  Status.text = `${Icon} Ada 83`;
-  Status.tooltip = `Ada 83 language server: ${Detail}`;
+  Status.text = `${Icon} TurboAda`;
+  Status.tooltip = `TurboAda language server: ${Detail}`;
   Status.show ();
 };
 
@@ -1898,25 +3147,11 @@ const Sidebar_Plan_From_The_Reader = () =>
     : { projects: Project_Plan.Projects.map (Sidebar_Planned_Project),
         externals: [] };
 
-const Sidebar_External_Of = (Reported) =>
-  Object.assign (Variable_Of (Reported),
-                 { Origin: Reported.origin ?? null });
-
-const Sidebar_Externals = async (Project) =>
-  ((Reported) =>
-     (Array.isArray (Reported) ? Reported.map (Sidebar_External_Of) : null))
-    (Sidebar_Answered (
-       await Ran (Project_Arguments (Project, [Externals_Argument]))));
-
-const Sidebar_Variables = async (Project) =>
-  With_The_Setting ((await Sidebar_Externals (Project)) ??
-                    Planned_Variables ());
-
 const Sidebar_Gathered = async () =>
   ((Project) =>
      Project === null
        ? Promise.resolve (null)
-       : Promise.all ([Sidebar_Plan (Project), Sidebar_Variables (Project)])
+       : Promise.all ([Sidebar_Plan (Project), Scenario_Variables (Project)])
            .then (([Told, Variables]) =>
               ((Plan) => ({
                  Project,
@@ -1931,6 +3166,7 @@ const Sidebar_Gathered = async () =>
 const Refresh_Sidebar = async () => {
   Sidebar_Model = await Sidebar_Gathered ();
   Sidebar_Changes.fire (undefined);
+  Show_Scenario ();
 };
 
 const Sidebar_Leaf = vscode.TreeItemCollapsibleState.None;
@@ -1938,12 +3174,44 @@ const Sidebar_Leaf = vscode.TreeItemCollapsibleState.None;
 const Sidebar_Attribute_Spelled = ({ name, index }) =>
   index === null || index === undefined ? name : `${name} ("${index}")`;
 
+const Sidebar_Origin_Spelled = { 'command line': 'set', default: 'default' };
+
 const Sidebar_Variable_Spelled = (Variable) =>
   Variable.Value !== null && Variable.Value !== undefined
-    ? `= ${Variable.Value} (${Variable.Origin ?? 'workspace'})`
+    ? `${Variable.Value} · ` +
+      (Sidebar_Origin_Spelled[Variable.Origin] ?? Variable.Origin ?? 'set')
     : Variable.Default !== null && Variable.Default !== undefined
-      ? `= ${Variable.Default} (default)`
-      : `= (not set)`;
+      ? `${Variable.Default} · default`
+      : 'not set';
+
+const Sidebar_Directory_Of = (Given) =>
+  Given.directory ?? (Given.file === null ? '' : path.dirname (Given.file));
+
+const Sidebar_Full_Path = (Given, Written) =>
+  path.isAbsolute (Written) ? Written
+                            : path.join (Sidebar_Directory_Of (Given), Written);
+
+const Sidebar_Shown_Path = (Text) =>
+  path.isAbsolute (Text) ? vscode.workspace.asRelativePath (Text) : Text;
+
+const Sidebar_Ada_Suffixes = ['.ads', '.adb', '.ada'];
+
+const Sidebar_Opens = (Full) =>
+  ({ command: 'vscode.open', title: 'Open',
+     arguments: [vscode.Uri.file (Full)] });
+
+const Sidebar_Written_Values = (Given, Name) =>
+  (Given?.attributes ?? []).some ((Row) => Row.name === Name)
+    ? Sidebar_Attribute_Values (Given, Name)
+    : null;
+
+const Sidebar_Source_Dirs = (Given) =>
+  Sidebar_Written_Values (Given, 'Source_Dirs') ?? ['.'];
+
+const Sidebar_Source_File = (Given, Name) =>
+  Sidebar_Source_Dirs (Given)
+    .map ((Directory) => path.join (Sidebar_Full_Path (Given, Directory), Name))
+    .find ((Candidate) => fs.existsSync (Candidate)) ?? null;
 
 const Sidebar_Project_Item = ({ Given, Root }) =>
   Object.assign (
@@ -1956,11 +3224,97 @@ const Sidebar_Project_Item = ({ Given, Root }) =>
       iconPath: new vscode.ThemeIcon (Root ? 'project' : 'link'),
       contextValue: 'turboadaProject' });
 
-const Sidebar_Main_Item = ({ Main }) =>
-  Object.assign (new vscode.TreeItem (Main, Sidebar_Leaf),
-    { description: 'main',
-      iconPath: new vscode.ThemeIcon ('symbol-method'),
-      contextValue: 'turboadaMain' });
+const Sidebar_Section_Item = ({ Title, Icon, Open, Items, Tooltip }) =>
+  Object.assign (
+    new vscode.TreeItem (Title,
+      Open ? vscode.TreeItemCollapsibleState.Expanded
+           : vscode.TreeItemCollapsibleState.Collapsed),
+    { description: String (Items.length),
+      tooltip: Tooltip,
+      iconPath: new vscode.ThemeIcon (Icon),
+      contextValue: 'turboadaSection' });
+
+const Sidebar_Section = (Title, Icon, Open, Tooltip, Items) =>
+  Items.length === 0 ? []
+                     : [{ Kind: 'section', Title, Icon, Open, Tooltip, Items }];
+
+const Sidebar_Mains = (Given) =>
+  Sidebar_Attribute_Values (Given, 'Main')
+    .map ((Main) => ({ Kind: 'main', Main, Given }));
+
+const Sidebar_Listed_Source = (Given, Name) =>
+  ((Full) => Full === null ? { Kind: 'source', Path: Name, Tag: null }
+                           : { Kind: 'file', Full })
+    (Sidebar_Source_File (Given, Name));
+
+const Sidebar_Sources_Section = (Open, Tooltip, Items) =>
+  Sidebar_Section ('Sources', 'files', Open, Tooltip, Items);
+
+const Sidebar_Folder_Sources = (Folders, Open) =>
+  ((Files) =>
+     Files.length > 0
+       ? Sidebar_Sources_Section (Open,
+           `The Ada sources in ${Folders[0].Full}: click one to open it`,
+           Files)
+       : Sidebar_Sources_Section (Open,
+           'The folders the project reads its sources from', Folders))
+    (Folders.length === 1 ? Sidebar_Folder_Children (Folders[0]) : []);
+
+const Sidebar_Sources = (Given, Groups, Open) =>
+  ((Listed) =>
+     Groups !== null
+       ? Sidebar_Sources_Section (Open,
+           'The sources of each language the project compiles',
+           Groups.map ((Group) => ({ Kind: 'language', ...Group })))
+       : Listed !== null
+         ? Sidebar_Sources_Section (Open,
+             'The sources the project names: click one to open it',
+             Listed.map ((Name) => Sidebar_Listed_Source (Given, Name)))
+         : Sidebar_Folder_Sources (
+             Sidebar_Source_Dirs (Given)
+               .map ((Written) => ({ Kind: 'folder', Written,
+                                     Full: Sidebar_Full_Path (Given, Written) })),
+             Open))
+    (Sidebar_Written_Values (Given, 'Source_Files'));
+
+const Sidebar_Main_Item = ({ Main, Given }) =>
+  ((Source) =>
+     Object.assign (new vscode.TreeItem (Main, Sidebar_Leaf),
+       { description: 'main program',
+         tooltip: Source === null
+           ? `${Main}: build, run or debug it with the buttons`
+           : `${Sidebar_Shown_Path (Source)}: click to open it; build, ` +
+             'run or debug it with the buttons',
+         iconPath: new vscode.ThemeIcon ('symbol-method'),
+         contextValue: 'turboadaMain',
+         ...(Source === null ? {} : { command: Sidebar_Opens (Source) }) }))
+    (Sidebar_Source_File (Given, Main));
+
+const Sidebar_Folder_Item = ({ Written, Full }) =>
+  Object.assign (
+    new vscode.TreeItem (Sidebar_Shown_Path (Written),
+                         vscode.TreeItemCollapsibleState.Collapsed),
+    { tooltip: Full,
+      iconPath: new vscode.ThemeIcon ('folder'),
+      contextValue: 'turboadaFolder' });
+
+const Sidebar_Folder_Children = ({ Full }) => {
+  try {
+    return fs.readdirSync (Full)
+      .filter ((Name) =>
+        Sidebar_Ada_Suffixes.includes (path.extname (Name).toLowerCase ()))
+      .sort ()
+      .map ((Name) => ({ Kind: 'file', Full: path.join (Full, Name) }));
+  } catch {
+    return [];
+  }
+};
+
+const Sidebar_File_Item = ({ Full }) =>
+  Object.assign (new vscode.TreeItem (path.basename (Full), Sidebar_Leaf),
+    { resourceUri: vscode.Uri.file (Full),
+      tooltip: Sidebar_Shown_Path (Full),
+      command: Sidebar_Opens (Full) });
 
 const Sidebar_Attribute_Item = ({ Row }) =>
   Row.values.length > 1
@@ -1970,12 +3324,12 @@ const Sidebar_Attribute_Item = ({ Row }) =>
         { iconPath: new vscode.ThemeIcon ('symbol-field') })
     : Object.assign (
         new vscode.TreeItem (Sidebar_Attribute_Spelled (Row), Sidebar_Leaf),
-        { description: Row.values.join (' '),
+        { description: Row.values.map (Sidebar_Shown_Path).join (' '),
           tooltip: Row.values.join ('\n'),
           iconPath: new vscode.ThemeIcon ('symbol-field') });
 
 const Sidebar_Value_Item = ({ Text }) =>
-  Object.assign (new vscode.TreeItem (Text, Sidebar_Leaf),
+  Object.assign (new vscode.TreeItem (Sidebar_Shown_Path (Text), Sidebar_Leaf),
     { iconPath: new vscode.ThemeIcon ('symbol-string') });
 
 const Sidebar_Variable_Item = ({ Variable }) =>
@@ -2028,23 +3382,27 @@ const Sidebar_Project_Children = ({ Given, Trail, Root }) => {
     Groups !== null &&
     Language_Source_Keys.some (({ Keys }) => Keys.includes (Name));
   return [
-    ...(Root ? Sidebar_Model.Variables.map ((Variable) =>
-                 ({ Kind: 'variable', Variable }))
-             : []),
-    ...Attributes.filter (({ name }) => name === 'Main')
-                 .flatMap (({ values }) => values)
-                 .map ((Main) => ({ Kind: 'main', Main, Given })),
-    ...(Groups ?? []).map ((Group) => ({ Kind: 'language', ...Group })),
-    ...Attributes.filter (({ name }) => name !== 'Main' && !Grouped (name))
-                 .map (Named),
-    ...(Given.types ?? []).map (({ name, values }) =>
-        Named ({ name: `type ${name}`, index: null, values })),
-    ...(Given.variables ?? []).map (({ name, values }) =>
-        Named ({ name: `variable ${name}`, index: null, values })),
-    ...(Given.imports ?? []).map ((File) =>
-        Sidebar_Import_Node (File, Trail ?? [Given.file])),
-    ...(Given.extends === null || Given.extends === undefined ? [] :
-        [Named ({ name: 'extends', index: null, values: [Given.extends] })]),
+    ...(Root ? [] : Sidebar_Mains (Given)),
+    ...Sidebar_Sources (Given, Groups, Root),
+    ...Sidebar_Section ('Imported projects', 'references', false,
+      'The projects this one withs or extends',
+      [...(Given.imports ?? []).map ((File) =>
+           Sidebar_Import_Node (File, Trail ?? [Given.file])),
+       ...(Given.extends === null || Given.extends === undefined ? [] :
+           [Named ({ name: 'extends', index: null,
+                     values: [Given.extends] })])]),
+    ...Sidebar_Section ('Settings', 'symbol-property', false,
+      'The attributes the project file sets, as the compiler reads them',
+      Attributes.filter (({ name }) =>
+                   name !== 'Main' && name !== 'Source_Files' &&
+                   !Grouped (name))
+                .map (Named)),
+    ...Sidebar_Section ('Types and variables', 'symbol-variable', false,
+      'The types and variables the project file declares',
+      [...(Given.types ?? []).map (({ name, values }) =>
+           Named ({ name: `type ${name}`, index: null, values })),
+       ...(Given.variables ?? []).map (({ name, values }) =>
+           Named ({ name: `variable ${name}`, index: null, values }))]),
   ];
 };
 
@@ -2054,17 +3412,23 @@ const Sidebar_Attribute_Children = ({ Row }) =>
     : [];
 
 const Sidebar_Roots = () =>
-  Sidebar_Model === null
+  Sidebar_Model === null || Known_Compiler.Version === null
     ? []
     : Sidebar_Model.Plan === null ||
       Sidebar_Model.Plan.projects.length === 0
         ? [{ Kind: 'note',
              Text: 'the project would not read; see the Problems panel' }]
-        : [{ Kind: 'project',
+        : [...Sidebar_Model.Variables.map ((Variable) =>
+               ({ Kind: 'variable', Variable })),
+           ...Sidebar_Mains (Sidebar_Model.Plan.projects[0]),
+           { Kind: 'project',
              Given: Sidebar_Model.Plan.projects[0], Root: true }];
 
 const Sidebar_Kinds = {
   project:   { Item: Sidebar_Project_Item,   Children: Sidebar_Project_Children },
+  section:   { Item: Sidebar_Section_Item,   Children: ({ Items }) => Items },
+  folder:    { Item: Sidebar_Folder_Item,    Children: Sidebar_Folder_Children },
+  file:      { Item: Sidebar_File_Item,      Children: () => [] },
   main:      { Item: Sidebar_Main_Item,      Children: () => [] },
   language:  { Item: Sidebar_Language_Item,  Children: Sidebar_Language_Children },
   source:    { Item: Sidebar_Source_Item,    Children: () => [] },
@@ -2094,11 +3458,25 @@ const Sidebar_Set_Variable = async (Variable) => {
 
 const Progress_Line = /^PROGRESS (\d+) (\d+) (\S+) (.*)$/;
 
+let Build_Item = null;
+
+let Build_Stop = null;
+
+const Build_Shown = (Text, Tooltip, Command) => {
+  if (Build_Item === null) return;
+  Object.assign (Build_Item, { text: Text, tooltip: Tooltip,
+                               command: Command });
+  Build_Item.show ();
+};
+
+const Building_Shown = (Text) =>
+  Build_Shown (`$(sync~spin) ${Text}`, 'TurboAda is building. Click to stop.',
+               'turboada.stopBuild');
+
 const Progress_Build = (Project, Mains, Output, Debug) =>
   vscode.window.withProgress (
-    { location: vscode.ProgressLocation.Notification,
-      title: 'TurboAda: building', cancellable: true },
-    (Progress, Token) => new Promise ((Resolve) => {
+    { location: { viewId: Sidebar_View } },
+    (Progress) => new Promise ((Resolve) => {
       const [Command, Given, Options] = Host_Escaped (
         Compiler_Path (),
         Project_Arguments (Project, ['--progress',
@@ -2107,7 +3485,9 @@ const Progress_Build = (Project, Mains, Output, Debug) =>
       const Child = spawn (Command, Given, Options);
       let Compiled = 0;
       let Buffered = '';
-      Token.onCancellationRequested (() => Child.kill ());
+      let Stopped = false;
+      Build_Stop = () => { Stopped = true; Child.kill (); };
+      Building_Shown ('Building');
       Child.stdout.setEncoding ('utf8');
       Child.stdout.on ('data', (Chunk) => {
         Buffered += Chunk;
@@ -2117,33 +3497,43 @@ const Progress_Build = (Project, Mains, Output, Debug) =>
              .filter ((Match) => Match !== null)
              .forEach (([, N, Total, Unit, File]) => {
                 Compiled = Number (N);
-                Progress.report ({
-                  increment: 100 / Number (Total),
-                  message: `compiling ${N}/${Total} — ` +
-                           `${path.basename (File)}`,
-                });
+                Progress.report ({ increment: 100 / Number (Total) });
+                Building_Shown (`Compiling ${N}/${Total} · ` +
+                                `${path.basename (File)}`);
               });
       });
       Child.stderr.setEncoding ('utf8');
       Child.stderr.on ('data', (Text) => Output.append (Text));
+      const Settle = (Code) => {
+        Build_Stop = null;
+        Resolve ({ Code, Compiled, Stopped });
+      };
       Child.on ('error', ({ message }) => {
         Output.appendLine (message);
-        Resolve ({ Code: -1, Compiled });
+        Settle (-1);
       });
-      Child.on ('close', (Code) => Resolve ({ Code, Compiled }));
+      Child.on ('close', Settle);
     }));
 
-const Told_The_Outcome = ({ Code, Compiled }, Output) =>
-  Code !== 0
-    ? vscode.window.showWarningMessage (
-        'TurboAda: the build failed. See the Ada 83 output.', 'Show Output')
-        .then ((Chosen) => { if (Chosen === 'Show Output') Output.show (true); })
-    : Compiled === 0
-      ? vscode.window.showInformationMessage (
-          'TurboAda: up to date.')
-      : vscode.window.showInformationMessage (
-          `TurboAda: built — ${Compiled} unit${Compiled === 1 ? '' : 's'} ` +
-          'compiled.');
+const Succeeded = (Outcome) =>
+  Outcome !== null && Outcome !== undefined && Outcome.Code === 0;
+
+const Told_The_Outcome = ({ Code, Compiled, Stopped }, Output) => {
+  const Look = 'Click to see the compiler output.';
+  if (Stopped)
+    return Build_Shown ('$(circle-slash) Build stopped', Look,
+                        'turboada.showOutput');
+  if (Code === 0)
+    return Build_Shown (
+      Compiled === 0
+        ? '$(check) Up to date'
+        : `$(check) Built · ${Compiled} unit${Compiled === 1 ? '' : 's'}`,
+      Look, 'turboada.showOutput');
+  Build_Shown ('$(error) Build failed', Look, 'turboada.showOutput');
+  return vscode.window.showWarningMessage (
+    'TurboAda: the build failed. See the TurboAda output.', 'Show Output')
+    .then ((Chosen) => { if (Chosen === 'Show Output') Output.show (true); });
+};
 
 const Sidebar_Build = (Memory, Clean, Output) => async (Element, Debug) => {
   const Project = Active_Project ();
@@ -2174,21 +3564,40 @@ const Sidebar_Executable = (Given, Main) =>
                                       "Builder'Executable_Suffix")[0] ?? '')))
     (Sidebar_Attribute_Values (Given, 'Exec_Dir')[0]);
 
-const Sidebar_Run = (Memory, Clean, Output) => async (Element) => {
-  if (Element?.Main === undefined) return;
-  const Outcome = await Sidebar_Build (Memory, Clean, Output) (Element);
-  if (Outcome === null || Outcome === undefined || Outcome.Code !== 0)
-    return;
-  const Executable = Sidebar_Executable (Element.Given, Element.Main);
-  if (Executable === null)
-    return void vscode.window.showInformationMessage (
-      'TurboAda: cannot run. The project names no Exec_Dir.');
+const Run_In_A_Terminal = (Executable, Directory) => {
   const [Command, Arguments] = Host_Escaped (Executable, []);
   const Terminal = vscode.window.createTerminal (
-    { name: `TurboAda: ${path.basename (Executable)}` });
+    { name: `TurboAda: ${path.basename (Executable)}`, cwd: Directory });
   Terminal.show ();
   Terminal.sendText (
     [Command, ...Arguments].map ((Word) => JSON.stringify (Word)).join (' '));
+};
+
+const Told_Cannot = (Verb, Why) =>
+  void vscode.window.showInformationMessage (
+    `TurboAda: cannot ${Verb}. ${Why}`);
+
+const Run_File = async (Source_Path) =>
+  ((Executable) =>
+     Executable === null
+       ? undefined
+       : Run_In_A_Terminal (Executable, path.dirname (Executable)))
+    (await File_Built (Source_Path, false));
+
+const Run_Main = (Memory, Clean, Output) => async (Given) => {
+  const Source_Path = Source_Given (Given);
+  if (Active_Project () === null)
+    return Source_Path === null ? Select_Project () : Run_File (Source_Path);
+  const Element = await Chosen_Main (Given, 'Run Main');
+  if (Element === null)
+    return Told_Cannot ('run', 'The project declares no Main.');
+  if (Element === undefined) return;
+  if (!Succeeded (await Sidebar_Build (Memory, Clean, Output) (Element)))
+    return;
+  const Executable = Sidebar_Executable (Element.Given, Element.Main);
+  if (Executable === null)
+    return Told_Cannot ('run', 'The project names no Exec_Dir.');
+  Run_In_A_Terminal (Executable);
 };
 
 const Sidebar_Registration = (Memory, Output, Refreshed) =>
@@ -2199,7 +3608,9 @@ const Sidebar_Registration = (Memory, Output, Refreshed) =>
    vscode.commands.registerCommand ('turboada.buildMainWithProgress',
      Sidebar_Build (Memory, Clean_Project, Output)),
    vscode.commands.registerCommand ('turboada.runMain',
-     Sidebar_Run (Memory, Clean_Project, Output))];
+     Run_Main (Memory, Clean_Project, Output)),
+   vscode.commands.registerCommand ('turboada.stopBuild',
+     () => Build_Stop?.())];
 
 const http = require ('http');
 const https = require ('https');
@@ -2207,6 +3618,8 @@ const zlib = require ('zlib');
 const { fileURLToPath } = require ('url');
 
 const Executable_Suffix = process.platform === 'win32' ? '.exe' : '';
+
+const Compiler_Name = 'ta' + Executable_Suffix;
 
 const Platform_Folder =
   process.platform === 'win32'  ? 'bin-windows' :
@@ -2240,14 +3653,17 @@ const Workspace_Compiler = () =>
   ((Folder) =>
      Folder === null
        ? null
-       : path.join (Folder.uri.fsPath, Platform_Folder,
-                    'turboada' + Executable_Suffix))
+       : path.join (Folder.uri.fsPath, Platform_Folder, Compiler_Name))
     (Opened_Folder ());
 
 let Known_Compiler = { Path: null, Version: null };
 let Compiler_Item = null;
 
 const Show_Compiler = () => {
+  vscode.commands.executeCommand (
+    'setContext', 'turboada.compiler',
+    Known_Compiler.Version === null ? 'missing' : 'found');
+  Sidebar_Changes.fire (undefined);
   if (Compiler_Item === null) return;
   if (Known_Compiler.Version === null) {
     Compiler_Item.text = '$(warning) TurboAda: no compiler';
@@ -2276,21 +3692,21 @@ const Adopted = async (Context, Executable, Version, Target) => {
   Terminals_Told (Context, Executable);
   Show_Compiler ();
   if (Target !== undefined &&
-      Substituted (Configured ('compilerPath', 'turboada')) !== Executable)
+      Substituted (Configured ('compilerPath', Compiler_Name)) !== Executable)
     await vscode.workspace.getConfiguration ('turboada')
       .update ('compilerPath', Executable, Target);
 };
 
 const Default_Download_Base =
-  'https://raw.githubusercontent.com/AdaDoom3/TurboAda/main';
+  'https://raw.githubusercontent.com/AdaDoom3/Ada83/main';
 
 const Download_Base = () =>
   Configured ('downloadBase', Default_Download_Base).replace (/\/+$/, '');
 
 const Fetched_Names = () =>
-  process.platform === 'win32'
-    ? [`${Platform_Folder}/turboada.exe`, 'turboada-runtime.ada', 'bin-libraries.zip']
-    : [`${Platform_Folder}/ta`, 'turboada-runtime.ada'];
+  [`${Platform_Folder}/${Compiler_Name}`, 'turboada-runtime.ada',
+   'turboada-runtime-legacy.ada',
+   ...(process.platform === 'win32' ? ['bin-libraries.zip'] : [])];
 
 const Got = (Address, Redirects) =>
   new Promise ((Resolve, Reject) => {
@@ -2375,15 +3791,13 @@ const Downloaded_Compiler = async (Context) => {
       else
         fs.writeFileSync (path.join (Staging, path.basename (Name)), Data);
     }
-    fs.chmodSync (path.join (Staging, 'turboada' + Executable_Suffix), 0o755);
-    const Version =
-      await Version_Of (path.join (Staging, 'turboada' + Executable_Suffix));
+    fs.chmodSync (path.join (Staging, Compiler_Name), 0o755);
+    const Version = await Version_Of (path.join (Staging, Compiler_Name));
     if (Version === null)
       throw new Error ('the downloaded compiler does not answer --version');
     fs.rmSync (Home, { recursive: true, force: true });
     fs.renameSync (Staging, Home);
-    return { Executable: path.join (Home, 'turboada' + Executable_Suffix),
-             Version };
+    return { Executable: path.join (Home, Compiler_Name), Version };
   } catch (Reason) {
     fs.rmSync (Staging, { recursive: true, force: true });
     throw Reason;
@@ -2444,9 +3858,8 @@ const Compiler_Settled = async (Context) => {
     if (Version !== null)
       return Adopted (Context, Local, Version, Scenario_Target ());
   }
-  const On_Path = await Version_Of ('turboada' + Executable_Suffix);
-  if (On_Path !== null)
-    return Adopted (Context, 'turboada' + Executable_Suffix, On_Path);
+  const On_Path = await Version_Of (Compiler_Name);
+  if (On_Path !== null) return Adopted (Context, Compiler_Name, On_Path);
   Known_Compiler = { Path: null, Version: null };
   Terminals_Told (Context, null);
   Show_Compiler ();
@@ -2709,9 +4122,8 @@ const Debug_Adapter_Factory = {
     if (!await Speaks_Dap (Compiler))
       throw new Error (
         `TurboAda: '${Compiler}' does not know --dap, the mode where the ` +
-        'compiler itself is the debug adapter. Run TurboAda: Download Or ' +
-        'Update The Compiler, or point turboada.debugAdapterPath at a DAP ' +
-        'executable.');
+        'compiler itself is the debug adapter. Run TurboAda: Download ' +
+        'Compiler, or point turboada.debugAdapterPath at a DAP executable.');
     return Adapter_Executable (Compiler, ['--dap']);
   },
 };
@@ -2724,6 +4136,36 @@ const Debug_Mains = () =>
            .map ((Main) => ({ Main, Given: Root })))
     (Sidebar_Model?.Plan?.projects[0]);
 
+const Source_Given = (Given) =>
+  Given instanceof vscode.Uri ? Given.fsPath
+  : typeof Given?.uri === 'string' ? vscode.Uri.parse (Given.uri).fsPath
+  : Active_Ada_Path ();
+
+const Main_Of_The_Source = (Source_Path) =>
+  Source_Path === null
+    ? undefined
+    : Debug_Mains ().find (({ Main }) =>
+        path.basename (Main) === path.basename (Source_Path));
+
+const Main_Picked = async (Mains, Title) =>
+  ((Picked) => Mains.find (({ Main }) => Main === Picked))
+    (await vscode.window.showQuickPick (
+       Mains.map (({ Main }) => Main), { title: Title }));
+
+const Chosen_Main = async (Given, Title) => {
+  if (Given?.Main !== undefined) return Given;
+  const Source_Path = Source_Given (Given);
+  const Listed = Main_Of_The_Source (Source_Path);
+  if (Listed !== undefined) return Listed;
+  const Root = Sidebar_Model?.Plan?.projects[0];
+  if (typeof Given?.uri === 'string' && Root !== undefined)
+    return { Main: path.basename (Source_Path), Given: Root };
+  const Mains = Debug_Mains ();
+  return Mains.length === 0 ? null
+       : Mains.length === 1 ? Mains[0]
+       : Main_Picked (Mains, Title);
+};
+
 const Debug_Configuration = (Element, Executable) => ({
   type: Debug_Type,
   request: 'launch',
@@ -2732,38 +4174,38 @@ const Debug_Configuration = (Element, Executable) => ({
 });
 
 const Debug_Built = (Memory, Output) => async (Element) => {
-  const Outcome =
-    await Sidebar_Build (Memory, Clean_Project, Output) (Element, true);
-  if (Outcome === null || Outcome === undefined || Outcome.Code !== 0)
+  if (!Succeeded (
+        await Sidebar_Build (Memory, Clean_Project, Output) (Element, true)))
     return null;
   const Executable = Sidebar_Executable (Element.Given, Element.Main);
   if (Executable !== null) return Debug_Configuration (Element, Executable);
-  vscode.window.showInformationMessage (
-    'TurboAda: cannot debug. The project names no Exec_Dir.');
+  Told_Cannot ('debug', 'The project names no Exec_Dir.');
   return null;
 };
 
-const Debug_Chosen = async (Mains) =>
-  ((Picked) => Mains.find (({ Main }) => Main === Picked))
-    (await vscode.window.showQuickPick (
-       Mains.map (({ Main }) => Main),
-       { title: 'Debug Main' }));
+const Debug_Started = (Configuration) =>
+  vscode.debug.startDebugging (
+    Opened_Folder () ?? undefined,
+    { ...Configuration, [Debug_Prebuilt]: true });
+
+const Debug_File = async (Source_Path) =>
+  ((Executable) =>
+     Executable === null
+       ? undefined
+       : Debug_Started (Debug_Configuration (
+           { Main: path.basename (Source_Path) }, Executable)))
+    (await File_Built (Source_Path, true));
 
 const Debug_Main = (Memory, Output) => async (Given) => {
-  if (Active_Project () === null) return Select_Project ();
-  const Mains = Debug_Mains ();
-  if (Given?.Main === undefined && Mains.length === 0)
-    return void vscode.window.showInformationMessage (
-      'TurboAda: cannot debug. The project declares no Main.');
-  const Element = Given?.Main !== undefined ? Given
-                : Mains.length === 1 ? Mains[0]
-                : await Debug_Chosen (Mains);
+  const Source_Path = Source_Given (Given);
+  if (Active_Project () === null)
+    return Source_Path === null ? Select_Project () : Debug_File (Source_Path);
+  const Element = await Chosen_Main (Given, 'Debug Main');
+  if (Element === null)
+    return Told_Cannot ('debug', 'The project declares no Main.');
   if (Element === undefined) return;
   const Configuration = await Debug_Built (Memory, Output) (Element);
-  if (Configuration !== null)
-    vscode.debug.startDebugging (
-      Opened_Folder () ?? undefined,
-      { ...Configuration, [Debug_Prebuilt]: true });
+  if (Configuration !== null) Debug_Started (Configuration);
 };
 
 const Debug_Empty = (Given) =>
@@ -2797,9 +4239,9 @@ const Debug_Provider = (Memory, Output) => ({
       return Without (Given, Debug_Prebuilt);
     if (!Debug_Empty (Given)) {
       if (Active_Project () === null) return Given;
-      const Outcome = await Sidebar_Build (Memory, Clean_Project, Output) (
-        undefined, true);
-      return Outcome !== null && Outcome !== undefined && Outcome.Code === 0
+      return Succeeded (
+               await Sidebar_Build (Memory, Clean_Project, Output) (
+                 undefined, true))
         ? Given : undefined;
     }
     const Element = Debug_Mains ()[0];
@@ -2900,7 +4342,7 @@ const Ada_Tasks_Registration = () => {
 
 const activate = (Context) => {
   vscode.commands.executeCommand ('setContext', 'turboada.relevant', true);
-  const Output = vscode.window.createOutputChannel ('Ada 83');
+  const Output = vscode.window.createOutputChannel ('TurboAda');
   const Diagnostics = vscode.languages.createDiagnosticCollection ('turboada');
   const Complaints =
     vscode.languages.createDiagnosticCollection ('turboada-project');
@@ -2909,6 +4351,10 @@ const activate = (Context) => {
   Status.command = 'turboada.showOutput';
   Project_Item = vscode.window.createStatusBarItem (
     vscode.StatusBarAlignment.Right, 99);
+  Scenario_Item = vscode.window.createStatusBarItem (
+    vscode.StatusBarAlignment.Right, 98);
+  Build_Item = vscode.window.createStatusBarItem (
+    vscode.StatusBarAlignment.Left, 50);
   Trace_Channel = Output;
   Tracing = Configured ('trace.server', 'off');
 
@@ -2940,6 +4386,8 @@ const activate = (Context) => {
     Complaints,
     Status,
     Project_Item,
+    Scenario_Item,
+    Build_Item,
     { dispose: Stop },
     vscode.workspace.onDidOpenTextDocument (On_Ada (Did_Open)),
     vscode.workspace.onDidChangeTextDocument (Settles_Down (Did_Change)),
@@ -2988,1282 +4436,6 @@ const deactivate = Stop;
 
 module.exports = { activate, deactivate };
 
-</script>
-
-<script id="package.json" type="application/json">
-{
-  "name": "turboada",
-  "displayName": "TurboAda",
-  "description": "An Ada compiler and a place to work in it. Native code through LLVM, and every answer in the editor comes from the compiler itself.",
-  "version": "1.1.0",
-  "publisher": "turboada",
-  "license": "SEE LICENSE IN ../readme.md",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/AdaDoom3/TurboAda.git"
-  },
-  "homepage": "https://github.com/AdaDoom3/TurboAda#readme",
-  "bugs": {
-    "url": "https://github.com/AdaDoom3/TurboAda/issues"
-  },
-  "qna": false,
-  "keywords": [
-    "ada",
-    "turboada",
-    "MIL-STD-1815A",
-    "compiler",
-    "llvm"
-  ],
-  "galleryBanner": {
-    "color": "#1e2430",
-    "theme": "dark"
-  },
-  "engines": {
-    "vscode": "^1.106.0"
-  },
-  "categories": [
-    "Programming Languages",
-    "Linters",
-    "Formatters",
-    "Snippets",
-    "Debuggers"
-  ],
-  "activationEvents": [
-    "onLanguage:turboada",
-    "onLanguageModelTool:search_turboada_manual",
-    "onDebugResolve:turboada",
-    "onDebugInitialConfigurations",
-    "workspaceContains:**/*.ada",
-    "workspaceContains:**/*.adb",
-    "workspaceContains:**/*.ads",
-    "workspaceContains:**/*.gpr",
-    "workspaceContains:**/*.gpj"
-  ],
-  "icon": "turboada-icon.png",
-  "main": "./turboada-extension.js",
-  "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "turboada",
-          "title": "Ada 83",
-          "icon": "./turboada-icon-activity.svg"
-        }
-      ]
-    },
-    "views": {
-      "turboada": [
-        {
-          "id": "turboada.projectView",
-          "name": "Project",
-          "contextualTitle": "Ada 83",
-          "icon": "./turboada-icon-activity.svg",
-          "when": "turboada.relevant"
-        }
-      ],
-      "debug": [
-        {
-          "id": "turboada.tasksView",
-          "name": "Tasks",
-          "contextualTitle": "Ada 83",
-          "icon": "./turboada-icon-activity.svg",
-          "when": "turboada.debugging"
-        }
-      ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "turboada.projectView",
-        "contents": "No project selected. Choose the .gpr or .gpj to build and analyse with.\n[Select Project](command:turboada.selectProject)"
-      },
-      {
-        "view": "explorer",
-        "contents": "Create a new Ada project.\n[New Ada Project](command:turboada.newProject)",
-        "when": "workspaceFolderCount == 0"
-      }
-    ],
-    "configurationDefaults": {
-      "[turboada]": {
-        "editor.tabSize": 2,
-        "editor.insertSpaces": true
-      },
-      "explorer.fileNesting.patterns": {
-        "*.ada": "${capture}.ali, ${capture}.native.ll, ${capture}.native.ali",
-        "*.adb": "${capture}.ali, ${capture}.native.ll, ${capture}.native.ali"
-      }
-    },
-    "languages": [
-      {
-        "id": "turboada",
-        "aliases": [
-          "Ada",
-          "ada"
-        ],
-        "extensions": [
-          ".ada",
-          ".adb",
-          ".ads"
-        ],
-        "icon": {
-          "light": "./turboada-icon-source.svg",
-          "dark": "./turboada-icon-source.svg"
-        },
-        "configuration": "./language-configuration.json"
-      },
-      {
-        "id": "gpr",
-        "aliases": [
-          "GNAT Project",
-          "gpr"
-        ],
-        "extensions": [
-          ".gpr"
-        ],
-        "icon": {
-          "light": "./turboada-icon.png",
-          "dark": "./turboada-icon.png"
-        },
-        "configuration": "./language-configuration-gpr.json"
-      },
-      {
-        "id": "gpj",
-        "aliases": [
-          "Green Hills Project",
-          "gpj"
-        ],
-        "extensions": [
-          ".gpj"
-        ],
-        "firstLine": "^#!gbuild",
-        "icon": {
-          "light": "./turboada-icon.png",
-          "dark": "./turboada-icon.png"
-        },
-        "configuration": "./language-configuration-gpj.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "turboada",
-        "scopeName": "source.ada",
-        "path": "./syntaxes/turboada.tmLanguage.json"
-      },
-      {
-        "language": "gpr",
-        "scopeName": "source.gpr",
-        "path": "./syntaxes/gpr.tmLanguage.json"
-      },
-      {
-        "language": "gpj",
-        "scopeName": "source.gpj",
-        "path": "./syntaxes/gpj.tmLanguage.json"
-      }
-    ],
-    "iconThemes": [
-      {
-        "id": "turboada",
-        "label": "Ada 83 File Icons (minimal)",
-        "path": "./turboada-file-icons.json"
-      }
-    ],
-    "snippets": [
-      {
-        "language": "turboada",
-        "path": "./snippets.json"
-      }
-    ],
-    "configuration": {
-      "title": "Ada 83",
-      "properties": {
-        "turboada.compilerPath": {
-          "type": "string",
-          "default": "turboada",
-          "description": "Where the compiler is. Leave it empty and we will go and find one. Keep turboada-runtime.ada beside it."
-        },
-        "turboada.downloadBase": {
-          "type": "string",
-          "default": "https://raw.githubusercontent.com/AdaDoom3/TurboAda/main",
-          "description": "Where to fetch the compiler from. Your own mirror, if you keep one."
-        },
-        "turboada.debugAdapterPath": {
-          "type": "string",
-          "default": "",
-          "description": "Another debug adapter, should you prefer your own. Empty means ours, which speaks Ada."
-        },
-        "turboada.enable": {
-          "type": "boolean",
-          "default": true,
-          "description": "Check the program as you type."
-        },
-        "turboada.languageExtensions": {
-          "type": "boolean",
-          "default": true,
-          "description": "Allow what we add beyond the base subset, as we do by default: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... of loops, continue, raise ... with, delta aggregates, the <> box and iterated component associations in aggregates, private extensions, requeue, delay until, streams, Atomic and Volatile, defaults for generic formals, dot notation on a leading in out formal, Ada. names for the predefined units, and a use clause that stands for its with clause. Turn it off for -ada83, strict ANSI/MIL-STD-1815A, where each of those is an error naming the construct. A program using them is not a 1815A program, and now and then one wants to be certain.",
-          "scope": "resource"
-        },
-        "turboada.requestTimeout": {
-          "type": "number",
-          "default": 15000,
-          "description": "How long to wait for an answer, in milliseconds. Each one costs a compile."
-        },
-        "turboada.workspaceRequestTimeout": {
-          "type": "number",
-          "default": 120000,
-          "description": "The same, for a search across the workspace. That one reads every file, so allow more."
-        },
-        "turboada.includePaths": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Further places to look for with-ed units. The file's own folder and the workspace root are always read."
-        },
-        "turboada.projectFile": {
-          "type": "string",
-          "default": "",
-          "description": "Your project file. A lone one at the workspace root is found without asking; among several, choose from the status bar."
-        },
-        "turboada.scenario": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "description": "Scenario variables, passed as -X NAME=VALUE. These are what external (\"NAME\", ...) reads. Case matters.",
-          "scope": "resource"
-        },
-        "turboada.formatOnType": {
-          "type": "boolean",
-          "default": false,
-          "description": "Reindent each line as you type it, two spaces to a level. Worked out here, so it is free."
-        },
-        "turboada.formatOnSave": {
-          "type": "boolean",
-          "default": false,
-          "description": "Reformat the whole file on save. A model does this, and the answer is kept only if it still compiles."
-        },
-        "turboada.formatStrength": {
-          "type": "string",
-          "enum": [
-            "indentation",
-            "layout",
-            "style"
-          ],
-          "enumDescriptions": [
-            "Only the leading whitespace of each line.",
-            "All whitespace: indentation, alignment and where long lines break.",
-            "Everything the manual specifies, including casing and where comments sit."
-          ],
-          "default": "style",
-          "description": "How far a reformat may go."
-        },
-        "turboada.language": {
-          "type": "string",
-          "enum": [
-            "en",
-            "es",
-            "fr",
-            "de",
-            "zh-CN",
-            "ja",
-            "hi",
-            "lolcat"
-          ],
-          "enumDescriptions": [
-            "English, as the compiler writes it. Nothing is asked of anything.",
-            "Spanish",
-            "French",
-            "German",
-            "Chinese (Simplified)",
-            "Japanese",
-            "Hindi",
-            "Lolcat"
-          ],
-          "default": "en",
-          "description": "Which language to read errors in. A model translates the prose and leaves your own names alone. The English arrives first."
-        },
-        "turboada.syncDelay": {
-          "type": "number",
-          "default": 120,
-          "description": "How long to wait after you stop typing, in milliseconds. Every send is a compile."
-        },
-        "turboada.trace.server": {
-          "type": "string",
-          "enum": [
-            "off",
-            "messages",
-            "verbose"
-          ],
-          "default": "off",
-          "description": "Log the editor's conversation with the server, for when something will not answer."
-        }
-      }
-    },
-    "commands": [
-      {
-        "command": "turboada.newProject",
-        "title": "New Project",
-        "category": "TurboAda",
-        "icon": "$(new-folder)"
-      },
-      {
-        "command": "turboada.build",
-        "title": "Build File",
-        "category": "TurboAda",
-        "icon": "$(gear)"
-      },
-      {
-        "command": "turboada.check",
-        "title": "Check File",
-        "category": "TurboAda",
-        "icon": "$(check)"
-      },
-      {
-        "command": "turboada.buildProject",
-        "title": "Build Project",
-        "category": "TurboAda",
-        "icon": "$(list-tree)"
-      },
-      {
-        "command": "turboada.buildMain",
-        "title": "Build Main",
-        "category": "TurboAda",
-        "icon": "$(run)"
-      },
-      {
-        "command": "turboada.showPlan",
-        "title": "Show Build Plan",
-        "category": "TurboAda",
-        "icon": "$(list-flat)"
-      },
-      {
-        "command": "turboada.cleanProject",
-        "title": "Clean Project",
-        "category": "TurboAda",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "turboada.selectProject",
-        "title": "Select Project",
-        "category": "TurboAda",
-        "icon": "$(folder-opened)"
-      },
-      {
-        "command": "turboada.setScenario",
-        "title": "Set Scenario Variable",
-        "category": "TurboAda",
-        "icon": "$(settings)"
-      },
-      {
-        "command": "turboada.reformat",
-        "title": "Reformat File",
-        "category": "TurboAda",
-        "icon": "$(symbol-ruler)"
-      },
-      {
-        "command": "turboada.suggestFix",
-        "title": "Suggest Fix",
-        "category": "TurboAda",
-        "icon": "$(lightbulb-sparkle)"
-      },
-      {
-        "command": "turboada.refreshProjectView",
-        "title": "Refresh Project View",
-        "category": "TurboAda",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "turboada.setScenarioVariable",
-        "title": "Set Variable",
-        "category": "TurboAda",
-        "icon": "$(settings)"
-      },
-      {
-        "command": "turboada.buildMainWithProgress",
-        "title": "Build",
-        "category": "TurboAda",
-        "icon": "$(gear)"
-      },
-      {
-        "command": "turboada.runMain",
-        "title": "Run",
-        "category": "TurboAda",
-        "icon": "$(run)"
-      },
-      {
-        "command": "turboada.debugMain",
-        "title": "Debug Main",
-        "category": "TurboAda",
-        "icon": "$(debug-alt)"
-      },
-      {
-        "command": "turboada.debugMainWithProgress",
-        "title": "Debug",
-        "category": "TurboAda",
-        "icon": "$(debug-alt)"
-      },
-      {
-        "command": "turboada.updateCompiler",
-        "title": "Download Compiler",
-        "category": "TurboAda",
-        "icon": "$(cloud-download)"
-      },
-      {
-        "command": "turboada.chooseCompiler",
-        "title": "Locate Compiler",
-        "category": "TurboAda",
-        "icon": "$(tools)"
-      },
-      {
-        "command": "turboada.restartServer",
-        "title": "Restart Language Server",
-        "category": "TurboAda",
-        "icon": "$(debug-restart)"
-      },
-      {
-        "command": "turboada.showOutput",
-        "title": "Show Server Log",
-        "category": "TurboAda",
-        "icon": "$(output)"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "turboada.refreshProjectView",
-          "when": "view == turboada.projectView",
-          "group": "navigation@1"
-        },
-        {
-          "command": "turboada.buildMainWithProgress",
-          "when": "view == turboada.projectView && turboada.hasProject",
-          "group": "navigation@2"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "turboada.buildMainWithProgress",
-          "when": "view == turboada.projectView && viewItem == turboadaMain",
-          "group": "inline@1"
-        },
-        {
-          "command": "turboada.runMain",
-          "when": "view == turboada.projectView && viewItem == turboadaMain",
-          "group": "inline@2"
-        },
-        {
-          "command": "turboada.debugMainWithProgress",
-          "when": "view == turboada.projectView && viewItem == turboadaMain",
-          "group": "inline@3"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "turboada.build",
-          "when": "resourceLangId == turboada",
-          "group": "navigation@1"
-        },
-        {
-          "command": "turboada.check",
-          "when": "resourceLangId == turboada",
-          "group": "navigation@2"
-        },
-        {
-          "command": "turboada.showPlan",
-          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
-          "group": "navigation@1"
-        },
-        {
-          "command": "turboada.buildProject",
-          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
-          "group": "navigation@2"
-        }
-      ],
-      "commandPalette": [
-        {
-          "command": "turboada.build",
-          "when": "resourceLangId == turboada"
-        },
-        {
-          "command": "turboada.check",
-          "when": "resourceLangId == turboada"
-        },
-        {
-          "command": "turboada.reformat",
-          "when": "resourceLangId == turboada"
-        },
-        {
-          "command": "turboada.suggestFix",
-          "when": "resourceLangId == turboada"
-        },
-        {
-          "command": "turboada.buildProject",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.buildMain",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.showPlan",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.cleanProject",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.refreshProjectView",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.setScenarioVariable",
-          "when": "false"
-        },
-        {
-          "command": "turboada.buildMainWithProgress",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.runMain",
-          "when": "false"
-        },
-        {
-          "command": "turboada.debugMain",
-          "when": "turboada.hasProject"
-        },
-        {
-          "command": "turboada.debugMainWithProgress",
-          "when": "false"
-        }
-      ],
-      "explorer/context": [
-        {
-          "command": "turboada.build",
-          "when": "resourceLangId == turboada",
-          "group": "turboada@1"
-        },
-        {
-          "command": "turboada.check",
-          "when": "resourceLangId == turboada",
-          "group": "turboada@2"
-        },
-        {
-          "command": "turboada.selectProject",
-          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
-          "group": "turboada@1"
-        },
-        {
-          "command": "turboada.showPlan",
-          "when": "resourceExtname == .gpr || resourceExtname == .gpj",
-          "group": "turboada@2"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "turboada.check",
-          "when": "resourceLangId == turboada",
-          "group": "turboada@1"
-        },
-        {
-          "command": "turboada.suggestFix",
-          "when": "resourceLangId == turboada",
-          "group": "turboada@2"
-        }
-      ]
-    },
-    "keybindings": [
-      {
-        "command": "turboada.build",
-        "key": "ctrl+alt+b",
-        "mac": "cmd+alt+b",
-        "when": "resourceLangId == turboada"
-      },
-      {
-        "command": "turboada.check",
-        "key": "ctrl+alt+c",
-        "mac": "cmd+alt+c",
-        "when": "resourceLangId == turboada"
-      },
-      {
-        "command": "turboada.buildProject",
-        "key": "ctrl+alt+shift+b",
-        "mac": "cmd+alt+shift+b",
-        "when": "turboada.hasProject"
-      },
-      {
-        "command": "turboada.setScenario",
-        "key": "ctrl+alt+x",
-        "mac": "cmd+alt+x",
-        "when": "turboada.hasProject"
-      }
-    ],
-    "walkthroughs": [
-      {
-        "id": "turboada.start",
-        "title": "Ada 83",
-        "description": "Write, build and debug Ada. The compiler answers every question.",
-        "steps": [
-          {
-            "id": "turboada.start.compiler",
-            "title": "Get a compiler",
-            "description": "Everything here is answered by `ta` itself. We look in `turboada.compilerPath`, then `bin-<platform>/`, then your PATH, and offer to fetch one if all three come up empty. The status bar names whichever answered.\n[Download the compiler](command:turboada.updateCompiler)\n[Set turboada.compilerPath](command:workbench.action.openSettings?%22turboada.compilerPath%22)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            },
-            "completionEvents": [
-              "onSettingChanged:turboada.compilerPath",
-              "onCommand:turboada.updateCompiler"
-            ]
-          },
-          {
-            "id": "turboada.start.new",
-            "title": "Start a project",
-            "description": "New Project asks you for a name and nothing else, then writes a project that builds and runs as it stands.\n[New project](command:turboada.newProject)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            },
-            "completionEvents": [
-              "onCommand:turboada.newProject"
-            ]
-          },
-          {
-            "id": "turboada.start.write",
-            "title": "Write a program",
-            "description": "Open a .ada, .adb or .ads file and type `hello` for a unit that writes a line. There are snippets for packages, generics, tasks, variant records and much else.\n[New Ada file](command:workbench.action.files.newUntitledFile?%7B%22languageId%22%3A%22turboada%22%7D)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            }
-          },
-          {
-            "id": "turboada.start.build",
-            "title": "Build it",
-            "description": "Ctrl+Alt+B builds the file before you; Ctrl+Alt+C only checks it. Either way the complaints land in the Problems panel.\n[Build this file](command:turboada.build)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            }
-          },
-          {
-            "id": "turboada.start.project",
-            "title": "Select a project",
-            "description": "A project at the workspace root is picked up on its own; elsewhere, name it in `turboada.projectFile`. Its source folders are then searched for with-ed units, and its mains become tasks.\n[Select the active project](command:turboada.selectProject)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            },
-            "completionEvents": [
-              "onCommand:turboada.selectProject"
-            ]
-          },
-          {
-            "id": "turboada.start.scenario",
-            "title": "Set the scenario",
-            "description": "A project's knobs are its scenario variables. Ctrl+Alt+X lists what it declares and offers a typed one only the values its type allows. Your choice rides every build, and changing it rebuilds what it invalidates.\n[Set a scenario variable](command:turboada.setScenario)\n[Build the project](command:turboada.buildProject)",
-            "media": {
-              "image": "./turboada-scenario-mock.svg",
-              "altText": "A rendering of the scenario-variable picker (not a screenshot)"
-            },
-            "completionEvents": [
-              "onCommand:turboada.buildProject"
-            ]
-          },
-          {
-            "id": "turboada.start.debug",
-            "title": "Debug it",
-            "description": "F5, or the Debug button on a main, rebuilds it with `-g` and starts it under our own adapter. Breakpoints, stepping and backtraces all read in Ada's names.\n[Debug a main](command:turboada.debugMain)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            },
-            "completionEvents": [
-              "onCommand:turboada.debugMain"
-            ]
-          },
-          {
-            "id": "turboada.start.manual",
-            "title": "Read the standard, not a memory of it",
-            "description": "The manual travels inside this extension. A model working here can search it, and so answers a question of legality out of the standard rather than out of memory.\n[Show the server log](command:turboada.showOutput)",
-            "media": {
-              "image": "./turboada-icon.png",
-              "altText": "The Ada 83 icon"
-            }
-          }
-        ]
-      }
-    ],
-    "chatInstructions": [
-      {
-        "path": "./turboada.instructions.md",
-        "when": "editorLangId == turboada"
-      }
-    ],
-    "languageModelTools": [
-      {
-        "name": "search_turboada_manual",
-        "toolReferenceName": "turboadaManual",
-        "displayName": "Search the Ada 83 Manual",
-        "canBeReferencedInPrompt": true,
-        "icon": "$(book)",
-        "tags": [
-          "ada",
-          "turboada"
-        ],
-        "userDescription": "Look a rule up in the bundled Ada 83 reference manual.",
-        "modelDescription": "Searches the bundled reference manual and returns the matching clauses verbatim, each headed by its clause number and title. The manual is the full text of ANSI/MIL-STD-1815A, the 1983 standard; every construct this compiler admits beyond it is described in an Extension callout inside the clause it extends, and the style guide the formatter applies closes the manual. Use this tool whenever legality, semantics or wording is in question: whether a construct exists here at all, reserved words, syntax productions, visibility and scope, overload resolution, type and subtype rules, discriminants, generics, tasking, exceptions, representation clauses, attributes, pragmas, the predefined environment, or implementation permissions. It is also the way to read a clause you already know by number. Prefer it to recalling Ada from memory: most of Ada 95, 2005, 2012 and 2022 is not here, tagged types included, and what is here is exactly what the callouts describe. Query it with a clause number such as 4.5.7 or 13.1, or with the terms in question such as universal_integer, protected type, expression function or representation clause.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "A clause number such as 4.5.7, or the terms to look up, such as 'universal_integer' or 'overload resolution'."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      }
-    ],
-    "problemMatchers": [
-      {
-        "name": "turboada",
-        "owner": "turboada",
-        "source": "turboada",
-        "fileLocation": [
-          "autoDetect",
-          "${workspaceFolder}"
-        ],
-        "pattern": {
-          "regexp": "^(\\S.*?):(\\d+):(\\d+):\\s+(error|warning|note|internal error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "severity": 4,
-          "message": 5
-        }
-      }
-    ],
-    "taskDefinitions": [
-      {
-        "type": "turboada",
-        "required": [
-          "task"
-        ],
-        "properties": {
-          "task": {
-            "type": "string",
-            "enum": [
-              "build",
-              "check",
-              "project",
-              "main",
-              "plan"
-            ],
-            "description": "build compiles the active file to an executable; check resolves it and emits LLVM IR without writing anything; project builds every main the active project declares; main builds the one named beside it; plan prints what the project resolves to, with -n, and builds nothing."
-          },
-          "main": {
-            "type": "string",
-            "description": "The main to build, as the project's Main attribute names it. Read only by the main task; left out, the project's first main is taken."
-          }
-        }
-      }
-    ],
-    "breakpoints": [
-      {
-        "language": "turboada"
-      }
-    ],
-    "debuggers": [
-      {
-        "type": "turboada",
-        "label": "Ada",
-        "languages": [
-          "turboada"
-        ],
-        "configurationAttributes": {
-          "launch": {
-            "required": [
-              "program"
-            ],
-            "properties": {
-              "program": {
-                "type": "string",
-                "description": "The executable to debug. Build it with -g first; TurboAda: Debug A Main From The Project does both."
-              },
-              "args": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "default": [],
-                "description": "Arguments handed to the program."
-              },
-              "cwd": {
-                "type": "string",
-                "description": "The directory the program starts in. Left out, the adapter keeps its own, the workspace folder."
-              },
-              "stopOnEntry": {
-                "type": "boolean",
-                "default": false,
-                "description": "Stop as the program enters, before any of it has run."
-              }
-            }
-          }
-        },
-        "initialConfigurations": [
-          {
-            "type": "turboada",
-            "request": "launch",
-            "name": "TurboAda:debug the main",
-            "program": "${workspaceFolder}/main",
-            "stopOnEntry": false
-          }
-        ],
-        "configurationSnippets": [
-          {
-            "label": "TurboAda:Debug A Main",
-            "description": "Launch a main built with -g under the compiler's own debug adapter, ta --dap.",
-            "body": {
-              "type": "turboada",
-              "request": "launch",
-              "name": "^\"TurboAda:debug ${1:main}\"",
-              "program": "^\"\\${workspaceFolder}/${1:main}\"",
-              "stopOnEntry": false
-            }
-          }
-        ]
-      }
-    ]
-  }
-}
-</script>
-
-<script id="README.md" type="text/markdown">
-<p align="center">
-  <img src="turboada-logo.png" alt="Ada" width="180">
-</p>
-
-# TurboAda for Visual Studio Code
-
-Ada development for Visual Studio Code, built on the
-[TurboAda compiler](https://github.com/AdaDoom3/TurboAda).
-
-TurboAda compiles the language of ANSI/MIL-STD-1815A together with the
-extensions listed under Dialect, and emits native code through LLVM.
-
-This extension is a front end for `ta --lsp`, the compiler's own language
-server. Diagnostics, definitions, completions and outlines are produced by
-the same code that compiles your program. One parser. One set of rules.
-The editor cannot disagree with the build.
-
-## Features
-
-**Diagnostics.** Errors and warnings as you type, underlining the whole
-name at fault. A previous-declaration note arrives as a linked location:
-click it in the Problems panel to land on the declaration. A spelling
-suggestion becomes a one-click fix that renames the identifier. All three
-come from the compiler, not from a pattern match over its output.
-
-**Navigation.** Go to Definition, Find All References, Document
-Highlights and workspace symbol search. Definitions resolve into
-`turboada-runtime.ada`, the standard library, like any other unit.
-
-**Hover and Completion.** Hover shows a declaration as the language
-declares it. Completion offers the names in scope, the runtime included.
-Signature Help tracks the call being written.
-
-**Semantic Highlighting.** The compiler reports what each name is:
-package, type, subprogram, parameter, enumeration literal, object. A
-theme can therefore colour the type `COUNT` differently from the variable
-`COUNT`. No grammar-based highlighter can make that distinction.
-
-**Syntax Highlighting and Icons.** The 63 reserved words of the base
-subset and the three added by the extensions. Aspect specifications,
-quantified expressions, `for ... of` loops and `continue`. File icons for
-`.ada`, `.ads`, `.adb`, `.gpr` and `.gpj`.
-
-**Outline and Folding.** Taken from the compiler's view of the unit.
-
-**Code Lenses.** Build, Build Main and Plan appear over every
-library-level parameterless procedure, which are the ones the compiler
-accepts as mains.
-
-**Project Sidebar.** The tree that `-P` resolves, imports included, with
-Build, Run and Debug on every main, live build progress, and scenario
-variables as rows.
-
-**Integrated Debugging.** F5, or the Debug button on a main, rebuilds
-with `-g` and starts the program under `ta --dap`. The compiler speaks
-the Debug Adapter Protocol itself, over lldb-dap, in Ada names
-throughout. A Tasks view lists the program's Ada tasks at every stop.
-
-**Build and Check.** `Ctrl+Alt+B` and `Ctrl+Alt+C`, wired as tasks with a
-problem matcher.
-
-**Project Files.** Plan, build and clean `.gpr` and `.gpj` projects with
-`-P`. Mains become tasks. Scenario variables are set from a typed picker
-(`Ctrl+Alt+X`). New Project scaffolds a buildable project from one name.
-
-**Compiler Management.** Point the extension at a compiler, or let it
-download a released build.
-
-**Snippets.** Written in the manual's style, from a compilation unit to a
-record representation clause, a protected type or a contract.
-
-**Formatting.** Format Document and format-on-save, to the style the
-standard itself uses. Reindentation as you type requires no model.
-
-**Translated Diagnostics.** Compiler messages read in your language on
-request. English by default.
-
-**Suggest A Fix.** A model-written repair, shown as a diff. It is applied
-only if you approve it, and only if it compiles.
-
-**Manual Search.** The `search_turboada_manual` tool gives AI assistants
-the language manual to read, so they answer from the standard rather than
-from a later Ada they half-remember.
-
-## Zero to compiled
-
-1. Install the extension and open a folder.
-2. If no `ta` is found, accept the offer to **download** one (or point
-   `turboada.compilerPath` at yours). The status bar names whichever compiler
-   answered.
-3. Run **TurboAda: New Project**, give it a name.
-4. `Ctrl+Alt+Shift+B` builds it; the binary lands beside the project file.
-
-## The compiler
-
-Everything past colouring is answered by the `ta` executable, so the
-extension resolves one on activation, in this order:
-
-1. **`turboada.compilerPath`**, when you have set it;
-2. **`bin-linux/`, `bin-macos/` or `bin-windows/` under the workspace** —
-   the layout the compiler's own repository builds into;
-3. **`ta` on PATH**;
-4. failing all three, an **offer to download** a released build or locate one.
-
-A project may pin its own: `IDE'Compiler_Command ("ada")` names the
-compiler the project is built and analysed with whenever
-`turboada.compilerPath` is not set, and the setting always wins when it is.
-
-A candidate counts only if `--version` answers. The download goes to the
-extension's own storage, is staged and adopted only after `--version`
-answers there too, and always places `turboada-runtime.ada` — which the
-compiler requires beside its executable — next to the binary, plus the
-vendored DLLs on Windows. Whatever is adopted is written back to
-`turboada.compilerPath`, put first on `PATH` in integrated terminals, and named
-in the status bar with its version. **TurboAda: Download Or Update The
-Compiler** re-fetches at any time; `turboada.downloadBase` points the fetch at
-a mirror (http, https or file URLs).
-
-The extension makes no other network request, and sends no telemetry.
-
-## Projects
-
-Point the extension at a project and it hands it to the compiler as
-`-P`. A single `.gpr` or `.gpj` at the root of the workspace is found on its
-own; anywhere else, name it in `turboada.projectFile` or run **TurboAda: Select
-The Active Project**. If the root holds more than one, none is active until
-you choose — the status bar says so and clicking it asks.
-
-With a project active:
-
-- its **source directories**, and those of everything it withs, are searched
-  for with-ed units, so go-to-definition and completion see the whole tree
-- **TurboAda: Build The Active Project** (`Ctrl+Alt+Shift+B`) compiles and
-  links; each **main** is also a task of its own, and **Build A Main From
-  The Project** picks one
-- **TurboAda: Show The Build Plan** runs `-n`, which prints what the project
-  resolves to — sources, switches, imports and externals — and builds nothing
-- **TurboAda: Clean The Project** removes the compiler's own products (`.ali`,
-  `.ll`, `.o`, `.s`) from `Object_Dir` and the mains from `Exec_Dir`, after
-  asking. It touches nothing else
-- diagnostics from the project file itself land in the Problems panel with
-  everything else. An attribute the compiler does not know is a **warning**,
-  not an error, so a GNAT tree carrying `package Pretty_Printer` marks it
-  and builds
-
-**TurboAda: New Project** goes the other way: give it a name and it writes
-`<name>.gpr` with a typed scenario variable, a `src/` directory and a main
-that prints a line — a complete project every command above acts on at once.
-
-### Scenario variables
-
-A project sets its knobs from `external (...)`, and a typed one names the
-values it may take:
-
-```ada
-type Build_Kind is ("debug", "release");
-Build : Build_Kind := external ("BUILD", "debug");
-```
-
-**TurboAda: Set A Scenario Variable** (`Ctrl+Alt+X`, or the status bar item)
-asks the compiler to list what the project declares, types, defaults and
-all (`--externals`). A typed variable is offered exactly its type's
-literals, because those are exactly the values it may take — a closed list
-and not a text box; an untyped one opens a text box with its default filled
-in, and emptying that box unsets it again. What you choose is remembered in
-the workspace, as `turboada.scenario`, and passed to every build and every
-plan as `-X NAME=VALUE`; the language server is then restarted over the
-source directories that scenario resolves to. The same picker resets every
-variable to the project's own defaults, and names one the project does not
-reach under the current setting. An older compiler that cannot list
-externals still gets a picker: the names the plan resolved, as free text.
-
-An external declared with **no default** and left unset is an error, in
-gprbuild and here: the compiler refuses to read the project and says which
-one, the message appears against the project file, and the status bar shows
-the project in error until it is set.
-
-Changing a variable re-reads the project and restarts the language server.
-The compiler records the scenario a build used in its object directory and
-rebuilds what a change invalidates, so switching back and forth does not
-hand you stale objects.
-
-### The Project sidebar
-
-The Ada 83 icon in the activity bar opens the project explorer: the tree
-`-P` resolved, drawn from the compiler's own answers (`--plan-json` for
-the tree, `--externals` for the variables), so the sidebar cannot come to
-disagree with the build.
-
-- the **root project** expands to its attributes — `Source_Dirs`,
-  `Object_Dir`, switches plain and indexed, spelled as the plan spells
-  them — its typed declarations and variables, and its **imports**, each
-  a project node of its own, expandable the same way
-- a project recording more than Ada groups its **sources by language** —
-  Ada, C, C++, and Other with each file's recorded language beside it —
-  from the `Ada_Sources`, `C_Sources`, `CPP_Sources` and `Other_Sources`
-  the plan answers; an Ada-only project reads exactly as before
-- every **main** carries inline **Build** and **Run** buttons. Build runs
-  the compiler with `--progress` and renders each compile as it happens —
-  *compiling 3/17 — pack.adb* — and a build with nothing to do says so:
-  *up to date — nothing to compile*. Run builds first, then starts the
-  image in a terminal. Both offer to clean first when the scenario changed
-  since the last build, like the build tasks do
-- **scenario variables** are rows, `NAME = value (origin)`. Clicking a
-  typed one opens exactly its type's literals, an untyped one a text box
-  with its default filled in, and the choice lands in `turboada.scenario`
-  exactly as the picker's would
-- the view refreshes when a project file is saved or the scenario
-  changes, and by hand from its title bar
-
-### What the compiler answers today
-
-Project support arrived in the compiler a stage at a time, and the
-extension says whatever the compiler says rather than pretending
-otherwise. A current compiler reads a project (`-P`), plans (`-n`, and
-`--plan-json` for tools), lists the externals with their types
-(`--externals`), builds in dependency order, and narrates a build one
-`PROGRESS` line per compile (`--progress`). With an older compiler the
-extension degrades a feature at a time: the typed picker falls back to
-the externals the plan resolved, as free text; the sidebar falls back to
-the `-n` plan, which carries no indexed attributes — less, never wrong;
-one that answers no per-language source keys and no `package IDE`
-attributes shows no language groups and pins nothing.
-The sidebar's Build button asks for `--progress` and needs a compiler
-that knows it; the build *tasks* (`Ctrl+Alt+Shift+B` and friends) pass no
-such flag and work with any.
-
-## Debugging
-
-`F5`, **TurboAda: Debug A Main From The Project**, or the **Debug** button
-on a main in the project view. The extension rebuilds the main with `-g`
-first — the same progress build the sidebar's Build runs, `-P` and every
-`-X` preserved — then starts the executable under the debug adapter,
-which is the compiler itself: `ta --dap` speaks the Debug Adapter
-Protocol on stdio, drives lldb-dap underneath — LLVM end to end, the
-same toolchain that assembled the code — and does the Ada spelling
-itself: **breakpoints, stepping, variables and expressions** work, and
-names are translated on the way through, so what you read is what Ada
-declares rather than an encoded linkage name. While the program stands
-stopped, a **Tasks** view in Run and Debug lists its Ada tasks — each
-master expandable to its dependents, the state beside each name — read
-through the adapter from the runtime's own records; a compiler too old
-to answer leaves the view empty, never wrong. There are no other moving
-parts: no adapter code in the extension, no debugger script anywhere.
-
-A `launch.json` is optional — with none, `F5` on the project debugs its
-first main — and when one names a `program`, the project is still
-rebuilt with `-g` before the adapter gets it. A compiler that predates
-`--dap` is refused with a message pointing at **TurboAda: Download Or
-Update The Compiler**, not half-served; `turboada.debugAdapterPath` runs
-any other DAP executable — raw lldb-dap, say — verbatim in its place,
-for those who want the untranslated view, and a project naming
-`IDE'Debugger_Command` runs that command line, quotes honored, while
-the setting is empty.
-
-The same story holds outside the editor. `ta -g` builds a binary
-every LLVM tool reads — lldb, lldb-dap — and `ta --debug prog`
-debugs one in the terminal, the same engine and the same Ada spelling
-as the adapter. gdb is the exception: its Ada mode wants its own
-dialect of the debug information, so build with `-ggdb` — `-g` in every
-other respect — and gdb 14+ then speaks Ada natively, `break
-pack.proc`, `print rec.field`; gdb's `catch exception` and `info tasks`
-lean on GNAT runtime hooks this runtime does not provide. Either flag
-defaults the build to `-O0` unless an explicit `-O` says otherwise, so
-what you step through is what you wrote.
-
-## Commands
-
-Generated from the extension manifest — the table cannot say anything the
-extension does not declare.
-
-<!-- BEGIN GENERATED: commands -->
-| Command | Keys | Identifier |
-|---|---|---|
-| TurboAda: New Project |  | `turboada.newProject` |
-| TurboAda: Build File | `ctrl+alt+b` / `cmd+alt+b` | `turboada.build` |
-| TurboAda: Check File | `ctrl+alt+c` / `cmd+alt+c` | `turboada.check` |
-| TurboAda: Build Project | `ctrl+alt+shift+b` / `cmd+alt+shift+b` | `turboada.buildProject` |
-| TurboAda: Build Main |  | `turboada.buildMain` |
-| TurboAda: Show Build Plan |  | `turboada.showPlan` |
-| TurboAda: Clean Project |  | `turboada.cleanProject` |
-| TurboAda: Select Project |  | `turboada.selectProject` |
-| TurboAda: Set Scenario Variable | `ctrl+alt+x` / `cmd+alt+x` | `turboada.setScenario` |
-| TurboAda: Reformat File |  | `turboada.reformat` |
-| TurboAda: Suggest Fix |  | `turboada.suggestFix` |
-| TurboAda: Refresh Project View |  | `turboada.refreshProjectView` |
-| TurboAda: Set Variable |  | `turboada.setScenarioVariable` |
-| TurboAda: Build |  | `turboada.buildMainWithProgress` |
-| TurboAda: Run |  | `turboada.runMain` |
-| TurboAda: Debug Main |  | `turboada.debugMain` |
-| TurboAda: Debug |  | `turboada.debugMainWithProgress` |
-| TurboAda: Download Compiler |  | `turboada.updateCompiler` |
-| TurboAda: Locate Compiler |  | `turboada.chooseCompiler` |
-| TurboAda: Restart Language Server |  | `turboada.restartServer` |
-| TurboAda: Show Server Log |  | `turboada.showOutput` |
-<!-- END GENERATED: commands -->
-
-## Settings
-
-<!-- BEGIN GENERATED: settings -->
-| Setting | Default | What it does |
-|---|---|---|
-| `turboada.compilerPath` | `"ta"` | Path to the TurboAda compiler: set, it always wins; unset, a project naming IDE'Compiler_Command ("ada") pins the compiler the project is built and analysed with. |
-| `turboada.downloadBase` | `"https://raw.githubusercontent.com/AdaDoom3/TurboAda/main"` | Where TurboAda: Download Or Update The Compiler fetches from. |
-| `turboada.debugAdapterPath` |  | A Debug Adapter Protocol executable to run in place of the compiler's own adapter, verbatim and with no arguments — raw lldb-dap, say, for the untranslated view. |
-| `turboada.enable` | `true` | Check the program as you type. |
-| `turboada.languageExtensions` | `true` | Allow what we add beyond the base subset, as we do by default: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... |
-| `turboada.requestTimeout` | `15000` | How long, in milliseconds, to wait for one answer from the language server. |
-| `turboada.workspaceRequestTimeout` | `120000` | The same, for a search across the workspace. That one reads every file, so allow more. |
-| `turboada.includePaths` | `[]` | Directories searched for with-ed units, beyond the file's own and the workspace root. |
-| `turboada.projectFile` |  | The project file (.gpr or .gpj) the extension builds and analyses with, passed to the compiler as -P. |
-| `turboada.scenario` | `{}` | Scenario variables passed to the compiler as -X NAME=VALUE, which is what external ("NAME", ...) in the project reads. |
-| `turboada.formatOnType` | `false` | Reindent the line as you type it, by the manual's two-space rule. |
-| `turboada.formatOnSave` | `false` | Reformat the whole file as it is saved. |
-| `turboada.formatStrength` | `"style"` | How far a reformat may go. |
-| `turboada.language` | `"en"` | The language error messages are read in. |
-| `turboada.syncDelay` | `120` | How long, in milliseconds, typing must pause before the buffer is sent to the compiler. |
-| `turboada.trace.server` | `"off"` | Log the editor's conversation with the server, for when something will not answer. |
-<!-- END GENERATED: settings -->
-
-## Snippets
-
-<!-- BEGIN GENERATED: snippets -->
-| Prefix | Expands to |
-|---|---|
-| `procedure` | A procedure body |
-| `function` | A function body |
-| `package` | A package specification |
-| `packagebody` | A package body |
-| `for` | A for loop |
-| `while` | A while loop |
-| `if` | An if statement |
-| `case` | A case statement |
-| `declare` | A block statement with declarations |
-| `record` | A record type declaration |
-| `exception` | An exception handler |
-| `hello` | A complete program |
-| `generic` | A generic procedure and its body |
-| `genericpackage` | A generic package specification |
-| `tasktype` | A task type, its entry and its body |
-| `task` | A single task and its body |
-| `accept` | An accept statement with a body |
-| `select` | A selective wait with a terminate alternative |
-| `selectdelay` | A timed entry call |
-| `selectelse` | A selective wait whose else part runs when no rendezvous is ready |
-| `variant` | A record type with a variant part |
-| `enum` | An enumeration type |
-| `array` | An unconstrained array type |
-| `subtype` | A constrained subtype |
-| `fixed` | A fixed point type |
-| `float` | A floating point type |
-| `access` | An access type |
-| `private` | A private type and its full declaration |
-| `exceptiondecl` | An exception declaration |
-| `raise` | A raise statement |
-| `loop` | A named loop with an exit |
-| `textio` | A main procedure that writes a line |
-| `integerio` | An instantiation of Text_IO.Integer_IO |
-| `pragma` | A pragma |
-| `for use` | A record representation clause |
-| `exprfunc` | An expression function |
-| `pre` | A procedure with a precondition and a postcondition |
-| `predicate` | A subtype with a predicate |
-| `ifexpr` | An if expression |
-| `forall` | A quantified expression |
-| `forof` | A loop over the components of an array or container |
-| `protected` | A protected type, its entry and its body |
-| `controlled` | A controlled type and its finalization |
-<!-- END GENERATED: snippets -->
-
-## Requirements
-
-- Visual Studio Code 1.106 or later, or a compatible editor.
-- The `ta` compiler. If none is found the extension offers to download a
-  released build; nothing else is required.
-- `turboada-runtime.ada` beside the compiler executable — the download places
-  it there; keep it there if you install by hand.
-- To debug: a compiler new enough to know `--dap` — the extension offers
-  the update — with lldb-dap on PATH underneath it, or
-  `turboada.debugAdapterPath` naming any DAP executable to run instead.
-
-## What this is not
-
-Honesty is cheaper than a surprised bug report:
-
-- **Not Ada 95, 2005, 2012 or 2022.** The compiler admits a set of later
-  constructs by default: protected types, controlled types, child units,
-  general and anonymous access, contracts and predicates, expression
-  functions, user-defined literals, indexing and iteration, streams and
-  the rest that `turboada.languageExtensions` lists. It has no tagged types
-  and nothing that dispatches, no asynchronous select,
-  and none of `Ada.Containers`, `Ada.Strings` or
-  `Ada.Numerics`. The chat instructions and the prompts the extension
-  sends a language model say exactly that, so an assistant writes what
-  compiles here. Turn the setting off and every later construct is an
-  error, which is what a program that must be legal Ada 83 wants. For
-  modern Ada, use AdaCore's tooling.
-- **Not GNAT tooling.** A GNAT project tree usually loads — unknown
-  attributes are warnings, and `package IDE` is read: `Compiler_Command
-  ("ada")` and `Debugger_Command` steer the extension, the rest ride the
-  project tooltip — but nothing here runs gprbuild or gnatpp. Debugging
-  is the compiler's own `--dap` adapter over lldb; gdb's Ada mode reads
-  binaries built with `-ggdb` outside the editor.
-- **Formatting, Suggest A Fix and translated diagnostics ask a language
-  model** available inside your editor, decline politely when there is
-  none, and never apply an answer that does not compile. Everything else —
-  diagnostics, navigation, completion, builds — is model-free and works
-  offline.
-- **The file icon theme is deliberately minimal.** VS Code applies one icon
-  theme to all files, so choosing "Ada 83 File Icons" gives Ada and project
-  files their marks and everything else a plain document.
-- **No screenshots here.** The walkthrough's picture of the scenario picker
-  is an SVG rendering labelled as such, not a screenshot pretending to be
-  the product.
-
-## More information
-
-- [Compiler and source](https://github.com/AdaDoom3/TurboAda)
-- [Issue tracker](https://github.com/AdaDoom3/TurboAda/issues)
-- [Language reference (`turboada-manual.md`)](https://github.com/AdaDoom3/TurboAda/blob/main/turboada-manual.md)
 </script>
 
 <script id="readme-tables.js" type="text/javascript">
@@ -4349,12 +4521,39 @@ own; the compiler versions independently and answers `--version`.
 
 ## 1.1.0
 
+Controls where people look for them:
+
+- A ▶ button at the top right of the editor runs or debugs the main in
+  view, and builds and runs a lone file when there is no project. Run and
+  Debug code lenses sit above every main procedure.
+- A build shows a progress bar across the project view and the unit being
+  compiled in the status bar, ends with "Built · N units", "Up to date" or
+  "Build failed" there, and can be stopped with a click. The success
+  notifications are gone.
+- The status bar shows the scenario's current values; the value picker
+  marks the current value and the default.
+- The project view puts the scenario variables and the main programs at
+  the top, then the project's Sources (open), Imported projects, Settings,
+  and Types and variables. Paths read relative to the workspace, and a
+  main or a file opens with a click.
+- The project view offers New Project, Select Project, or Download
+  Compiler when it has nothing to show, and the Tasks view explains itself
+  and offers Debug Main outside a debug session.
+- Suggest Fix appears only for errors the compiler cannot fix itself, so a
+  misspelling offers just its correction.
+- Build File writes the executable beside the source instead of the
+  workspace root.
+- The debugger's Breakpoints list offers only the Ada exception filters,
+  not the C++, Objective-C and Swift ones of the backend, and the Tasks
+  view keeps listing a program's environment task after a step when the
+  program has no tasks of its own.
+
 The constructs the compiler admits beyond Ada 83 are the default dialect
 everywhere the extension speaks:
 
 - The chat instructions and the Format and Suggest A Fix prompts name what
-  the compiler admits beyond Ada 83, and what it does not have: tagged types,
-  the asynchronous select, and the container,
+  the compiler admits beyond Ada 83, and what it does not have: tagged types
+  and the container,
   string and numerics libraries. With `turboada.languageExtensions` off they
   ask for Ada 83 alone.
 - The compile check behind Format and Suggest A Fix passes `-ada83` when
@@ -4368,6 +4567,32 @@ everywhere the extension speaks:
   types and `for ... of` loops.
 - The manual search tool says that the manual describes each later
   construct in an Extension callout inside the clause it extends.
+
+The editor's answers now come from the project as a whole:
+
+- Go to Definition and hover on a with-ed unit open the file it was read
+  from, never a name the unit was guessed to live in.
+- Completion after a dot offers exactly the record's components and
+  discriminants, a protected object's or task's visible operations, or a
+  package's visible declarations, with no reserved words among them.
+- Hover, definition and signature help answer on a record component and
+  on a protected operation named through its object.
+- A misspelled name draws one diagnostic; nothing built on it is
+  reported again.
+- Workspace symbol search reads every source directory the project
+  resolves, and Rename (F2) previews the identifier and edits every
+  reference across the project's files.
+- A burst of edits is analysed once, at the last text, and a request
+  cancelled while it waited is not compiled at all, so the Problems
+  panel keeps up with fast typing.
+- A file with CRLF line endings gets one warning on its first line that
+  says how to change them.
+- The Output channel is TurboAda, the debugger is listed as TurboAda, the
+  default compiler is `ta`, the download fetches and adopts `ta`, and the
+  project's source directories reach the compiler as TURBOADA_INCLUDE.
+- The extension asks for VS Code 1.95, the oldest that has every API it
+  calls.
+- A turbocharger in the activity bar, and one family of file icons.
 
 ## 1.0.0
 
@@ -4437,7 +4662,7 @@ Standing alone:
 
 <script id="turboada.instructions.md" type="text/markdown">
 ---
-name: Ada 83
+name: TurboAda
 description: The dialect of Ada these files are written in, what it lacks, and where to look it up.
 ---
 
@@ -4471,7 +4696,6 @@ Never write what the compiler does not have:
 
 - tagged types, or anything that dispatches: no `tagged`, `'Class`,
   `abstract`, `interface`, `synchronized` or extension aggregate;
-- an asynchronous select, or an access-to-protected-subprogram type;
 - `Ada.Containers`, `Ada.Strings`, `Ada.Characters.Handling`,
   `Ada.Numerics` or `Ada.Real_Time`, none of which exists here.
 
@@ -4673,7 +4897,7 @@ the clause it extends.
       "",
       "procedure ${1:Hello} is",
       "  begin",
-      "    Put_Line (\"${2:Hello, Ada 83!}\");",
+      "    Put_Line (\"${2:Hello, TurboAda!}\");",
       "  end;"
     ],
     "description": "A complete program"
@@ -4981,7 +5205,7 @@ the clause it extends.
 <script id="syntaxes/turboada.tmLanguage.json" type="application/json">
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Ada 83",
+  "name": "TurboAda",
   "scopeName": "source.ada",
   "patterns": [
     { "include": "#comment" },
@@ -5449,6 +5673,7 @@ the clause it extends.
   }
 }
 </script>
+
 <script id="turboada-file-icons.json" type="application/json">
 {
   "iconDefinitions": {
@@ -5537,68 +5762,57 @@ the clause it extends.
   }
 }
 </script>
+
 <script id="turboada-icon-activity.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <circle cx="12" cy="12" r="10.4" fill="none" stroke="#c5c5c5"
-          stroke-width="1.7"/>
-  <path d="M12 20 7.3 5.53 19.61 14.47 4.39 14.47 16.7 5.53Z" fill="none"
-        stroke="#c5c5c5" stroke-width="1.5" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c5c5c5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M18.93 9A8 8 0 1 1 12 5H22.5V9Z" stroke-width="1.75"/>
+  <circle cx="12" cy="13" r="1.9" stroke-width="1.5"/>
+  <path d="M12 9.6Q14.02 7.99 16.6 9.14M15.23 11.95Q17.39 13.38 17.09 16.18M14 15.75Q13.31 18.24 10.55 18.82M10 15.75Q7.42 15.86 6.01 13.42M8.77 11.95Q7.86 9.53 9.75 7.44" stroke-width="1.5"/>
 </svg>
 </script>
 
 <script id="turboada-icon-source.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="#808080"/>
-  <path d="M9.5 1.5v3h3" fill="none" stroke="#808080"/>
-  <path d="M5.4 12.5 8 5.5l2.6 7M6.4 10h3.2" fill="none" stroke="#cc3333"
-        stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" stroke="#808080"/>
+  <path d="M5.4 12.5 8 5.5l2.6 7M6.4 10h3.2" stroke="#cc3333"/>
 </svg>
 </script>
 
 <script id="turboada-icon-spec.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="#808080"/>
-  <path d="M9.5 1.5v3h3" fill="none" stroke="#808080"/>
-  <path d="M4.9 12 7 6.5 9.1 12M5.7 10h2.6" fill="none" stroke="#cc3333"
-        stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="10" y="13.6" font-family="sans-serif" font-size="6"
-        fill="#808080">s</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" stroke="#808080"/>
+  <path d="M4.6 12.2 6.9 6.2l2.3 6M5.4 10.2h3" stroke="#cc3333"/>
+  <circle cx="11.3" cy="12.2" r="1.4" stroke="#cc3333"/>
 </svg>
 </script>
 
 <script id="turboada-icon-body.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="#808080"/>
-  <path d="M9.5 1.5v3h3" fill="none" stroke="#808080"/>
-  <path d="M4.9 12 7 6.5 9.1 12M5.7 10h2.6" fill="none" stroke="#cc3333"
-        stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="10" y="13.6" font-family="sans-serif" font-size="6"
-        fill="#808080">b</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" stroke="#808080"/>
+  <path d="M4.6 12.2 6.9 6.2l2.3 6M5.4 10.2h3" stroke="#cc3333"/>
+  <circle cx="11.3" cy="12.2" r="2" fill="#cc3333"/>
 </svg>
 </script>
 
 <script id="turboada-icon-project.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="#808080"/>
-  <path d="M9.5 1.5v3h3" fill="none" stroke="#808080"/>
-  <path d="M5.5 5.5v6M5.5 8.5h3M5.5 11.5h3" fill="none" stroke="#cc3333"
-        stroke-width="1.2" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" stroke="#808080"/>
+  <path d="M5.5 5.5v6M5.5 8.5h3M5.5 11.5h3" stroke="#cc3333"/>
   <circle cx="10" cy="8.5" r="1" fill="#cc3333"/>
   <circle cx="10" cy="11.5" r="1" fill="#cc3333"/>
 </svg>
 </script>
 
 <script id="turboada-icon-file.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M3.5 1.5h6l3 3v10h-9z" fill="none" stroke="#808080"/>
-  <path d="M9.5 1.5v3h3" fill="none" stroke="#808080"/>
-  <path d="M5.5 7h3M5.5 9.5h5M5.5 12h5" fill="none" stroke="#808080"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3" stroke="#808080"/>
+  <path d="M5.5 7h3M5.5 9.5h5M5.5 12h5" stroke="#808080"/>
 </svg>
 </script>
 
 <script id="turboada-icon-folder.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M1.5 3.5h4.2l1.6 2h7.2v7h-13z" fill="none" stroke="#808080"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1.5 3.5h4.2l1.6 2h7.2v7h-13z" stroke="#808080"/>
 </svg>
 </script>
 
@@ -5635,14 +5849,13 @@ the clause it extends.
   <text x="20" y="391" font-size="12" fill="#9aa3b5">⌄ demo.gpr
     BUILD=debug</text>
   <text x="620" y="391" text-anchor="end" font-size="12"
-        fill="#9aa3b5">✓ Ada 83</text>
+        fill="#9aa3b5">✓ TurboAda</text>
 </svg>
 </script>
 
 <script id="turboada-icon-folder-open.svg" type="image/svg+xml">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M1.5 12.5v-9h4.2l1.6 2h6.2v2" fill="none" stroke="#808080"/>
-  <path d="M1.5 12.5l2-5h11l-2 5z" fill="none" stroke="#808080"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1.5 12.5v-9h4.2l1.6 2h6.2v2M1.5 12.5l2-5h11l-2 5z" stroke="#808080"/>
 </svg>
 </script>
 
@@ -5653,13 +5866,13 @@ the clause it extends.
     xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
     <Identity Language="en-US" Id="turboada" Version="1.1.0" Publisher="turboada" />
-    <DisplayName>Ada 83</DisplayName>
-    <Description xml:space="preserve">Ada 83 (ANSI/MIL-STD-1815A) development environment, powered by the TurboAda compiler. Diagnostics, go to definition, hover, outline, completion, signature help, folding, quick fixes, and .gpr / .gpj project files with their scenario variables.</Description>
+    <DisplayName>TurboAda</DisplayName>
+    <Description xml:space="preserve">An Ada compiler and a place to work in it. Native code through LLVM, and every answer in the editor comes from the compiler itself: diagnostics, navigation, rename, completion, signature help, builds, projects with their scenario variables, and a debugger that speaks Ada.</Description>
     <Tags>ada,turboada,mil-std-1815a</Tags>
     <Categories>Programming Languages,Linters,Debuggers</Categories>
     <GalleryFlags>Public</GalleryFlags>
     <Properties>
-      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^1.106.0" />
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="^1.95.0" />
       <Property Id="Microsoft.VisualStudio.Code.ExtensionDependencies" Value="" />
     </Properties>
   </Metadata>

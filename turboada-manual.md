@@ -140,6 +140,7 @@
     - [9.7.1 Selective Waits](#971-selective-waits)
     - [9.7.2 Conditional Entry Calls](#972-conditional-entry-calls)
     - [9.7.3 Timed Entry Calls](#973-timed-entry-calls)
+    - [9.7.4 Asynchronous Select](#974-asynchronous-select)
   - [9.8 Priorities](#98-priorities)
   - [9.9 Task and Entry Attributes](#99-task-and-entry-attributes)
   - [9.10 Abort Statements](#910-abort-statements)
@@ -1374,6 +1375,25 @@ For every type or subtype T, the following attribute is defined:
 - **`T'Base`** — The base type of T. This attribute is allowed only as the
   prefix of the name of another attribute: for example, T'Base'First.
 
+> [!IMPORTANT]
+> **Extension — `S'Base` as a subtype mark (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> For a scalar subtype S, `S'Base` may also stand where a subtype mark
+> does, outside a generic formal part: it denotes the unconstrained subtype
+> of S's type, whose range is that of the base type. An object, a
+> parameter, a function result, the subtype of a subtype declaration, an
+> index subtype, a designated subtype, a parent subtype, a qualified
+> expression, a type conversion and a membership test may name it:
+> `Last : Index_Type'Base := Index_Type'First - 1;` holds a value below
+> the first index, as the vector generics of the legacy library
+> ([F.7](#f7-the-legacy-library)) need. For a composite prefix, and under
+> `-ada83`, the attribute remains the prefix of another attribute only.
+
 > [!NOTE]
 > Each literal is an operation whose evaluation yields the corresponding value
 > (see [4.2](#42-literals)). Likewise, an aggregate is an operation whose evaluation yields a
@@ -1638,7 +1658,8 @@ type Special_Key is new Key_Manager.Key; -- See 7.4.2
 > is the enclosing statement or declaration: it is finalized once the
 > statement completes, or immediately after the condition of an if, while or
 > exit, or the selector of a case, has been evaluated, and also when an
-> exception leaves the statement. In a return statement the value of an
+> exception leaves the statement. The object an allocator creates for an
+> access parameter has the same master (see [4.8](#48-allocators)). In a return statement the value of an
 > expression that names a local object of the function is moved into the
 > result without adjustment, and that local is then not finalized by the
 > function; any other value is adjusted as it is copied into the result.
@@ -1930,6 +1951,74 @@ subtype Buffer_Size is Integer range 0..Max;
 > The smallest (most negative) value supported by the predefined integer types of
 > an implementation is the named number System.Min_Int and the largest (most
 > positive) value is System.Max_Int (see [13.7](#137-the-package-system)).
+
+> [!IMPORTANT]
+> **Extension — modular types (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A modular type is an integer type whose values are the non-negative
+> integers below a modulus, and whose predefined arithmetic wraps around:
+> every operation delivers its mathematical result reduced modulo the
+> modulus, so no operation of the type raises Numeric_Error or
+> Constraint_Error for overflow.
+>
+> ```ebnf
+> integer_type_definition ::= range_constraint | modular_type_definition
+>
+> modular_type_definition ::= mod expression
+> ```
+>
+> The expression is static and of an integer type, and its value, the
+> modulus, is positive and at most 2**128; a modulus above 2**64 must be a
+> power of two. The values of the type are 0 .. modulus - 1, which is
+> also the base range of the type: `T'First` is 0, `T'Last` is
+> modulus - 1, and the attribute `T'Modulus` yields the modulus as a
+> value of type universal_integer. A modulus up to 2**64 is held in a
+> 64-bit word; a wider one in 128 bits.
+>
+> The predefined operators of an integer type are predefined for a
+> modular type — `+`, `-`, `*`, `/`, `mod`, `rem`, `**`, `abs`, the
+> relational operators — and each delivers its result modulo the modulus:
+> for `M` of modulus 256 and `A` of value 250, `A + 10` is 4, `A - 251` is
+> 255, `A * 10` is 196 and `-A` is 6; `2 ** 9` in `M` is 0. The logical
+> operators `and`, `or`, `xor` and `not` are predefined as well: `and`,
+> `or` and `xor` act bit by bit on the binary representations of their
+> operands and reduce the result modulo the modulus, and `not X` is
+> modulus - 1 - X, so for a modulus that is a power of two they are the
+> bitwise operations and for another modulus they stay within the type
+> (`not N'(0)` is 9 in `N` of modulus 10). Division by zero raises
+> Constraint_Error as it does for any integer type.
+>
+> An integer literal is a value of a modular type wherever an integer
+> literal is a value of an integer type, and a static value written for the
+> type must lie in its base range: `C := A + 300` and `D : M := 303` are
+> refused ("300 is outside the base range 0 .. 255 of the modular type
+> 'M'"), whereas `-10` is the operator `-` applied to `M'(10)` and is 246.
+> A type conversion to a modular type of a value outside 0 .. modulus - 1
+> raises Constraint_Error; it does not reduce. `T'Succ (T'Last)` and
+> `T'Pred (0)` raise Constraint_Error, as for any discrete type; `'Image`,
+> `'Value`, `'Width`, `'Pos` and `'Val` are those of an integer type, and
+> an instance of Text_IO.Integer_IO may take a modular type, writing values
+> up to 2**128 - 1.
+>
+> ```ada
+> type Byte is mod 256;
+> type Word is mod 2 ** 64;
+> type Wide is mod 2 ** 128;
+> type Ring is mod 200;
+>
+> Checksum : Byte := 250;
+> ...
+> Checksum := Checksum + 10;   -- 4
+> Mask     := not Mask;        -- Byte: 255 - Mask
+> ```
+>
+> Under `-ada83` a modular type definition is refused: "a modular type is
+> not allowed in strict mode".
 
 #### 3.5.5 Operations of Discrete Types
 
@@ -3559,7 +3648,10 @@ type Buffer_Name is access Buffer -- See 3.7.1
 > in a generic body it becomes the run-time check of the same paragraph,
 > so a subprogram declared in a generic body is in practice designated only
 > by an access type declared within the same generic unit, whose region is
-> comparable to its own in every instance.
+> comparable to its own in every instance, or by the anonymous type of an
+> access parameter, whose region is deeper than every other: the value
+> lives only as long as the call it is passed to, so a generic body may
+> hand a local procedure to an `Iterate` declared anywhere.
 >
 > **Representation.** A value of an access-to-subprogram type is two words:
 > the address of the subprogram, and the activation it is to run in. Both
@@ -3569,7 +3661,13 @@ type Buffer_Name is access Buffer -- See 3.7.1
 > activations of the same body behave differently, as they should. A
 > library-level subprogram carries a null second word.
 >
-> **Convention.** `pragma Convention (C, T)` on an access-to-subprogram type
+> **Convention.** An access-to-subprogram type whose profile is written
+> after the reserved word `protected` has the convention Protected, as does
+> every subprogram declared immediately within a protected unit, and only
+> those designate each other; its value carries the protected object where
+> an Ada-convention value carries an activation (see the protected-types
+> extension in [9.11](#911-shared-variables)). `pragma Convention (C, T)`
+> on an access-to-subprogram type
 > makes it **one** word — a bare code pointer, callable by a foreign
 > language — and its designated subprogram must then carry the same
 > convention and be declared at depth zero, since a one-word value has
@@ -4071,29 +4169,31 @@ Standard.Boolean -- The name of a predefined type (see 8.6 and C)
 > compiler is invoked with `-ada83`; a program that relies on it is not a
 > legal Ada 83 program.
 >
-> A selected component whose prefix denotes an object may name, as its
-> selector, a subprogram whose first formal parameter has mode **in out**
-> and is of the type of that object. The selected component, followed by an
-> actual parameter part when the subprogram has further formals, is then a
-> *prefixed call*, and the prefix is the actual parameter for that first
-> formal.
+> A selected component whose prefix denotes an object or a value may name,
+> as its selector, a subprogram whose first formal parameter is of the type
+> of that prefix, whatever its mode, or is an access parameter designating
+> that type. The selected component, followed by an actual parameter part
+> when the subprogram has further formals, is then a *prefixed call*, and
+> the prefix is the actual parameter for that first formal.
 >
 > `prefix.selector [actual_parameter_part]` is a prefixed call when all of
 > the following hold:
 >
-> - the prefix denotes an object: a variable, a record component, an array
->   element, an object designated by an access value, or a formal parameter.
->   If the type of the prefix is an access type, the prefix is implicitly
->   dereferenced, as it is for the forms (a) to (c) above;
+> - the prefix denotes an object — a variable, a constant, a record
+>   component, an array element, an object designated by an access value,
+>   or a formal parameter — or a value, such as the result of a function
+>   call. If the type of the prefix is an access type, the prefix is
+>   implicitly dereferenced, as it is for the forms (a) to (c) above;
 >
 > - the selected component is not of any of the forms (a) to (f) above: those
 >   are tried first, so a discriminant, a component, an entry or a protected
 >   operation of the prefix keeps its meaning, and a program that is legal
 >   without this extension means the same with it;
 >
-> - the selector is the simple name of a subprogram whose first formal
->   parameter has mode **in out** and whose type is the type of the prefix,
->   among the subprograms declared in the same declarative region as that
+> - the selector is the simple name of a function or procedure whose first
+>   formal parameter is of the type of the prefix, in any mode, or is an
+>   access parameter designating that type, among the subprograms declared
+>   in the same declarative region as that
 >   type — its derived subprograms included — and the subprograms directly
 >   visible at the place of the call. The subprograms of the type's
 >   declarative region are reached through the prefix without a use clause
@@ -4104,18 +4204,24 @@ Standard.Boolean -- The name of a predefined type (see 8.6 and C)
 > actual parameter part supplies the remaining formals, and the rules of
 > [6.4.1](#641-parameter-associations) for the actual parameters and their
 > modes apply to that call. When the subprogram has exactly one formal, the
-> prefixed call is written without an actual parameter part. Because the
-> first formal has mode **in out**, the prefix must be a variable: a
-> constant, a formal parameter of mode **in**, a literal, or a function call
-> is not allowed as the prefix of a prefixed call.
+> prefixed call is written without an actual parameter part; for a function
+> it is then a function call like any other, so `V.Length` is `Length (V)`.
+> When the first formal has mode **in out** or **out**, the prefix must be a
+> variable. When it is an access parameter, the prefix is passed as
+> `P'ACCESS`, so it must be an aliased view, and a variable unless the
+> parameter is `access constant`. A constant, a formal parameter of mode
+> **in** and a function result therefore serve a first formal of mode
+> **in**.
 >
 > Where more than one subprogram of that name satisfies the last condition,
-> the remaining actual parameters determine which is called, by the rules of
+> the remaining actual parameters, and for a function the context,
+> determine which is called, by the rules of
 > [6.6](#66-parameter-and-result-type-profile---overloading-of-subprograms),
 > exactly as for the written-out call; the prefixed call is ambiguous if
-> they do not. A function is not reachable as a prefixed call, since its
-> parameters have mode **in** (see [6.5](#65-function-subprograms)). The
-> subprogram is determined at compile time from the type of the prefix; no
+> they do not. Written without an actual parameter part, a prefixed call
+> that is a statement calls a procedure, and one anywhere else calls a
+> function. The subprogram is determined at compile time from the type of
+> the prefix; no
 > dispatching takes place. Within a generic unit, a prefixed call whose
 > prefix is of a formal type is resolved in each instance against the actual
 > type, as every call within an instance is.
@@ -4125,14 +4231,17 @@ Standard.Boolean -- The name of a predefined type (see 8.6 and C)
 >   type Counter is record V : Integer := 0; end record;
 >   procedure Bump  (C : in out Counter; By : Integer);
 >   procedure Reset (C : in out Counter);
+>   function  Value (C : Counter) return Integer;
 > end Counters;
 >
 > with Counters;                        -- no use clause is needed
 > procedure Main is
 >   Obj : Counters.Counter;
+>   Now : Integer;
 > begin
 >   Obj.Bump (2);                       -- the call Counters.Bump (Obj, 2)
 >   Obj.Reset;                          -- the call Counters.Reset (Obj)
+>   Now := Obj.Value;                   -- the call Counters.Value (Obj)
 > end Main;
 > ```
 >
@@ -4227,6 +4336,81 @@ Clubs -- An enumeration literal
 'A' -- A character literal
 "SOME TEXT" -- A string literal
 ```
+
+> [!IMPORTANT]
+> **Extension — user-defined literals (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A type that is not numeric may be given values by integer literals and
+> by real literals, and a type that is not a string type by string
+> literals, through the aspects `Integer_Literal`,
+> `Real_Literal` and `String_Literal` (see the aspect specification
+> extension of [13.1](#131-representation-clauses)). Each names a
+> function declared with the type:
+>
+> ```ada
+> type Big is private
+>   with Integer_Literal => From_String;
+> function From_String (Text : String) return Big;
+>
+> type Money is private
+>   with Real_Literal => To_Money;
+> function To_Money (Text : String) return Money;
+> function To_Money (Numerator, Denominator : String) return Money;
+>
+> type Name is private
+>   with String_Literal => To_Name;
+> function To_Name (Text : String) return Name;
+> ```
+>
+> The function named by `Integer_Literal` or `String_Literal` has one
+> parameter of mode in and type String and returns the type;
+> `Real_Literal` names such a function and may, under the same name, also
+> denote a second one with two String parameters. A name that denotes more
+> than one function of the required profile is refused, and may be settled
+> by an expanded name. `Integer_Literal` and `Real_Literal` may not be
+> specified for a numeric type, nor `String_Literal` for a string type,
+> whose literals already denote their own values; a private type whose full
+> type turns out to be such a type may not have specified the aspect. A
+> subtype cannot specify these aspects. They are nonoverridable: a derived
+> type inherits them and the function it inherits for them (a function
+> declared beside the parent as a primitive; one declared in a subprogram's
+> declarative part is not inherited, and the derived type then has no
+> literals); the aspect may be respecified on a derived type only to name
+> that inherited function, or the function that overrides it; and for a
+> type with a partial view it is specified on the partial view, which must
+> specify it whenever the full type inherits it.
+>
+> A numeric literal whose expected type has `Integer_Literal` (an integer
+> literal) or `Real_Literal` (a real literal) is a call of the named
+> function with the literal's text as written — `1_000` and `16#FF#` reach
+> the function unchanged; a string literal whose expected type has
+> `String_Literal` is a call with the literal's characters. A named number
+> whose value is wanted at such a type reaches the one-parameter function
+> as its decimal image when it is an integer, and a named real number
+> reaches the two-parameter function as a numerator and a denominator, the
+> sign on the numerator; with only the one-parameter function named, a
+> named real number is not a value of the type. The literal takes part in
+> overload resolution as the call it stands for: a literal fits every
+> overload whose formal can take it, so a call with an Integer overload and
+> a `Big` overload is ambiguous until the literal is qualified, and a
+> context that decides the type (a comparison with a `Big`, a `Big`
+> parameter, an if expression of type `Big`) resolves it. `-5` is the
+> operator `-` applied to the literal `5`: a type with `Integer_Literal`
+> admits it only through a `-` of its own. A user-defined literal is a
+> call, so it is never static: it cannot be a case choice or the bound of a
+> static subtype. An enumeration type is not numeric, so it may have
+> `Integer_Literal`, and its literals then index arrays and bound subtypes
+> as calls. A generic formal derived type inherits the actual's aspect, and
+> a literal of the formal type inside an instance calls the actual's
+> function.
+>
+> Under `-ada83` the aspects are refused with every aspect specification:
+> "an aspect specification is not allowed in strict mode".
 
 ### 4.3 Aggregates
 
@@ -4456,6 +4640,129 @@ E : Bit_Vector (M..N) := (others => True);
 F : String (1..1) := (1 => 'F'); -- A one component aggregate: same as "F"
 ```
 
+> [!IMPORTANT]
+> **Extension — iterated component associations (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> An association of an array aggregate may give one expression for several
+> components and name, in that expression, the index or the element it is
+> being evaluated for.
+>
+> ```ebnf
+> array_component_association ::=
+>      discrete_choice_list => expression
+>    | iterated_component_association
+>
+> iterated_component_association ::=
+>      for identifier in discrete_choice_list => expression
+>    | for identifier [: subtype_indication] of [reverse] name => expression
+> ```
+>
+> **The `in` form** is a named association: its choices are those of any
+> array aggregate (values, ranges, subtype marks, `|` lists, with the
+> rules of this section — static unless the aggregate is a single
+> association of a single choice, no overlap, the bounds of the aggregate
+> from the choices, `others` last), and they declare an index parameter
+> whose subtype is the index subtype of the array. The parameter is a
+> constant, visible in the expression only, and denotes nothing in its
+> own choices. The expression is evaluated once for each index the choices
+> name, with the parameter holding that index, in no particular order;
+> `reverse` is refused in this form. Such an association stands beside
+> plain and `others` associations, and each level of a multidimensional
+> aggregate may iterate its own dimension.
+>
+> **The `of` form** is a positional association: `name` is an array
+> object or an iterable container, as after `of` in a loop statement (see
+> the array component iterator extension of
+> [5.5](#55-loop-statements)), the parameter denotes each element in turn,
+> in reverse with `reverse`, and may name its subtype as a loop parameter
+> may. The association supplies one component per element and determines
+> no bounds, so the aggregate takes them as a positional aggregate does:
+> the lower bound is that of the index subtype, or of the applicable index
+> constraint, and the length is the number of elements iterated. Either
+> every association of the aggregate iterates with `of` or none does; a
+> plain positional expression, a named association or `others` beside one
+> is refused. For the evaluation, the `name` is evaluated once, as for a
+> renaming; the elements are then counted by one iteration, the aggregate
+> is given that many components, and a second iteration evaluates the
+> expression for each element in order. An array is thus traversed twice,
+> and a container's First, Next and Has_Element are called for both
+> traversals. A constrained context checks the count against its bounds,
+> and Constraint_Error is raised when they differ.
+>
+> ```ada
+> Squares  : constant Vector (1 .. N) := (for I in 1 .. N => I * I);
+> Week     : constant Hours :=
+>   (for D in Mon | Wed .. Thu | Weekend => Day'Pos (D) * 2, others => 1);
+> Table    : constant Grid :=
+>   (for R in 1 .. 2 => (for C in 1 .. 3 => R * 10 + C));
+> Doubled  : constant Vector := (for E of Source => E * 2);
+> Backward : constant Vector := (for E of reverse Source => E);
+> Joined   : constant Vector := (for E of A => E, for E of B => -E);
+> ```
+>
+> A parenthesized iterated association alone, where the context wants a
+> value of a type that is not composite, is reported as a quantified
+> expression missing its quantifier. Under `-ada83` every form is refused:
+> "an iterated component association is not allowed in strict mode".
+
+> [!IMPORTANT]
+> **Extension — delta aggregates (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A delta aggregate yields a copy of a record or array value with some of
+> its components replaced.
+>
+> ```ebnf
+> delta_aggregate ::= (expression with delta component_association_list)
+> ```
+>
+> The type of the aggregate comes from the context, as for any aggregate,
+> and must be a record type or a one-dimensional array type; the
+> expression, the base, is of that type. Every association is named, as
+> `component => value` or `discrete_choice_list => value`; neither
+> `others` nor `<>` is allowed, nor an association iterating with `of`.
+> For a record type each choice names a component that is not a
+> discriminant, and the value is of the component's type. For an array
+> type the choices are those of an array aggregate — values, ranges,
+> subtype marks, `|` lists, in any number, overlapping or not, static or
+> not — and the value is of the component type; an association may be an
+> iterated association of the `in` form, and a subtype with a predicate
+> contributes the values that satisfy it.
+>
+> The base is evaluated once and copied into an anonymous object of the
+> aggregate's type, which keeps the base's discriminants and, for an
+> array, the base's bounds. Then, in the order written, each association
+> assigns its value to the components it names — for a range, each index
+> of the range in turn, and for an iterated association with the index
+> parameter set to each index — a later association overwriting an
+> earlier one. For an array, each index named is checked against the
+> bounds of the copy, and Constraint_Error is raised if it lies outside
+> them; a null range names no index and is not checked. Each such
+> assignment is an assignment operation: a controlled value already in the
+> component is finalized before the new value is copied in and adjusted,
+> and the copy of the base itself is adjusted component by component, or
+> adopts a base that was a fresh anonymous value.
+>
+> ```ada
+> Y : constant Rec    := (X with delta B => 9, C => (P => 33));
+> A : constant Six    := (Base with delta 2 => 0, 4 .. 5 => -1, 1 | 6 => 9);
+> B : constant Six    := (Base with delta Middle => 3, Low .. High => 2);
+> D : constant Six    := (Base with delta for I in 2 | 4 .. 5 => I * 100);
+> E : constant Vector := (Named with delta 8 => 20);   -- E'Range = Named'Range
+> ```
+>
+> Under `-ada83` a delta aggregate is refused: "a delta aggregate is not
+> allowed in strict mode".
+
 ### 4.4 Expressions
 
 An expression is a formula that defines the computation of a value.
@@ -4602,6 +4909,136 @@ A**(B**C) -- Expression (parentheses are required)
 > Ada 83 rule stands, under which only an object name, a qualified expression
 > and a type conversion do so, and a function call requires the choices to
 > cover its base type.
+
+> [!IMPORTANT]
+> **Extension — declare expressions (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A declare expression declares entities for the evaluation of one
+> expression, its *body expression*, and yields that expression's value. It
+> is a superset of the Ada 2022 form: any declarative item may be declared,
+> not only constants and renamings, and a sequence of statements may precede
+> the body expression.
+>
+> ```ebnf
+> declare_expression ::=
+>      declare {declarative_item}
+>      begin {statement} body_expression
+>
+> body_expression ::= expression
+> ```
+>
+> Note the shape: there is no `end`; the last thing before the closing
+> parenthesis is the body expression, and it is what separates the
+> statements from the value — the statements each end in a semicolon and
+> the body expression does not.
+>
+> **A declare expression must be immediately surrounded by parentheses,**
+> exactly as a conditional expression must be (see above): the parentheses
+> may be the enclosing construct's own only when they enclose nothing else.
+>
+> The declarative items and the statements obey the rules of a block
+> statement: the items are elaborated in order, the statements are then
+> executed, and the body expression is evaluated last. The expected type of
+> the declare expression is passed on to its body expression, which is how
+> an overloaded literal or call there is resolved. The declared entities are
+> visible from their declaration to the end of the body expression, and
+> nowhere else; the scope may declare types, subprograms, tasks and objects
+> of any kind.
+>
+> On leaving the expression, whether after the value is produced or by an
+> exception propagating out of it, every object declared in it is finalized
+> in the reverse order of its declaration, as at the end of a block
+> statement; a task declared in it is awaited first. The value of the body
+> expression is produced before that finalization, and when its type needs
+> finalization it is copied out of the expression — adjusted as a copy is —
+> before the declared objects are finalized, so that the value never sees
+> a component that finalization has already run on, whatever the type:
+> a record, an array of a controlled component type, or a value with
+> bounds. The copy is then finalized with the temporaries of the enclosing
+> statement.
+>
+> A declare expression is a static expression when it has no statements,
+> when every declarative item declares a constant of a static subtype whose
+> initial expression is static (a number declaration counts), and when the
+> body expression is static: it can then bound a range, stand as a choice or
+> a choice bound of a case statement, a case expression or a variant part,
+> and constrain a discriminant. A declare expression with a statement, a
+> variable, or a constant whose initial value is not static is never static,
+> and the diagnostic for a context that requires a static expression says
+> which of those it found.
+
+> **Extension — quantified expressions (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A quantified expression asks whether a predicate holds for all, or for
+> some, of the values a loop would run over.
+>
+> ```ebnf
+> quantified_expression ::=
+>      for quantifier loop_parameter_specification => predicate
+>    | for quantifier iterator_specification => predicate
+>
+> quantifier ::= all | some
+> predicate  ::= expression
+> ```
+>
+> The quantifier follows `for` at once; a `for` without `all` or `some`
+> where a value is wanted is refused by name. The loop parameter
+> specification and the iterator specification are those of the loop
+> statement, with the loop's rules and the loop's messages: the `in` form
+> runs over a discrete range, a `'Range`, a subtype mark or a subtype with
+> a range constraint, and over a generalized iterator; the `of` form runs
+> over an array object — a variable, a constant, a function result, a
+> slice, in one or more dimensions — or over an iterable container, and
+> may name the parameter's subtype (see the array component iterator
+> extension of [5.5](#55-loop-statements)); `reverse` is allowed in both.
+> The parameter is declared by the expression, is visible in the
+> predicate only, and denotes nothing within its own specification. In the
+> `in` form it is a constant; in the `of` form it is a view of the
+> component or element, a variable view when the array or container is a
+> variable, so a function with an in out parameter may update the
+> component through it.
+>
+> The expected type of a quantified expression is any boolean type, and
+> its predicate is expected to be of that same type: where the context
+> names a type derived from Boolean, the expression and its predicate are
+> of that type, and an overloaded predicate resolves to it; where the
+> context does not decide, the type is Boolean. A predicate of a type that
+> is not boolean is refused as a condition. **A quantified expression must
+> be immediately surrounded by parentheses**, its own or those of an
+> enclosing construct that enclose nothing else, exactly as a conditional
+> expression must (see the if and case expression extension above). It is
+> never a static expression, even over a static domain with a static
+> predicate, so it cannot be a case choice.
+>
+> For the evaluation, the domain is elaborated as the loop's is, then the
+> predicate is evaluated once for each value, in the order the loop would
+> take, until a value decides the result: the first False for `all`, the
+> first True for `some`; the remaining values are not visited. Over an
+> empty domain `all` is True and `some` is False, and the predicate is
+> never evaluated. Temporaries the predicate creates are finalized at each
+> iteration; those of the enclosing statement are left alone. Two
+> quantified expressions conform, for the rules of
+> [6.3.1](#631-conformance-rules), when they are written alike, quantifier
+> included; each declares its own parameter.
+>
+> ```ada
+> Sorted  : constant Boolean := (for all I in A'First .. A'Last - 1 => A (I) <= A (I + 1));
+> Has_Gap : constant Boolean := (for some E of Buffer => E = Space);
+> if (for all Row of Matrix => (for some X of Row => X = 0)) then ...
+> ```
+>
+> Under `-ada83` a quantified expression is refused: "a quantified
+> expression is not allowed in strict mode".
 
 ### 4.5 Operators and Expression Evaluation
 
@@ -5394,6 +5831,39 @@ new Buffer' (Size => 80, Pos => 0, Value => (1..80 => 'A'))
                                               -- Initialized explicitly
 ```
 
+> **Extension — an allocator for an access parameter (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A formal parameter may have an anonymous access type, `C : access Cell`.
+> An allocator written as the actual parameter for such an access
+> parameter, as its default expression, or as the operand of an operator
+> that declares one, has the type of the access parameter, and the object
+> it creates has the master of the call as its master: the statement or
+> declaration that contains the call, or, when the call is part of the
+> condition of an if, while or exit statement or the selector of a case
+> statement, that condition or selector. When its master is left —
+> normally, by a transfer of control, or by an exception — the tasks the
+> object contains are awaited, the object is finalized, and its storage is
+> reclaimed, in that order, as for the anonymous objects of the
+> controlled-types extension in [3.4](#34-derived-types).
+>
+> The value the callee receives carries the level of the call itself, so
+> the callee cannot keep it: converting it to a named access type, or
+> assigning it to an anonymous access object declared outside the call,
+> raises Program_Error. An allocator whose type is a named access type —
+> passed to a formal of that type, or qualified by it — belongs to that
+> type's collection like any other.
+>
+> ```ada
+> procedure Show (C : access Cell);
+>
+> Show (new Cell' (0, null, null));  -- the cell is reclaimed once Show returns
+> ```
+
 ### 4.9 Static Expressions and Static Subtypes
 
 Certain expressions of a scalar type are said to be static. Similarly, certain
@@ -5942,6 +6412,131 @@ end loop;
 > Loop names are also used in exit statements, and in expanded names (in a prefix
 > of the loop parameter).
 
+> [!IMPORTANT]
+> **Extension — array component iterators, container iteration and the iterator aspects (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A for loop may run over the components of an array, over the elements
+> of a container, or over the cursors an iterator yields.
+>
+> ```ebnf
+> iteration_scheme ::= while condition
+>    | for loop_parameter_specification
+>    | for iterator_specification
+>
+> iterator_specification ::=
+>      identifier [: subtype_indication] of [reverse] name
+>    | identifier in [reverse] name
+> ```
+>
+> **Arrays.** In `for E of A loop`, `A` is an array object — a variable,
+> a constant, a formal parameter, a function result, a slice, a dereference,
+> of one or more dimensions — and never a type mark or a scalar; a packed
+> array is refused, as is a subcomponent that depends on the discriminants
+> of an object whose nominal subtype is unconstrained. `A` is evaluated
+> once, when the loop starts. The loop parameter `E` denotes each component
+> in turn, in index order with the last index varying fastest, or in the
+> opposite order with `reverse`: it is a variable view when `A` is a
+> variable and a constant otherwise, is an aliased view when the components
+> are aliased, and has the accessibility level of the array. Its subtype
+> may be named after a colon and must then statically match the component
+> subtype. `E` denotes nothing within its own iterator specification.
+>
+> **Iterators.** The generic package `Ada.Iterator_Interfaces (Cursor,
+> Has_Element)`, named in a with clause, declares the types
+> `Forward_Iterator` and `Reversible_Iterator`. A type derived from one of them, written as a
+> record extension (`... with null record` or with components), is an
+> iterator type; there is no tag, so the loop calls the functions `First`
+> and `Next` (and `Last` and `Previous` for a reversible one) declared
+> with the iterator type, whose first parameter is of that type, and whose
+> profiles are those of the generic's abstract operations. In `for C in
+> Iter loop`, `Iter` is of an iterator type: it is evaluated once, `First`
+> (or `Last`) is called, then the body runs and `Next` (or `Previous`) is
+> called while `Has_Element` is True. `C` is a constant of the cursor type,
+> which must not be limited where the loop is written; `reverse` needs a
+> type derived from `Reversible_Iterator`. An array, a container or a cursor
+> after `in` is refused: an array or a container is iterated with `of`.
+>
+> **Containers.** A record type or a private type may be an indexable
+> container and an iterable container through the aspects `Constant_Indexing`,
+> `Variable_Indexing`, `Default_Iterator` and `Iterator_Element`, given on
+> the partial view when the type has one:
+>
+> ```ada
+> type Container is private
+>   with Constant_Indexing => Element,
+>        Variable_Indexing => Reference,
+>        Default_Iterator  => Iterate,
+>        Iterator_Element  => Natural;
+> function Element   (C : Container; Position : Cursor) return Natural;
+> function Reference (C : Container; Position : Cursor) return Reference_Type;
+> function Iterate   (C : Container) return Walk;
+> ```
+>
+> `Constant_Indexing` and `Variable_Indexing` each name one or more functions
+> declared in the same declaration list as the type, taking the container
+> first (as an object, or through an access parameter designating it — for
+> `Constant_Indexing` an access-to-constant one) and at least one index; a
+> `Variable_Indexing` function returns a reference type, one with the
+> `Implicit_Dereference` aspect whose reference discriminant is of an
+> access-to-variable type. `C (I)` is then a generalized indexing, the
+> call `Element (C, I)` or `Reference (C, I)` resolved as a call is —
+> by the actual parameters, and among overloads by the context's type —
+> and never a slice; a constant view of the container (a constant, an in
+> parameter, a function result) is indexed through `Constant_Indexing`, a
+> variable through `Variable_Indexing` when the type has it; the
+> indexings nest, `G (I) (J)`. `Default_Iterator` names exactly one
+> function whose first parameter is the container, or an access parameter
+> designating it, whose other parameters have defaults and whose result is
+> of an iterator type; `Iterator_Element` names a subtype; both require an
+> indexing aspect. A generic formal private type is never a container. In
+> `for E of C loop`, the default iterator is called once on `C` — the
+> call must be legal, so an `Iterate` taking its container in out refuses
+> a constant — and `First`, `Next` (or `Last`, `Previous`, with `reverse`,
+> which needs a reversible default iterator type) walk the cursors; at each
+> iteration `E` denotes `C (Cursor)`, evaluated once, through
+> `Constant_Indexing` for a constant container or `Variable_Indexing` for a
+> variable one, so assigning `E` writes the element. A default iterator
+> that takes the container through an access parameter cannot serve the
+> `of` form. The four aspects are
+> nonoverridable: a derived type inherits them and the loop calls the
+> derived type's own operations, an aspect respecified on a descendant
+> may only name what it inherits, and a descendant may not add one.
+>
+> **The Iterable aspect** is the lighter form, given on the type as a list
+> of named associations naming functions declared with it:
+>
+> ```ada
+> type Bag is record ... end record
+>   with Iterable => (First       => First,
+>                     Next        => Next,
+>                     Has_Element => Has_Element,
+>                     Element     => Element);
+> ```
+>
+> `First` takes the container and returns a cursor; `Next` and
+> `Has_Element` take the container and a cursor; `Element` takes them too
+> and returns the element; `Last` and `Previous` may be added for
+> `reverse`. Each is named at most once, and at least `First`, `Next` and
+> `Has_Element` are given. `for C in B loop` then runs over the cursors
+> and `for E of B loop` over the elements, `E` holding the value `Element`
+> returns, a constant. The aspect may be given on a partial view with a
+> private cursor type, and is inherited by derivation.
+>
+> Every form is expanded again in each instance of a generic, iterates at
+> library level as elaboration code, and finalizes what it holds — a
+> domain that is a function result, the iterator, each cursor — exactly
+> once, however the loop is left. Quantified expressions run over the same
+> domains with the same rules.
+>
+> Under `-ada83` the `of` form is refused ("an array component iterator is
+> not allowed in strict mode"), and the aspects with every aspect
+> specification.
+
 ### 5.6 Block Statements
 
 A block statement encloses a sequence of statements optionally preceded by a
@@ -6035,6 +6630,68 @@ end loop;
 > [!NOTE]
 > Several nested loops can be exited by an exit statement that names the outer
 > loop.
+
+> [!IMPORTANT]
+> **Extension — continue statements (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A continue statement ends the current iteration of an enclosing loop and
+> goes on with the next.
+>
+> ```ebnf
+> continue_statement ::=
+>    continue [loop_name] [when condition];
+> ```
+>
+> `continue` is not a reserved word. A statement that begins with the
+> identifier `continue` and is followed by `;`, by `when` or by an
+> identifier is a continue statement unless a procedure named `Continue`
+> that the bare name could call is visible there, in which case it is a
+> call of that procedure, as it is in Ada 83; a variable, a function or a
+> procedure that needs a parameter, named `Continue`, leaves it a continue
+> statement, and an instance reads it as its template does. When a
+> continue statement is illegal, a note says why it was read as one.
+>
+> The rules are those of the exit statement: a continue statement with a
+> loop name is only allowed within the named loop, and applies to that
+> loop; one without a loop name is only allowed within a loop, and applies
+> to the innermost enclosing loop; and it must not appear within a
+> subprogram body, package body, task body, generic body or accept
+> statement that the loop encloses. The condition, if present, must be of
+> a boolean type.
+>
+> For the execution, the condition, if present, is first evaluated, and
+> the iteration is then ended if the value is True or there is no
+> condition: control leaves every block statement and inner loop between
+> the continue statement and the loop it applies to, finalizing the
+> objects declared there, waiting for the tasks that depend on them, and
+> giving back the iteration's storage, and the loop goes on as it would
+> after the last statement of its sequence — a for loop takes its next
+> value, a while loop tests its condition again, a plain loop repeats,
+> and a loop over an array, a container or an iterator advances to the
+> next component, element or cursor.
+>
+> ```ada
+> for E of Buffer loop
+>   continue when E = Space;
+>   Put (E);
+> end loop;
+>
+> Rows : for R in Matrix'Range (1) loop
+>   for C in Matrix'Range (2) loop
+>     continue Rows when Matrix (R, C) = 0;
+>     ...
+>   end loop;
+> end loop Rows;
+> ```
+>
+> Under `-ada83` a continue statement is refused: "a continue statement is
+> not allowed in strict mode", with the note that no procedure named
+> `continue` is visible.
 
 ### 5.8 Return Statements
 
@@ -8908,6 +9565,53 @@ end;
 > index (in an entry name or accept statement) must be of the predefined type
 > Integer (see [3.6.1](#361-index-constraints-and-discrete-ranges)).
 
+> [!IMPORTANT]
+> **Extension — requeue statements (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A requeue statement hands the entry call being served on to another
+> entry of the same protected unit (see the protected types extension of
+> [9.11](#911-shared-variables)).
+>
+> ```ebnf
+> requeue_statement ::= requeue entry_simple_name [with abort];
+> ```
+>
+> `requeue` is not a reserved word: it opens a statement only where a
+> statement can start and an identifier follows, and stays an ordinary
+> identifier elsewhere. The statement is allowed only in the body of a
+> protected entry, and names, by its simple name alone — no prefix, no
+> family index — an entry of the protected unit the body belongs to;
+> neither entry may have parameters. A requeue in an accept statement, in
+> a protected subprogram, in ordinary statements, or to an entry of
+> another unit is refused, each refusal saying which limit it met. `with
+> abort` is accepted and has no further effect.
+>
+> For the execution, the call being served is taken out of the entry body
+> running it and put back on the object's queue under the entry named,
+> within the same protected action; the entry body's remaining statements
+> are not executed. The call is not complete: the service loop offers it
+> to the new entry's barrier — at once if the barrier is open, or when a
+> later protected action opens it — and the caller returns only when that
+> entry's body has run for it.
+>
+> ```ada
+> entry Request when True is
+> begin
+>   if not Ready then
+>     requeue Wait;
+>   end if;
+>   ...
+> end Request;
+> ```
+>
+> Under `-ada83` a requeue statement is refused: "a requeue statement is
+> not allowed in strict mode".
+
 ### 9.6 Delay Statements, Duration, and Time
 
 The execution of a delay statement evaluates the simple expression, and suspends
@@ -9261,6 +9965,107 @@ or
 end select;
 ```
 
+#### 9.7.4 Asynchronous Select
+
+> **Extension — asynchronous select (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A fourth form of select statement runs a sequence of statements only for
+> as long as a triggering statement — an entry call or a delay — is
+> outstanding, and abandons it wherever it has got to the moment the
+> trigger completes.
+>
+> ```ebnf
+> select_statement ::= selective_wait
+>    | conditional_entry_call | timed_entry_call | asynchronous_select
+>
+> asynchronous_select ::=
+>    select
+>        triggering_alternative
+>    then abort
+>        sequence_of_statements
+>    end select;
+>
+> triggering_alternative ::= triggering_statement [sequence_of_statements]
+>
+> triggering_statement ::= entry_call_statement | delay_statement
+> ```
+>
+> The triggering alternative has no guard and no `or`; an `else` part is
+> not allowed. The entry called may be an entry of a task or of a protected
+> object. The sequence of statements after `then abort` is the *abortable
+> part*.
+>
+> For the execution of an asynchronous select, the entry name and the
+> actual parameters, or the delay expression, are evaluated first, as for a
+> timed entry call, and the triggering statement is then issued: the entry
+> call is queued, or the delay begins. The abortable part is then executed.
+>
+> If the triggering statement completes — the entry call is accepted and
+> its rendezvous or protected action ends, or the delay expires — while the
+> abortable part is still executing, the abortable part is *abandoned*: its
+> execution is stopped at the next point at which an abort takes effect
+> (RM 9.10 — a delay statement, an entry call, an accept statement, a
+> select statement, or the return from a call that reached one), every
+> object it declared is finalized, every task depending on a master within
+> it is aborted and awaited, and the optional sequence of statements of the
+> triggering alternative is then executed. Any `out` or `in out` actual
+> parameter of the entry call has its value from the rendezvous.
+>
+> If the abortable part completes first, normally or by an exception, the
+> triggering statement is cancelled: a queued entry call is withdrawn as it
+> is for a timed entry call, and a delay is ended. If cancellation fails
+> because the rendezvous or protected action has already begun, the
+> triggering statement completes and the sequence of statements of the
+> triggering alternative is executed; otherwise the select statement is
+> complete and that sequence is not executed. An exception propagated by
+> the abortable part propagates from the select statement after the
+> triggering statement has been cancelled or has completed. An exception
+> raised by the triggering statement — by the entry body, or Tasking_Error
+> for a task that has completed — is propagated from the select statement
+> once the abortable part has been abandoned, and the triggering
+> alternative's statements are not executed.
+>
+> Asynchronous selects may nest, lexically or through calls made from an
+> abortable part. A trigger that completes abandons only the abortable
+> part of its own select; a trigger of an outer select abandons every inner
+> select's abortable part with it, innermost first, and no inner triggering
+> alternative is executed. An abort statement naming the task takes
+> precedence over every select the task is executing.
+>
+> **Example:**
+>
+> ```ada
+> select
+>   delay 5.0;
+>   Put_Line ("no answer in five seconds");
+> then abort
+>   Answer := Solve (Problem);
+>   Put_Line ("solved");
+> end select;
+> ```
+>
+> **Implementation.** The triggering statement is issued by a task of its
+> own, the trigger, so that the selecting task can run the abortable part
+> meanwhile; the trigger is created when the select begins and is joined
+> before it ends, on every path. An entry call is issued as a timed call
+> with no deadline, so its withdrawal is the one a timed entry call makes,
+> and a rendezvous already in progress completes it. A trigger that
+> completes aborts the selecting task with the mechanism of the abort
+> statement, at a level that names this select: the task's pending-abort
+> word holds the strongest abort outstanding, 1 for the whole task and past
+> that the depth of the select, so an outer select's trigger outranks an
+> inner one's, and the select the level names is where the unwinding
+> stops. The environment task has no task control block until its first
+> asynchronous select gives it one. A program may nest at most 253
+> asynchronous selects in one task; a deeper nesting raises Storage_Error
+> at the select statement. An abortable part that is blocked in a
+> protected entry call is abandoned when that call completes, not before.
+
 ### 9.8 Priorities
 
 Each task may (but need not) have a priority, which is a value of the subtype
@@ -9453,6 +10258,64 @@ allowed to objects for which each of direct reading and direct updating is
 implemented as an indivisible operation.
 
 > [!IMPORTANT]
+> **Extension — pragmas Atomic and Volatile (admitted under `-ada83` as well).**
+>
+> This paragraph describes a language extension. It is not part of
+> ANSI/MIL-STD-1815A, whose only pragma for shared variables is `Shared`,
+> but the four pragmas are admitted with and without `-ada83`; the aspects
+> of the same names (see [13.1](#131-representation-clauses)) are refused
+> under `-ada83` with every aspect specification.
+>
+> ```ada
+> pragma Volatile (name);
+> pragma Atomic (name);
+> pragma Volatile_Components (name);
+> pragma Atomic_Components (name);
+> ```
+>
+> `Volatile` and `Atomic` name an object declared by an object
+> declaration, a component (the pragma standing in the record definition
+> that declares it) or a full type declaration; `Volatile_Components` and
+> `Atomic_Components` name an array type or an array object of an
+> anonymous array type, and apply to its components. The pragma stands in
+> the same declarative region as the declaration it names, and an aspect
+> given for the entity cannot be given again by the pragma. A stand-alone
+> constant may be named only when pragma Import applies to it too, so a
+> constant with an initial value cannot be. Naming a type makes every
+> object of the type volatile or atomic; a protected type or object may
+> be named by `Atomic`, and needs nothing added, since every read and
+> update of it already happens inside a protected action.
+>
+> Every read and every update of a volatile object is performed as
+> written, against the object itself, in the order written; no local copy
+> is kept between synchronization points. An atomic object is volatile,
+> and each read and each update of it is indivisible as well: this
+> implementation can promise that only for an elementary object of 8, 16,
+> 32 or 64 bits or a composite object of 1, 2, 4 or 8 storage units, and
+> refuses `Atomic` for anything wider; an atomic composite object is
+> aligned to its size, a record of eight bytes being read and updated as a
+> whole and its components in place. A component clause cannot shrink an
+> atomic component, which keeps its size and starts at a multiple of it,
+> and pragma Pack cannot shrink one. An atomic object passed as an actual
+> of a type that is passed by reference needs a formal whose type is atomic
+> too, or one that allows passing by copy; a generic formal in out object
+> takes a volatile actual only when its type is volatile; and an access
+> value designating a volatile object needs an access type whose
+> designated type is volatile.
+>
+> `pragma Shared` is accepted and has no effect on the code generated.
+>
+> ```ada
+> Ready : Boolean := False;
+> pragma Volatile (Ready);
+>
+> type Register is mod 2 ** 32;
+> pragma Atomic (Register);
+> Status : Register;
+> for Status use at Device_Address;
+> ```
+
+> [!IMPORTANT]
 > **Extension — protected types and protected objects (off under `-ada83`).**
 >
 > This paragraph describes a language extension. It is admitted by
@@ -9560,15 +10423,45 @@ implemented as an indivisible operation.
 > every call queued on it with Program_Error, and every later call on that
 > object raises Program_Error at once.
 >
-> **Timed and conditional calls.** A call of a protected entry may be the
-> entry call a `select` statement begins with, in both its forms. The call
-> is queued as an ordinary one, so the service pass the queueing starts
-> runs it when its barrier is open; what differs is what happens when that
-> pass leaves it queued. The conditional form withdraws it at once and
-> takes the `else` part; the timed form withdraws it at the deadline and
-> takes the delay alternative. Withdrawal retakes the object's lock, so a
-> body already running for the call has completed it by then and the call
-> counts as accepted.
+> **Timed, conditional and asynchronous calls.** A call of a protected
+> entry may be the entry call a `select` statement begins with, in all
+> three of its entry-call forms ([9.7.4](#974-asynchronous-select) for the
+> asynchronous one). The call is queued as an ordinary one, so the service
+> pass the queueing starts runs it when its barrier is open; what differs
+> is what happens when that pass leaves it queued. The conditional form
+> withdraws it at once and takes the `else` part; the timed form withdraws
+> it at the deadline and takes the delay alternative; the asynchronous form
+> withdraws it when its abortable part completes. Withdrawal retakes the
+> object's lock, so a body already running for the call has completed it
+> by then and the call counts as accepted.
+>
+> **Access to a protected operation.** An access-to-subprogram type may be
+> declared with the reserved word `protected` before its profile:
+>
+> ```ebnf
+> access_type_definition ::= access subtype_indication
+>                          | access [protected] subprogram_profile
+> ```
+>
+> A value of such a type designates a protected procedure or function
+> together with the object it operates on. `P'ACCESS`, where `P` denotes a
+> subprogram declared immediately within a protected unit — named as
+> `Object.P` from outside, or as `P` within the unit's own body — yields
+> such a value; the operation and the access type both have the calling
+> convention Protected, and the convention rule of
+> [3.8](#38-access-types) applies, so an ordinary access-to-subprogram
+> type cannot designate a protected operation and an access-to-protected-
+> subprogram type cannot designate an ordinary subprogram. A call through
+> the value is a protected action on the designated object, with the
+> object's own lock, and an exception propagated by the body releases it.
+> The accessibility rule of [3.8](#38-access-types) applies with the
+> *object* in the place of `P`: the value must not outlive the object it
+> designates, so `Local.Bump'ACCESS` is rejected for an access type
+> declared outside `Local`'s region, and `P'ACCESS` written within the
+> body, whose object is whichever one the action runs on, is checked at
+> run time against the level the object's callers record. Such a value is
+> two words: a thunk that reaches the operation's frame through the
+> object's header, and the object.
 >
 > **Contracts.** `Pre` may be given on an entry. It is evaluated where the
 > call is made, with the actual parameters, before the call is queued —
@@ -9595,13 +10488,10 @@ implemented as an indivisible operation.
 > **What is not supported.** Protected procedures as interrupt
 > handlers (`pragma Attach_Handler`, `pragma Interrupt_Handler`), priority
 > ceiling locking (`pragma Locking_Policy`), protected interfaces and
-> tagged, synchronized or dispatching protected operations. An
-> access-to-protected-subprogram type is rejected, as is a protected entry
-> call as the triggering statement of an asynchronous `select ... then
-> abort`. A protected unit is not
-> a library unit; it is declared within another unit, and its body belongs
-> to the same declarative part as its declaration, after every basic
-> declaration of that part.
+> tagged, synchronized or dispatching protected operations. A protected
+> unit is not a library unit; it is declared within another unit, and its
+> body belongs to the same declarative part as its declaration, after
+> every basic declaration of that part.
 >
 > **Representation.** A protected object is one contiguous object: a
 > fixed-size header holding the lock word, the object's queue and its
@@ -9791,15 +10681,14 @@ clause.
 > unit_name   ::= unit_simple_name | ada95_unit_name
 > ```
 >
-> Each name of the table has one of three dispositions.
+> Each name of the table has one of four dispositions.
 >
 > *An analogue exists.* `Ada.Text_IO`, `Ada.Sequential_IO`, `Ada.Direct_IO`,
 > `Ada.IO_Exceptions`, `Ada.Calendar`, `Ada.Unchecked_Conversion`,
-> `Ada.Unchecked_Deallocation`, `Ada.Command_Line`, `System.Machine_Code` and
-> `Ada.Characters.Latin_1` name units of this compiler's library — TEXT_IO,
-> SEQUENTIAL_IO, DIRECT_IO, IO_EXCEPTIONS, CALENDAR, UNCHECKED_CONVERSION,
-> UNCHECKED_DEALLOCATION, COMMAND_LINE, MACHINE_CODE, and the package ASCII of
-> STANDARD. Such a with clause is accepted with a warning naming both
+> `Ada.Unchecked_Deallocation`, `Ada.Command_Line` and `System.Machine_Code`
+> name units of this compiler's library — TEXT_IO, SEQUENTIAL_IO, DIRECT_IO,
+> IO_EXCEPTIONS, CALENDAR, UNCHECKED_CONVERSION, UNCHECKED_DEALLOCATION,
+> COMMAND_LINE and MACHINE_CODE. Such a with clause is accepted with a warning naming both
 > spellings (class `unit-alias`, silenced by `-Wno-unit-alias`); it has the
 > effect of a with clause naming the analogue, and the expanded name denotes
 > the analogue thereafter: `Ada.Text_IO.Put_Line` is `TEXT_IO.PUT_LINE`,
@@ -9814,17 +10703,36 @@ clause.
 > warning and binds no unit: its `Controlled` and `Limited_Controlled` denote
 > the predefined types of the controlled-type extension.
 >
+> *The unit is in the legacy library.* `Ada.Characters`, `Ada.Strings` and
+> `Ada.Containers` and their children are library units of
+> `turboada-runtime-legacy.ada`, a second library file found beside the
+> compiler as `turboada-runtime.ada` is ([F.7](#f7-the-legacy-library) lists
+> what it holds). Such a with clause is accepted without a warning and names
+> that unit, under its own name. The generic units declared elsewhere as
+> generic children — the containers, the array sorts, and the generic
+> functions `Ada.Strings.Bounded.Hash`, `Hash_Case_Insensitive`,
+> `Equal_Case_Insensitive` and `Less_Case_Insensitive` — are declared inside
+> their parent package, since a generic child unit is not accepted: a with
+> clause naming one of them is a with clause naming the parent, and the
+> expanded name denotes the generic declared there. The file is read only
+> when a with clause names one of its units, so a program naming none
+> compiles exactly as it would without the file; while the file is missing,
+> each such with clause is an error saying which file the unit is looked
+> for in.
+>
 > *Nothing exists.* Every other name of the table — `Ada.Exceptions`,
-> `Ada.Strings` and its children, `Ada.Containers`, `Ada.Numerics`,
-> `Ada.Streams`, `Ada.Tags`, `Ada.Real_Time`, `Ada.Task_Identification`,
-> `Ada.Interrupts`, `Ada.Wide_Text_IO`, `Ada.Characters.Handling`,
+> `Ada.Numerics`, `Ada.Streams`, `Ada.Tags`, `Ada.Real_Time`,
+> `Ada.Task_Identification`, `Ada.Interrupts`, `Ada.Wide_Text_IO`,
 > `Interfaces` and its children, `System.Storage_Elements`,
 > `System.Address_To_Access_Conversions` — is an error, since a with clause
 > that cannot be satisfied would only cascade; the message says what the unit
 > is and what Ada 83 offers instead. A child of a listed unit that is not
 > itself listed, such as `Ada.Text_IO.Text_Streams`, is likewise an error
 > naming the child: a name is matched against the table as a whole and never
-> resolved to a parent.
+> resolved to a parent, except that a child of a unit of the legacy library
+> is looked for in that file, and one the file does not hold, such as
+> `Ada.Strings.Wide_Fixed`, is an error naming the child and what the
+> library leaves out.
 >
 > Names are matched without regard to case. `Ada` itself is not a library
 > unit and cannot be named alone: the accepted names are bound through a
@@ -9930,6 +10838,90 @@ example, the body of the package Real_Operations may need elementary operations
 provided by other packages. The latter packages should not be named by the with
 clause of Quadratic_Equation since these elementary operations are not directly
 called within its body.
+
+> [!IMPORTANT]
+> **Extension — child units (with clauses naming them off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by default
+> but is not part of ANSI/MIL-STD-1815A. Under `-ada83` a with clause
+> naming a child unit is refused — "a with clause names a library unit by
+> its simple name" — while the declaration of a child unit is not refused
+> by name; a program that relies on child units is not a legal Ada 83
+> program.
+>
+> A library package may have children: library units whose name is the
+> expanded name of the parent followed by the child's identifier.
+>
+> ```ebnf
+> compilation_unit ::= context_clause library_unit
+>    | context_clause private library_unit
+>    | context_clause secondary_unit
+>
+> library_unit ::= package_declaration | subprogram_declaration
+>    | subprogram_body | ...
+> ```
+>
+> The parent is a library package that has been compiled before the child;
+> a package declared inside a library unit cannot be a parent. A child may
+> be a package, a procedure or a function, and a child subprogram may be
+> given as a body that is its own declaration; a generic child unit is not
+> accepted, and the predefined generic units that are children elsewhere,
+> such as `Ada.Containers.Vectors`, are declared inside their parent package
+> ([F.7](#f7-the-legacy-library)). `private` before the declaration makes a private child; it
+> may not be written on a body, nor on a unit that is not a child. A
+> child's body, and the subunits of that body, are found through the
+> parent as the child is.
+>
+> A child unit is declared in its parent's declarative region, after the
+> parent's declaration: the child's declaration and body see the
+> declarations of the parent's visible part directly, and its private part
+> and body, like every part of a private child, see the parent's private
+> part and those of every ancestor; the visible part of a public child sees
+> only the ancestors' visible parts, so a name declared in an ancestor's
+> private part is refused there, and a private type is seen there as its
+> partial view. A child is not a primitive operation of any type, so a
+> child subprogram never overrides an inherited operation of a type
+> declared in its parent. A child subprogram's body must conform to its
+> declaration, since library units do not overload.
+>
+> Outside its own family a child is named in a with clause by its expanded
+> name; such a clause also names each ancestor, so `with P.C;` makes `P`
+> visible too. A sibling, and a child of an ancestor, needs a with clause
+> of its own to be visible, and a use clause does not reach a child no
+> with clause names. A private child, and every descendant of one, may be
+> named only by a body or subunit of a descendant of the private child's
+> parent, or by the declaration of a private descendant. When a parent's
+> body names a child in a with clause, the child's simple name is directly
+> visible in that body, where a declaration of the same name is then a
+> homograph. A use clause of a context clause may name a child by its
+> expanded name (see the extension of [10.1.1](#1011-context-clauses---with-clauses)).
+> A child is a unit of the elaboration order like any other: it is
+> elaborated after its parent's declaration and before the units that
+> name it, and a child subprogram carries its own elaboration check.
+>
+> ```ada
+> package Ring is
+>   type Slot is private;
+> private
+>   type Slot is new Integer;
+> end Ring;
+>
+> package Ring.Probe is                      -- a public child
+>   function Peek return Integer;
+> end Ring.Probe;
+>
+> private package Ring.Inner is              -- a private child
+>   Secret : Slot := 0;                      -- sees the private part
+> end Ring.Inner;
+>
+> with Ring.Inner;                           -- allowed in a body of the family
+> package body Ring.Probe is
+>   function Peek return Integer is (Integer (Ring.Inner.Secret));
+> end Ring.Probe;
+>
+> with Ring.Probe;                           -- names Ring as well
+> procedure Main is ...
+> ```
 
 #### 10.1.2 Examples of Compilation Units
 
@@ -10575,6 +11567,45 @@ raise Numeric_Error; -- Explicitly raising a predefined exception
 
 raise; -- Only within an exception handler
 ```
+
+> [!IMPORTANT]
+> **Extension — raise expressions (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A raise expression raises an exception where a value is wanted.
+>
+> ```ebnf
+> raise_expression ::= raise exception_name [with string_expression]
+> ```
+>
+> A raise expression is a primary. Its type is the type the context
+> expects, whatever that type is, so it may stand wherever an expression
+> of that type may — typically as a dependent expression of an if or case
+> expression, or the expression of an expression function. The exception
+> name follows the rules of the raise statement, and the message, if
+> given, must be of type String; it extends as far as an expression can,
+> so a raise expression with a message that is not the last thing in its
+> expression is written in parentheses. A raise expression is never
+> static, and is refused where the restriction No_Exceptions is in force.
+>
+> For the evaluation, the message, if any, is evaluated and the named
+> exception is raised with it, exactly as the raise statement raises it;
+> no value is delivered. The other dependent expressions of the enclosing
+> if or case expression are unaffected: only the chosen one is evaluated.
+>
+> ```ada
+> function Safe_Div (A, B : Integer) return Integer is
+>   (if B /= 0 then A / B else raise Constraint_Error with "div by zero");
+>
+> function Pick (Ok : Boolean) return Integer is (if Ok then 7 else raise Bad);
+> ```
+>
+> Under `-ada83` a raise expression is refused: "a raise expression is not
+> allowed in strict mode".
 
 ### 11.4 Exception Handling
 
@@ -12142,10 +13173,12 @@ is not accepted by the implementation is ignored).
 > written with aspects is that of the same program written with the
 > pragmas and clauses above.
 >
-> Aspects with no equivalent here are not provided and are rejected as
-> unknown marks: `Volatile` and `Atomic` — not `pragma Shared`, which this
-> compiler accepts and ignores, so routing them to it would promise a
-> synchronisation this implementation does not perform; `Alignment` and
+> `Volatile`, `Atomic`, `Volatile_Components` and `Atomic_Components` are
+> the pragmas of those names (see [9.11](#911-shared-variables)) — not
+> `pragma Shared`, which this compiler accepts and ignores, so routing them
+> to it would promise a synchronisation this implementation does not
+> perform. Aspects with no equivalent here are not provided and are
+> rejected as unknown marks: `Alignment` and
 > `Component_Size`, whose clauses have no effect here; `Link_Name`, since
 > the pragma argument it corresponds to is not implemented; and
 > `Elaborate_Body`, `Unsuppress`, `Interrupt_Priority`, `No_Return` and the
@@ -12222,6 +13255,16 @@ depends on the attribute designator:
 > internal tables and links. Hence a length clause for the collection of an
 > access type does not always give precise control over the maximum number of
 > allocated objects.
+>
+> A collection for which no length clause is given is bounded all the same,
+> since 11.1 makes its exhaustion an observable event: it may hold a
+> sixty-fourth of the memory the machine reports it has, so that sixty-four
+> such collections fit the machine, and on a machine that will not say how
+> large it is -- or in a freestanding image, which has no machine to ask --
+> the unknown-machine constant of 256 MiB. The reservation is settled the
+> first time the collection is asked for storage. A program that wants one
+> collection to have more says so with a length clause, which is what the
+> clause is for.
 
 **Examples:**
 
@@ -12934,6 +13977,23 @@ efeect of each such access is not defined by the language.
 > designated by the value of this task object. The same holds for any subcomponent
 > of the object designated by X, if this subcomponent is a task object.
 
+> [!IMPORTANT]
+> **Extension — an indefinite actual for the unchecked generics (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> The formal types of Unchecked_Deallocation and Unchecked_Conversion have
+> no discriminant part, which elsewhere requires a definite actual. An
+> instance of either may nevertheless take a formal private type of an
+> enclosing generic unit that has unknown discriminants,
+> `type Element_Type (<>) is private;`, as its actual: the instances are
+> intrinsic and depend on nothing a constraint would supply. The indefinite
+> containers and holders of the legacy library
+> ([F.7](#f7-the-legacy-library)) free their elements this way.
+
 #### 13.10.2 Unchecked Type Conversions
 
 An unchecked type conversion can be achieved by a call of a function that is
@@ -12993,6 +14053,99 @@ for text input-output are supplied in the package Text_IO. The package
 IO_Exceptions defines the exceptions needed by the above three packages.
 Finally, a package Low_Level_IO is provided for direct control of peripheral
 devices.
+
+> [!IMPORTANT]
+> **Extension — streams and the stream attributes (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A stream is a sequence of stream elements that values are written to
+> and read from with the attributes `'Write` and `'Read`.
+>
+> **The stream types.** The package Standard predefines
+>
+> ```ada
+> type Stream_Element is mod 2 ** 8;
+> type Stream_Element_Offset is range -2**31 .. 2**31 - 1;
+> subtype Stream_Element_Count is Stream_Element_Offset range 0 .. Stream_Element_Offset'Last;
+> type Stream_Element_Array is array (Stream_Element_Offset range <>) of Stream_Element;
+> type Root_Stream_Type is record null; end record;
+> ```
+>
+> A with clause naming `Ada.Streams` binds nothing and says so. A stream
+> type is a type derived from `Root_Stream_Type`, written as a record
+> extension, that declares beside itself the procedures
+>
+> ```ada
+> procedure Read  (Stream : in out T; Item : out Stream_Element_Array;
+>                  Last : out Stream_Element_Offset);
+> procedure Write (Stream : in out T; Item : in Stream_Element_Array);
+> ```
+>
+> There is no tag: each stream object carries links to the `Read` and
+> `Write` of its own type, set when the object is created, and a transfer
+> through an access value calls them. The two procedures may not be
+> declared inside a subprogram, and a stream type that lacks one is
+> refused when an object of it is created. A `Read` that delivers fewer
+> elements than asked for raises End_Error. The library package
+> `Stream_IO`, also named `Ada.Streams.Stream_IO`, provides such a type:
+> `Stream_Type`, `Stream_Access` designating it, a limited `File_Type`,
+> `File_Mode` with `In_File`, `Out_File` and `Append_File`, the exceptions
+> of IO_Exceptions, `Create`, `Open`, `Close`, `Delete`, `Reset`, `Mode`,
+> `Name`, `Form`, `Is_Open`, `End_Of_File`, `Stream`, and `Read` and
+> `Write` of a `File_Type`; it has no positioning operations.
+>
+> **The attributes.** For a subtype `S` of a type `T` and an access value
+> `A` designating a stream, `T'Write (A, X)` and `T'Read (A, X)` are
+> procedure calls: `X` is of type `T`, a variable for `'Read`, and the
+> prefix must denote a subtype, never an object. The default `'Write` of
+> an elementary type writes the value's representation as `T'Stream_Size`
+> / 8 stream elements, and `'Read` reads them back; `T'Stream_Size` is 8,
+> 16, 32 or 64 bits, the smallest that holds the first subtype, 64 for an
+> access value and 128 for one that carries bounds, unless a clause
+>
+> ```ada
+> for T'Stream_Size use N;
+> ```
+>
+> sets it for an elementary type to a positive multiple of 8 no smaller
+> than the first subtype's size and at most 64. The default operations of
+> a record transfer its components, and those of an array its elements,
+> in order, each by its own default; an array's bounds are not
+> transferred, and the default is unavailable — the attribute is refused —
+> when a component or element type has a specified operation of the same
+> direction, or is a task, a protected object or a bit-packed array.
+> Neither `'Input` and `'Output` nor class-wide forms exist.
+>
+> **Specified operations.** An attribute definition clause
+>
+> ```ada
+> for T'Write use Put_T;
+> for T'Read  use Get_T;
+> ```
+>
+> names a procedure with the profile `(Stream : access Root_Stream_Type;
+> Item : in T)` or `(...; Item : out T)`, chosen among overloads by that
+> profile; `T'Write (A, X)` is then the call `Put_T (A, X)`, for `T` and
+> for every type derived from it. The clause and the attributes are
+> refused under `-ada83`: "the stream attributes is not allowed in strict
+> mode".
+>
+> ```ada
+> with Stream_IO;
+> ...
+> F : Stream_IO.File_Type;
+> S : Stream_IO.Stream_Access;
+> ...
+> Stream_IO.Create (F, Stream_IO.Out_File, "log.bin");
+> S := Stream_IO.Stream (F);
+> Integer'Write (S, 42);
+> Point'Write (S, P);
+> Stream_IO.Close (F);
+> ```
 
 ### 14.1 External Files and File Objects
 
@@ -15246,6 +16399,15 @@ attributes.
 This annex defines the pragmas List, Page, and Optimize, and summarizes the
 definitions given elsewhere of the remaining language-defined pragmas.
 
+- **`pragma Atomic`**, **`pragma Atomic_Components`** — Take the simple name
+  of an object, a component or a full type declaration (`Atomic`), or of an
+  array type or an array object of an anonymous array type
+  (`Atomic_Components`), as the single argument, and make every read and
+  update of the object, or of each component, an indivisible one; this
+  implementation admits only widths a single access covers (see the
+  extension of [9.11](#911-shared-variables)). These pragmas are not part
+  of Ada 83 and are admitted under `-ada83` as well.
+
 - **`pragma Controlled`** — Takes the simple name of an access type as the
   single argument. This pragma is only allowed immediately within the
   declarative part or package specification that contains the declaration of the
@@ -15362,6 +16524,13 @@ definitions given elsewhere of the remaining language-defined pragmas.
   definition of the constant System_Name. This pragma is only allowed if the
   specified identifier corresponds to one of the literals of the type Name
   declared in the package System (see [13.7](#137-the-package-system)).
+
+- **`pragma Volatile`**, **`pragma Volatile_Components`** — Take the same
+  arguments as `Atomic` and `Atomic_Components`, and make every read and
+  update of the object, or of each component, a read or update of the
+  object itself, performed as written (see the extension of
+  [9.11](#911-shared-variables)). These pragmas are not part of Ada 83 and
+  are admitted under `-ada83` as well.
 
 ---
 
@@ -17173,7 +18342,7 @@ module; the image provides them:
 | Symbol | Profile (LLVM types) | Referenced by |
 |---|---|---|
 | `__ada_os_thread_join` | `void (ptr)` | every main program — the final join walk names it even when no task is ever created, so a taskless image may supply an empty body |
-| `__ada_os_thread_spawn` | `i32 (ptr, ptr, ptr)` | any program with tasks — store a thread identity through the first argument, run the second argument on the new thread passing the third, return 0 on success |
+| `__ada_os_thread_spawn` | `i32 (ptr, ptr, ptr, i64)` | any program with tasks — store a thread identity through the first argument, run the second argument on the new thread passing the third, on a stack of the fourth's bytes (zero for the image's own default, and what a task type's `STORAGE_SIZE` length clause asks for otherwise), return 0 on success |
 | `__ada_os_now_us` | `i64 ()` | any program with a delay statement, a timed entry call, or CALENDAR — microseconds on a clock that only moves forward |
 
 The rest of the surface is ordinary libc-shaped symbols that the image
@@ -17328,9 +18497,9 @@ compiler builds:
 
 Two of them are acted on by the editor extension, which reads the plan.
 `Compiler_Command ("ada")` names the compiler the project is built and
-analysed with while the extension's `ada83.compilerPath` setting is unset;
+analysed with while the extension's `turboada.compilerPath` setting is unset;
 a set value always wins. `Debugger_Command` is run as the debug command
-line, quotes honored, while `ada83.debugAdapterPath` is empty; a set value
+line, quotes honored, while `turboada.debugAdapterPath` is empty; a set value
 replaces it. The remaining eleven are shown in the project's tooltip.
 
 ### F.6 Dialect compatibility (--gnat, --greenhills)
@@ -17356,11 +18525,12 @@ first row that matches decides, and it has one of three dispositions:
 | Disposition | Effect | GNAT | Green Hills |
 |---|---|---|---|
 | mapped | the flag lands on the behavior of this compiler | `-gnatp`: every check omitted, as `--suppress=all`; `-gnatw<letters>`: the warning classes below; `-cargs`, `-bargs`, `-largs`: the sections below | `-check=none`: every check omitted, `-check=all`: nothing, any other level: unsupported; `-G`: `-g`; `-Onone`, `-Ogeneral`, `-Ospeed`, `-Osize`, `-Omax`: `-O0`, `-O2`, `-O3`, `-Os`, `-O3` |
-| accepted | the flag means something to the other toolchain and nothing here, and is read without effect | `-gnato`, `-gnatE`, `-gnatn`, `-gnatN`, `-gnatf`, `-gnatq`, `-gnatv`, `-gnat83`, `-fstack-check` | `--long_long`, `-ada83` |
-| unsupported | the flag asks for what this compiler does not do; a warning names it and it is skipped, never an error | `-gnata`, `-gnatg`, `-gnatl`, `-gnatQ`, `-gnat95`, `-gnat05`, `-gnat12`, `-gnat2005`, `-gnat2012`, `-gnat2022`, `-gnatec=`, `-gnatem=`, `-gnateT=`, `-gnaty…`, `-gnatV…`, and any other `-gnat…` | `-cpu=`, `-bsp=`, `-os_dir=`, `-lnk=`, `-map`, `-map=`, `--no_long_long`, `-ada95` |
+| accepted | the flag means something to the other toolchain and nothing here, and is read without effect | `-gnato`, `-gnatE`, `-gnatn`, `-gnatN`, `-gnatf`, `-gnatq`, `-gnatv`, `-gnat83`, `-gnata`, `-fstack-check` | `--long_long`, `-ada83` |
+| unsupported | the flag asks for what this compiler does not do; a warning names it and it is skipped, never an error | `-gnatg`, `-gnatl`, `-gnatQ`, `-gnat95`, `-gnat05`, `-gnat12`, `-gnat2005`, `-gnat2012`, `-gnat2022`, `-gnatec=`, `-gnatem=`, `-gnateT=`, `-gnaty…`, `-gnatV…`, and any other `-gnat…` | `-cpu=`, `-bsp=`, `-os_dir=`, `-lnk=`, `-map`, `-map=`, `--no_long_long`, `-ada95` |
 
-The warning reads `'-gnatQ' is a GNAT flag ada83 does not support; skipped`,
-or `'-cpu=ppc' is a Green Hills flag ada83 does not support; skipped`.
+The warning reads `'-gnatQ' is a GNAT flag this compiler does not support;
+skipped`, or `'-cpu=ppc' is a Green Hills flag this compiler does not
+support; skipped`.
 
 The letters of `-gnatw` are read one at a time:
 
@@ -17374,13 +18544,147 @@ The letters of `-gnatw` are read one at a time:
 | `g`, `G` | `unrecognized-pragma` on, off |
 
 Any other letter, and any `.x` or `_x` pair, warns once — `'-gnatwZ' is a
-GNAT warning letter ada83 does not support; skipped` — and is skipped.
+GNAT warning letter this compiler does not support; skipped` — and is
+skipped.
 
 `-cargs`, `-bargs` and `-largs` divide a GNAT command line into compiler,
 binder and linker arguments. After `-largs`, every word up to the next
 marker is passed to the linker; after `-bargs`, the words are read and set
 aside, with one warning that `'-bargs' binder arguments are accepted and
 not acted on`; `-cargs` returns to compiler options.
+
+### F.7 The legacy library
+
+`turboada-runtime-legacy.ada` holds the predefined string and container
+packages of the current standard's annex A (ISO/IEC 8652:2023, A.3, A.4
+and A.18), written in the language of this manual. It is the second
+library file of this implementation, found beside the compiler's
+executable exactly as `turboada-runtime.ada` is, and its units are served
+the same way, one at a time, as the with clauses of a program reach them
+([10.1.1](#1011-context-clauses---with-clauses)). The build scripts copy
+it beside the compiler and `make package` ships it. A program that names
+none of its units never reads it: such a program compiles to the same code
+whether the file is present, absent, or not a library at all. A program
+that names one of them while the file is missing is refused with
+`'Ada.Strings.Unbounded' is looked for in the library file
+turboada-runtime-legacy.ada, which is not beside the compiler`. The file
+is plain source in the layout of `turboada-runtime.ada`, each unit's
+declaration followed by its body; a user may read it, and may replace it
+with a file of the same units.
+
+The units it provides, and what each leaves out:
+
+| Unit | Provides | Leaves out |
+|---|---|---|
+| `Ada.Characters` | the parent of the two below | — |
+| `Ada.Characters.Latin_1` | the named constants for positions 0 to 127 | the names of positions 128 to 255 (`NBSP` to `LC_Y_Diaeresis`), since CHARACTER has 128 values |
+| `Ada.Characters.Handling` | every classification and conversion function of A.3.2 and the subtype `ISO_646`, over the 128 characters; `Character_Set_Version` returns `"ISO/IEC 646:1991"` | the wide conversions, which belong to `Ada.Characters.Conversions` |
+| `Ada.Strings` | `Space`, the four exceptions, `Alignment`, `Truncation`, `Membership`, `Direction`, `Trim_End` | `Wide_Space`, `Wide_Wide_Space` |
+| `Ada.Strings.Maps`, `Ada.Strings.Maps.Constants` | character sets and mappings, and every constant of A.4.6 | — |
+| `Ada.Strings.Fixed` | every operation of A.4.3 | — |
+| `Ada.Strings.Bounded` | `Generic_Bounded_Length`, and the generic functions `Hash`, `Hash_Case_Insensitive`, `Equal_Case_Insensitive`, `Less_Case_Insensitive` | — |
+| `Ada.Strings.Unbounded` | every operation of A.4.5; `Unbounded_String` is a controlled type, so assignment copies the value and finalization frees it | — |
+| `Ada.Strings.Hash`, `Ada.Strings.Hash_Case_Insensitive`, `Ada.Strings.Equal_Case_Insensitive`, `Ada.Strings.Less_Case_Insensitive`, and the same four as children of `Fixed` and of `Unbounded` | the library functions of A.4.9, A.4.10 and A.4.11 | — |
+| `Ada.Containers` | `Hash_Type`, `Count_Type`, `Capacity_Error` | — |
+| `Ada.Containers.Generic_Array_Sort`, `Generic_Constrained_Array_Sort`, `Generic_Sort` | the sorts of A.18.26 | — |
+| `Ada.Containers.Vectors`, `Doubly_Linked_Lists`, `Ordered_Maps`, `Ordered_Sets`, `Hashed_Maps`, `Hashed_Sets` | the containers of A.18.2 to A.18.9, with `Generic_Sorting` and `Generic_Keys` | the nested `Stable` packages |
+| the `Indefinite_` form of each of the six | A.18.11 to A.18.16 | as for the definite form |
+| the `Bounded_` form of each of the six | A.18.19 to A.18.24 | as for the definite form |
+| `Ada.Containers.Indefinite_Holders`, `Ada.Containers.Bounded_Indefinite_Holders` | A.18.18 and A.18.32 | — |
+
+Nothing else of annex A is provided: no `Wide_` or `Wide_Wide_` form of
+any string unit, no `Ada.Strings.UTF_Encoding`, `Ada.Strings.Text_Buffers`
+or `Ada.Characters.Conversions`, no synchronized queues, no multiway
+trees, and no `Ada.Text_IO.Unbounded_IO` or `Ada.Text_IO.Bounded_IO`:
+`Ada.Text_IO` is another name for TEXT_IO, a package of this compiler's
+own library that cannot take a child, so a program writes
+`Put_Line (To_String (Item))`. A with clause naming any of these is
+refused with the reason.
+
+**How the units are named.** The generic units that the standard declares
+as generic children — the containers, the three sorts, and the four
+generic functions of `Ada.Strings.Bounded` — are declared inside their
+parent package, because a generic child unit is not accepted
+([10.1.1](#1011-context-clauses---with-clauses)). A with clause names them
+as the standard does, `with Ada.Containers.Vectors;`, and is a with clause
+naming the parent; `package Integer_Vectors is new
+Ada.Containers.Vectors (Positive, Integer);` instantiates the generic
+declared there. A with clause naming any one of them therefore makes all
+of them visible by selection. The instance of a generic function needs a
+name of its own — `function Hash is new Ada.Strings.Bounded.Hash (B);` is
+refused, since within the instantiation of a subprogram every declaration
+with the same designator is hidden ([8.3](#83-visibility)).
+
+**How the containers differ from the standard.** This implementation has
+no tagged types, so each container is a controlled private type with no
+tag; assignment copies the elements, and finalization frees them. The
+rest follows from that:
+
+- `Iterate` returns a named iterator type of the instance — `Vector_Iterator`,
+  `List_Iterator`, `Map_Iterator` or `Set_Iterator` — derived from the
+  instance's `Reversible_Iterator` (or `Forward_Iterator` for the hashed
+  forms) of `Ada.Iterator_Interfaces`, in place of the class-wide type.
+  Its `First`, `Next`, `Last` and `Previous` are declared in the private
+  part, where the loop of [5.5](#55-loop-statements) finds them; a program
+  iterates with `for C in Iterate (V)`, `for E of V` and
+  `for E of reverse V`, and cannot call them itself.
+- The indexing aspects work as the standard says: `V (I)`, `M (Key)` and
+  `L (Position)` read the element, write it where the container is a
+  variable, and nest, `V (I) (J)`. `Constant_Reference` and `Reference`
+  take their container as an ordinary `in` or `in out` parameter, not an
+  aliased one; the reference designates the element in the container's
+  storage and stays valid until the element is deleted or moved.
+- Tampering with cursors or with elements is detected, and raises
+  Program_Error, while a callback of the same container runs —
+  `Query_Element`, `Update_Element`, the `Iterate` that takes a procedure,
+  `Update_Element_Preserving_Key` — and while a holder's element is being
+  queried or updated. A `for` loop and a reference do not hold the
+  container busy: inserting or deleting inside `for E of V` is not
+  detected, and its effect is not defined. `Reference_Preserving_Key` does
+  not check, when the reference is gone, that the key was preserved.
+- The aspects `Aggregate`, `Stable_Properties`, `Nonblocking` and `Global`,
+  and the preconditions and postconditions the standard writes, are not
+  given; the checks they express are made by the bodies, and raise the
+  exceptions the standard names. There are no container aggregates and no
+  stream attributes of the containers.
+- Every operation of a container can be written in the prefixed form of
+  [4.1.3](#413-selected-components), as the standard writes it:
+  `V.Append (X)`, `V.Length`, `M.Contains (K)`, `for C in V.Iterate loop`.
+- `Empty` takes `Capacity : Count_Type := 10` where the standard leaves
+  the default to the implementation, and reserves that capacity. A hashed
+  container chains its elements in buckets, 31 when the first element
+  arrives, and grows to 2N + 1 buckets when its length reaches their
+  number N; iteration visits the buckets in order, so the order in which
+  a hashed container yields its elements follows their hash values and
+  the container's history.
+- `Hash_Type` is `mod 2**32` and `Count_Type` is `range 0 .. 2**31 - 1`.
+  `Ada.Strings.Hash` is the 32-bit FNV-1a function of the characters'
+  positions; the case-insensitive forms hash the value `To_Lower` gives.
+- `Generic_Array_Sort`, `Generic_Constrained_Array_Sort` and the
+  `Generic_Sorting.Sort` of a vector are heapsorts, which take N log N
+  comparisons at worst and are not stable; `Generic_Sort` is a heapsort
+  through `Before` and `Swap`. The `Sort` of a list is a merge sort that
+  relinks the nodes and is stable.
+- The ordered forms keep their elements in a height-balanced tree, so
+  every operation that finds, inserts or deletes by key takes log N
+  comparisons.
+- A `Bounded_` container is a record whose discriminant is its capacity,
+  holding the unbounded form of the same container: it raises
+  Capacity_Error rather than grow, as the standard says, and assignment
+  between two of different capacities raises Constraint_Error, but its
+  storage comes from the heap, not from the object itself.
+- The formal object `Max_Element_Size_in_Storage_Elements` of
+  `Bounded_Indefinite_Holders` is of type `Count_Type`, since
+  `System.Storage_Elements` does not exist; storing an element whose
+  `'Size` exceeds that many storage units raises Program_Error, and the
+  element is held on the heap.
+
+A program may use the library without any of this in view: the
+reproducers in `repro/` named `the_legacy_library_*` exercise what a user
+relies on — the string operations, a vector growing, iterating, indexing
+and deleting, an ordered map in key order, hashed set membership,
+indefinite vectors of String, the sorts, and the bounded forms.
+
 ---
 
 ## Rationale

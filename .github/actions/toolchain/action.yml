@@ -1,0 +1,49 @@
+name: toolchain
+description: The compiler's toolchain and the suite's tools for one platform
+
+inputs:
+  platform:
+    description: linux, macos or windows
+    required: true
+
+outputs:
+  mingw:
+    description: The MINGW64 bin directory ta links with on Windows
+    value: ${{ steps.msys2.outputs.msys2-location }}\mingw64\bin
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.platform == 'linux'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends llvm
+        for tool in lli llvm-link; do
+          command -v "$tool" >/dev/null && continue
+          found=$(find /usr/lib/llvm-*/bin /usr/bin -maxdepth 1 -name "$tool-*" 2>/dev/null | sort -V | tail -1)
+          [[ -n $found ]] && sudo ln -sf "$found" "/usr/local/bin/$tool"
+        done
+        command -v lli && command -v llvm-link
+
+    - if: inputs.platform == 'macos'
+      shell: bash
+      run: |
+        brew install llvm coreutils bash
+        echo "$(brew --prefix)/bin"      >> "$GITHUB_PATH"
+        echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+    - if: inputs.platform == 'windows'
+      id: msys2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        release: false
+        update: true
+        install: >-
+          mingw-w64-x86_64-llvm
+          mingw-w64-x86_64-clang
+          mingw-w64-x86_64-lld
+          base-devel
+          unzip
+          zip

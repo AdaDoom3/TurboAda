@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 set "SOURCE=turboada.c"
 set "RUNTIME=turboada-runtime.ada"
+set "LEGACY=turboada-runtime-legacy.ada"
 set "BUNDLE=turboada-extension.html"
 set "MANUAL=turboada-manual.md"
 set "VSIX=turboada.vsix"
@@ -18,14 +19,14 @@ set "TOOLCHAIN_windows=GCC, Clang or Zig"
 set "TOOLCHAIN_linux=Zig"
 set "TOOLCHAIN_macos=Zig and llvm-lipo"
 set "EXECUTABLE_windows=ta.exe"
-set "EXECUTABLE_linux=ada83"
-set "EXECUTABLE_macos=ada83"
-set "COMPILER_FLAGS_windows=-O2 -Wall -g0 -std=gnu2x"
+set "EXECUTABLE_linux=ta"
+set "EXECUTABLE_macos=ta"
+set "COMPILER_FLAGS_windows=-O2 -Wall -g0 -std=gnu2x -static"
 set "COMPILER_FLAGS_linux=-O3 -Wall -g0 -std=gnu17 -mcpu=baseline"
 set "COMPILER_FLAGS_macos=-O3 -Wall -g0 -std=gnu2x"
 set "LINK_LIBRARIES_windows="
-set "LINK_LIBRARIES_linux=-lpthread"
-set "LINK_LIBRARIES_macos=-lpthread"
+set "LINK_LIBRARIES_linux="
+set "LINK_LIBRARIES_macos="
 set "ARTWORK_windows=%ICON%.ico"
 set "ARTWORK_linux=%ICON%.png"
 set "ARTWORK_macos=%ICON%.icns"
@@ -72,8 +73,9 @@ echo Everything built lands in bin-^<target^>, so bin-windows\%EXECUTABLE_window
 echo with no command. Cross-packaging downloads nothing; install the toolchain
 echo it names first.
 echo.
-echo LLVM-C.dll and its companion DLLs are unpacked from %LIBRARIES%
-echo and must stay with %EXECUTABLE_windows%, which loads them when it runs.
+echo LLVM-C.dll, the official Windows build from the llvm-project release, is
+echo unpacked from %LIBRARIES% and must stay with %EXECUTABLE_windows%, which
+echo loads it when it runs; it needs nothing but Windows itself.
 exit /b 0
 
 :select
@@ -95,10 +97,9 @@ if not exist "%STAGE%" mkdir "%STAGE%"
 exit /b 0
 
 :clean
-del /q "%EXECUTABLE_windows%" ada83.pdb ada83.obj LLVM-C.dll libffi-8.dll libstdc++-6.dll libzstd.dll ^
-    libgcc_s_seh-1.dll libwinpthread-1.dll libxml2-16.dll libiconv-2.dll ^
-    zlib1.dll zig.zip "%VSIX%" icon.rc icon.res icon.res.o >nul 2>nul
-for %%D in (staging zig bin-linux bin-macos bin-windows) do rmdir /s /q %%D >nul 2>nul
+del /q "%EXECUTABLE_windows%" ta.pdb ta.obj LLVM-C.dll ^
+    zig.zip "%VSIX%" icon.rc icon.res icon.res.o >nul 2>nul
+for %%D in (staging builds zig bin-linux bin-macos bin-windows) do rmdir /s /q %%D >nul 2>nul
 echo Cleaned.
 exit /b 0
 
@@ -106,6 +107,7 @@ exit /b 0
 call :select   || exit /b 1
 call :icons
 call :native   || exit /b 1
+call :stage    || exit /b 1
 echo Built %STAGE%\%EXECUTABLE%.
 exit /b 0
 
@@ -125,12 +127,90 @@ if defined ARCHITECTURES (
 )
 call :stage   || exit /b 1
 rmdir /s /q staging >nul 2>nul
-echo Packaged %STAGE%.
+call :archive || exit /b 1
+exit /b 0
+
+:archive
+if not exist builds mkdir builds
+set "ARCHIVE=builds\bin-%TARGET%.zip"
+del /q "%ARCHIVE%" >nul 2>nul
+powershell -NoProfile -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%ARCHIVE%' -Force" || (
+    echo Cannot pack %ARCHIVE%. Making archives needs PowerShell 5 or later.
+    exit /b 1
+)
+rmdir /s /q staging\proof >nul 2>nul
+powershell -NoProfile -Command "Expand-Archive -Path '%ARCHIVE%' -DestinationPath 'staging\proof' -Force" || exit /b 1
+if /i "%TARGET%"=="windows" (
+    if not exist "staging\proof\LLVM-C.dll" (
+        echo %ARCHIVE% does not carry LLVM-C.dll.
+        exit /b 1
+    )
+    for %%D in (libwinpthread libgcc_s libstdc++ libiconv libxml2 libzstd zlib1) do if exist "staging\proof\%%D*.dll" (
+        echo %ARCHIVE% carries a MinGW runtime DLL, %%D.
+        exit /b 1
+    )
+    call :prove || exit /b 1
+) else (
+    echo %ARCHIVE% was built for %TARGET% and cannot run here.
+)
+rmdir /s /q staging\proof >nul 2>nul
+echo Packaged %ARCHIVE%.
+exit /b 0
+
+:prove
+call :version
+"staging\proof\ta.exe" --version | "%SystemRoot%\System32\findstr.exe" /x /c:"ta %VERSION%" >nul || (
+    echo The packaged compiler does not answer 'ta %VERSION%'.
+    exit /b 1
+)
+> "staging\proof\hello.adb" (
+    echo with Text_IO;
+    echo procedure Hello is
+    echo begin
+    echo   Text_IO.Put_Line ^("packaged ta works"^);
+    echo end Hello;
+)
+pushd staging\proof
+ta.exe hello.adb -o hello || (
+    popd
+    exit /b 1
+)
+hello.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"packaged ta works" >nul || (
+    popd
+    echo The packaged compiler cannot build and run a program.
+    exit /b 1
+)
+popd
+> "staging\proof\legacy.adb" (
+    echo with Ada.Strings.Fixed, Text_IO;
+    echo procedure Legacy is
+    echo begin
+    echo   Text_IO.Put_Line ^(Ada.Strings.Fixed.Trim ^("  legacy units served  ", Ada.Strings.Both^)^);
+    echo end Legacy;
+)
+pushd staging\proof
+ta.exe legacy.adb -o legacy || (
+    popd
+    exit /b 1
+)
+legacy.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"legacy units served" >nul || (
+    popd
+    echo The packaged compiler cannot serve %LEGACY%.
+    exit /b 1
+)
+popd
+exit /b 0
+
+:version
+for /f "tokens=3" %%V in ('"%SystemRoot%\System32\findstr.exe" /r /c:"^#define TURBOADA_VERSION_MAJOR" %SOURCE%') do set "MAJOR=%%V"
+for /f "tokens=3" %%V in ('"%SystemRoot%\System32\findstr.exe" /r /c:"^#define TURBOADA_VERSION_MINOR" %SOURCE%') do set "MINOR=%%V"
+set "VERSION=%MAJOR%.%MINOR%"
 exit /b 0
 
 :native
 call :require %SOURCE%  || exit /b 1
 call :require %RUNTIME% || exit /b 1
+call :require %LEGACY%  || exit /b 1
 call :unpack_llvm       || exit /b 1
 call :compile           || exit /b 1
 "%STAGE%\%EXECUTABLE%" --version >nul 2>nul || (
@@ -142,6 +222,7 @@ exit /b 0
 :cross
 call :require %SOURCE%  || exit /b 1
 call :require %RUNTIME% || exit /b 1
+call :require %LEGACY%  || exit /b 1
 call :find_zig || (
     echo packaging for %TARGET% needs zig
     exit /b 1
@@ -179,8 +260,6 @@ if errorlevel 1 exit /b 1
 del /q %SLICES% >nul 2>nul
 exit /b 0
 
-rem  No lipo anywhere; a universal binary is only a big-endian fat header
-rem  in front of page-aligned slices, so PowerShell can join them itself.
 :fatjoin
 echo   joining the %TARGET% slices into a universal binary
 powershell -NoProfile -Command ^
@@ -209,6 +288,7 @@ exit /b 0
 
 :stage
 copy /y "%RUNTIME%" "%STAGE%\" >nul
+copy /y "%LEGACY%" "%STAGE%\" >nul
 if defined LAUNCHER call :launcher
 exit /b 0
 
@@ -249,7 +329,7 @@ powershell -NoProfile -Command ^
     "          [byte[]]::new(8) + [byte[]]@(4,0) + [byte[]]::new(22) + $Fork;" ^
     "if ('%TARGET%' -eq 'macos') {" ^
     "  New-Item -ItemType Directory -Force -Path (Join-Path $Stage '__MACOSX') > $null;" ^
-    "  [IO.File]::WriteAllBytes((Join-Path $Stage '__MACOSX\._ada83'), $Double) }"
+    "  [IO.File]::WriteAllBytes((Join-Path $Stage '__MACOSX\._ta'), $Double) }"
 if exist "%STAGE%\%ARTWORK%" exit /b 0
 exit /b 1
 
@@ -257,7 +337,7 @@ exit /b 1
 powershell -NoProfile -Command ^
     "$ErrorActionPreference='Stop';" ^
     "$Entry = '[Desktop Entry]','Type=Application','Name=Ada 83'," ^
-    "         'Comment=Ada 83 compiler','Exec=ada83 %%F','Icon=%ICON%'," ^
+    "         'Comment=Ada 83 compiler','Exec=ta %%F','Icon=%ICON%'," ^
     "         'Terminal=true','Categories=Development;Building;';" ^
     "[IO.File]::WriteAllText((Join-Path $PWD '%STAGE%\%LAUNCHER%')," ^
     "                        ($Entry -join [char]10) + [char]10)"
@@ -273,7 +353,7 @@ call :require %BUNDLE% || exit /b 1
 del /q "%STAGE%\%VSIX%" >nul 2>nul
 rmdir /s /q staging\vsix >nul 2>nul
 mkdir staging\vsix\extension\syntaxes
-for %%F in ("%MANUAL%" "%ICON%.png" "turboada-logo.png") do (
+for %%F in ("%MANUAL%" "%ICON%.png" turboada-logo.png) do (
     if exist %%F ( copy /y %%F staging\vsix\extension\ >nul ) else (
         echo %%~F is missing; building %VSIX% without it.
     )
@@ -352,11 +432,7 @@ where gcc >nul 2>nul && goto build
 set "TOOLCHAIN=Clang"
 set "COMPILER=clang --target=x86_64-w64-windows-gnu"
 where clang >nul 2>nul && goto build
-rem  clang-cl builds the native MSVC target (SEH, MSVC CRT), which cl.exe
-rem  cannot because turboada.c uses __int128.  It needs a Windows SDK on
-rem  INCLUDE/LIB, as a Visual Studio developer prompt provides; try it before
-rem  downloading Zig, and fall through to Zig if it or its link fails.
-where clang-cl >nul 2>nul && (call :compile_msvc && exit /b 0)
+where clang-cl >nul 2>nul && (call :compile_windows_native && exit /b 0)
 call :offer_zig || exit /b 1
 set "TOOLCHAIN=Zig"
 set "COMPILER=%ZIG% cc -target x86_64-windows-gnu"
@@ -366,21 +442,18 @@ echo   compiling turboada.c with %TOOLCHAIN%
 %COMPILER% %COMPILER_FLAGS% %SOURCE% %RESOURCE% -o "%STAGE%\%EXECUTABLE%" %LINK_LIBRARIES%
 exit /b %errorlevel%
 
-:compile_msvc
-rem  compiler-rt carries the __int128 helpers (__divti3 and friends) turboada.c
-rem  needs and the MSVC CRT lacks; the exe links beside the LLVM DLLs already
-rem  unpacked into %STAGE%, so it loads the bundled libLLVM at run time.
+:compile_windows_native
 set "RESDIR="
 for /f "delims=" %%R in ('clang-cl -print-resource-dir 2^>nul') do set "RESDIR=%%R"
 if not defined RESDIR exit /b 1
 set "BUILTINS=%RESDIR%\lib\windows\clang_rt.builtins-x86_64.lib"
 if not exist "%BUILTINS%" exit /b 1
 call :resource
-echo   compiling turboada.c with clang-cl (native MSVC)
+echo   compiling turboada.c with clang-cl (windows-native)
 clang-cl /nologo /O2 /clang:-std=gnu2x -fuse-ld=lld /Fe:"%STAGE%\%EXECUTABLE%" ^
-    %SOURCE% %RESOURCE% synchronization.lib "%BUILTINS%"
+    %SOURCE% %RESOURCE% "%BUILTINS%"
 set "RC=%errorlevel%"
-del /q ada83.obj >nul 2>nul
+del /q ta.obj >nul 2>nul
 exit /b %RC%
 
 :resource
@@ -388,8 +461,6 @@ set "RESOURCE=icon.res.o"
 if defined ZIG set "RESOURCE=icon.res"
 del /q icon.rc "%RESOURCE%" >nul 2>nul
 if not exist "%STAGE%\%ICON%.ico" call :icons
-rem  Resource scripts read a backslash as an escape, so name the icon with
-rem  forward slashes; every Windows resource compiler accepts them.
 set "ICON_PATH=%STAGE%/%ICON%.ico"
 set "ICON_PATH=%ICON_PATH:\=/%"
 if exist "%STAGE%\%ICON%.ico" >icon.rc echo 1 ICON "%ICON_PATH%"
@@ -417,24 +488,9 @@ if /i not "%REPLY%"=="y" (
     echo Install MinGW-w64 GCC, Clang or Zig and run this again.
     exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+powershell -NoProfile -Command ^
     "$ErrorActionPreference='Stop';" ^
-    "try{[Console]::OutputEncoding=[Text.Encoding]::UTF8}catch{};" ^
-    "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;" ^
-    "$ProgressPreference='SilentlyContinue';" ^
-    "$w=32; $fc=[char]0x2588; $ec=[char]0x00B7;" ^
-    "$blk=[char[]](0x258F,0x258E,0x258D,0x258C,0x258B,0x258A,0x2589);" ^
-    "$rq=[Net.WebRequest]::Create('%ZIG_URL%'); $rs=$rq.GetResponse();" ^
-    "$tot=[Math]::Max(1,$rs.ContentLength); $st=$rs.GetResponseStream();" ^
-    "$fo=[IO.File]::Create('zig.zip'); $bf=New-Object byte[] 65536; $so=0; $last=-1;" ^
-    "while(($n=$st.Read($bf,0,$bf.Length)) -gt 0){" ^
-    "  $fo.Write($bf,0,$n); $so+=$n; $p=[int]($so*100/$tot);" ^
-    "  if($p -ne $last){ $last=$p; $f=($so/$tot)*$w; $fu=[Math]::Floor($f);" ^
-    "    $b=[string]$fc*$fu; $fr=$f-$fu;" ^
-    "    if($fu -lt $w -and $fr -gt 0){$b+=$blk[[Math]::Min(6,[int]($fr*8))];$fu++};" ^
-    "    $b+=[string]$ec*($w-$fu);" ^
-    "    Write-Host -NoNewline ([char]13 + '  ' + $b + (' {0,3:0}%%' -f $p)) } };" ^
-    "$fo.Close(); $st.Close(); $rs.Close(); Write-Host '';" ^
+    "Invoke-WebRequest '%ZIG_URL%' -OutFile 'zig.zip';" ^
     "Expand-Archive 'zig.zip' '.' -Force;" ^
     "Move-Item '%ZIG_NAME%' 'zig' -Force;" ^
     "Remove-Item 'zig.zip'"
