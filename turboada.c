@@ -398,6 +398,13 @@ _Static_assert (ADA_EH_CACHE_MASK == ADA_EH_CACHE_ENTRIES - 1 and
   #endif
   #define HOST_DEBUG_FORMAT_FLAG "!2 = !{i32 2, !\"CodeView\", i32 1}\n"
 #else
+  #if defined(_WIN32)
+    #if defined(SIMD_ARM64)
+      #define HOST_TARGET_TRIPLE "aarch64-w64-windows-gnu"
+    #else
+      #define HOST_TARGET_TRIPLE "x86_64-w64-windows-gnu"
+    #endif
+  #endif
   #define HOST_DEBUG_FORMAT_FLAG "!2 = !{i32 7, !\"Dwarf Version\", i32 4}\n"
 #endif
 
@@ -20773,6 +20780,22 @@ static const char Runtime_Entry_Call_Text[] =
     "  ret i8 1\n"
 
     "enq:\n"
+    "; RM 9.7.3: a timed call finding the server already offering this\n"
+    ";   entry is immediately possible, so it is performed however short\n"
+    ";   the delay -- even an expired one must not withdraw it before the\n"
+    ";   server has woken to take it\n"
+    "  br i1 %plain, label %eset, label %eprobe\n"
+    "eprobe:\n"
+    "  %ewe = load i64, ptr %wep\n"
+    "  %ebare = icmp eq i64 %ewe, %entry_idx\n"
+    "  %esel = icmp eq i64 %ewe, " TEXT_OF (ACCEPTING_ENTRY_SELECTIVE_WAIT) "\n"
+    "  br i1 %esel, label %eopen, label %eset\n"
+    "eopen:\n"
+    "  %eoc = call i8 @__ada_open_entry(ptr %task, i64 %entry_idx)\n"
+    "  %eo = icmp ne i8 %eoc, 0\n"
+    "  br label %eset\n"
+    "eset:\n"
+    "  %offered = phi i1 [ 0, %enq ], [ %ebare, %eprobe ], [ %eo, %eopen ]\n"
     "  call void @__ada_set_pending_rendezvous(ptr %self, ptr %rv,"
       " ptr %task, i8 0)\n"
     "  call void @__ada_queue_append(ptr %qhp, ptr %rv)\n"
@@ -20806,9 +20829,10 @@ static const char Runtime_Entry_Call_Text[] =
     "  %mine = icmp ne i8 %pulled, 0\n"
     "  br i1 %mine, label %withdrawn, label %stay\n"
     "; a conditional call queues only on a server offering the entry, so it\n"
-    ";   waits as a plain one does\n"
+    ";   waits as a plain one does, and so does a timed call that found one\n"
     "stay:\n"
-    "  %until = select i1 %conditional, i64 " ADA_DEADLINE_NEVER
+    "  %hold = or i1 %conditional, %offered\n"
+    "  %until = select i1 %hold, i64 " ADA_DEADLINE_NEVER
       ", i64 %deadline\n"
     "  %expired = call i32 @__ada_wait_word(ptr %cfp, i32 "
       TEXT_OF (RENDEZVOUS_INCOMPLETE) ", ptr %cwp, i32 %budget, i64 %until)\n"
@@ -42453,6 +42477,10 @@ Type *Resolve_Type_Definition (Node *node) {
         }
 
         Check_Derived_Parent_Legality (node, parent);
+        if (parent->kind == TYPE_INCOMPLETE or parent->kind == TYPE_UNKNOWN) {
+          node->type = NULL;
+          return NULL;
+        }
         Type *derived = Clone_Parent_As_Derived (
           parent, node->derived_type.constraint != NULL);
 
@@ -111063,6 +111091,8 @@ int Native_Backend_Compile (const char *ir_path, const char *const *extra_ir,
   const char *emitted_triple = triple;
 #ifdef NATIVE_TARGET_TRIPLE
   emitted_triple = NATIVE_TARGET_TRIPLE;
+#elif defined(HOST_TARGET_TRIPLE)
+  emitted_triple = HOST_TARGET_TRIPLE;
 #endif
   void *target = NULL;
   if (Native_Backend_Llvm_Api.Target_From_Triple (emitted_triple, &target, &message)) {

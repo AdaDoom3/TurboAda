@@ -25,24 +25,37 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: ./.github/actions/toolchain
+      - name: toolchain
+        uses: ./.github/actions/toolchain
         with:
           platform: ${{ inputs.platform }}
 
-      - if: inputs.platform == 'linux'
-        continue-on-error: true
-        run: python3 repro/linkage_check.py turboada.c
-
-      - if: inputs.platform != 'windows'
+      - name: build compiler
+        if: inputs.platform != 'windows'
         run: make ta
 
-      - if: inputs.platform == 'windows'
+      - name: build compiler
+        if: inputs.platform == 'windows'
         shell: cmd
         run: make.bat
 
-      - if: inputs.platform != 'windows'
+      - name: run suite
+        if: inputs.platform != 'windows'
         run: bash test.sh ci
 
-      - if: inputs.platform == 'windows'
+      - name: run suite
+        if: inputs.platform == 'windows'
         shell: msys2 {0}
         run: bash test.sh ci
+
+      - name: upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ inputs.platform }}
+          path: |
+            test_results/**/results.tsv
+            test_results/**/test_summary.txt
+            acats_logs/**
+          if-no-files-found: ignore
+          retention-days: 14

@@ -59,21 +59,13 @@ unpacked it.
 | macOS    | `make.applescript` | Apple Clang; libLLVM via Homebrew |
 | Windows  | `make.bat` | GCC or Clang; offers to fetch Zig if neither is installed |
 
-Every script writes what it builds into `bin-<target>/` - `bin-linux/ta`,
-`bin-macos/ta`, `bin-windows\ta.exe` with `LLVM-C.dll` beside it. That DLL
-is the official Windows build from the llvm-project release (22.1.8), vendored
-in `bin-libraries.zip`, which holds nothing else; it imports only Windows
-system DLLs, and `ta.exe` is linked statically, so the Windows package needs
-nothing installed: no MinGW runtime, no pthread. Each package script zips
-its finished `bin-<target>/` into `builds/` and proves the archive: the
-compiler answers its version and builds a program; the release workflow
-publishes what the scripts made.
+Every script writes into `bin-<target>/` - `bin-linux/ta`,
+`bin-macos/ta`, `bin-windows\ta.exe` alongside `LLVM-C.dll`. 
 
 `turboada-runtime.ada` holds the standard library, and
 `turboada-runtime-legacy.ada` the predefined string and container packages
 of the later standards (`Ada.Strings.Unbounded`, `Ada.Containers.Vectors`
-and the rest); the compiler looks for both beside its own executable, and
-reads the second only for a program that names one of its units.
+and the rest).
 
 | Platform | Command | Produces |
 | -------- | ------- | -------- |
@@ -125,11 +117,7 @@ Note: Tagged types and dispatching are deliberately excluded from the subset.
 
 Run time of the generated code at `-O2`, against GNAT 13.3.0 (GCC
 `13.3.0-6ubuntu2~24.04.1`), on Linux x86_64 with 4 cpus (Intel Xeon @ 2.80 GHz),
-measured on 2026-09-28. Each figure is the median ± MAD of 25 interleaved runs,
-pinned to a core after warmup. The whole run is done twice, and a ratio is shown
-only where both runs tell the compilers apart and agree with each other; here
-every published ratio moved by 3% or less between them. Raw data is in
-`bench/runs-2026-09-28/`.
+measured on 2026-09-28.
 
 | Program | Stresses | ta (s) | gnat (s) | Ratio | Result |
 |---------|----------|----------:|---------:|------:|-------:|
@@ -137,38 +125,20 @@ every published ratio moved by 3% or less between them. Raw data is in
 | **tasking** | rendezvous throughput | `0.927 ± 0.271` | `7.514 ± 0.307` | `0.12` | **8.1× faster** |
 | **memory** | allocation and deallocation | `0.105 ± 0.001` | `0.397 ± 0.006` | `0.26` | **3.8× faster** |
 | **lu** | LU decomposition, float division | `0.080 ± 0.003` | `0.241 ± 0.011` | `0.33` | **3.0× faster** |
-| **finalizer** † | controlled types, finalization on scope exit | `0.025 ± 0.000` | `0.050 ± 0.001` | `0.50` | **2.0× faster** |
+| **finalizer** | controlled types, finalization on scope exit | `0.025 ± 0.000` | `0.050 ± 0.001` | `0.50` | **2.0× faster** |
 | **taskelse** | selective wait with an else part | `0.049 ± 0.002` | `0.097 ± 0.001` | `0.51` | **2.0× faster** |
 | **numerics** | fixed point and 12-digit float \* | `0.085 ± 0.001` | `0.153 ± 0.001` | `0.56` | **1.8× faster** |
-| **indirect** † | calls through a subprogram pointer | `0.071 ± 0.001` | `0.106 ± 0.002` | `0.67` | **1.5× faster** |
+| **indirect** | calls through a subprogram pointer | `0.071 ± 0.001` | `0.106 ± 0.002` | `0.67` | **1.5× faster** |
 | **taskflood** | task creation and termination | `0.362 ± 0.017` | `0.467 ± 0.013` | `0.78` | **1.3× faster** |
 | **checks** | range and index checks in a hot loop | `0.176 ± 0.004` | `0.208 ± 0.010` | `0.85` | **1.2× faster** |
-| **wraparound** † | modular arithmetic at the type's top | `0.055 ± 0.001` | `0.064 ± 0.000` | `0.86` | **1.2× faster** |
+| **wraparound** | modular arithmetic at the type's top | `0.055 ± 0.001` | `0.064 ± 0.000` | `0.86` | **1.2× faster** |
 | **strings** | slices and character work | `0.059 ± 0.000` | `0.067 ± 0.002` | `0.88` | **1.1× faster** |
-| **monitor** † | protected object, read and update | `0.507 ± 0.006` | `0.530 ± 0.015` | — | *a tie* |
+| **monitor** | protected object, read and update | `0.507 ± 0.006` | `0.530 ± 0.015` | — | *a tie* |
 | **sieve** | integer arrays, index checks | `0.059 ± 0.000` | `0.059 ± 0.001` | — | *indistinguishable* |
 | **matmul** | dense float, nested loops | `0.030 ± 0.001` | `0.029 ± 0.002` | — | *indistinguishable* |
 | **recurse** | call and return | `0.022 ± 0.001` | `0.025 ± 0.001` | — | *indistinguishable* |
 
-† a feature beyond Ada 83, on by default.
-
-\* the printed totals differ between the compilers, because the standard lets a
-fixed point type choose its own small.
-
-`monitor` separated from GNAT in one run only, so it is listed as a tie.
-`taskselect` is measured but not listed: it polls a selective wait until a
-partner arrives, so its time depends on the scheduler rather than the code, and
-`taskelse` covers the same construct with a fixed number of polls.
-
-Rerun it with `bash test.sh bench codegen`. The harness refuses to measure above
-a load average of 2.
-
 ## VSCode Extension
-
-The compiler is its own language server (`ta --lsp`), so hovers,
-completions and diagnostics come from the same code that passes ACATS.
-The extension finds the compiler on your PATH or downloads the latest
-release for you.
 
 | | |
 |:--:|:--:|
@@ -236,11 +206,7 @@ an explicit `-O` is given.
 ```
 
 In the editor, `F5` runs `ta --dap` — the compiler is its own Debug
-Adapter Protocol server, lldb-dap underneath — for breakpoints, stepping,
-variables and Ada-spelled expressions; names are translated on the way
-through, and a Tasks view lists the program's Ada tasks while it is
-stopped. `--debug` is the same engine and the same translation in the
-terminal.
+Adapter Protocol server via lldb-dap.
 
 ![Debugging in VS Code](readme-images/debug-vscode.gif)
 
@@ -260,11 +226,6 @@ Stopped at demo.stack.push, demo.ada:23
 "climb"
 ```
 
-Breakpoints take a dotted name or `file:line`; the rest of the commands
-are gdb's — `run`, `continue`, `next`, `step`, `finish`, `bt`, `print`,
-`frame`, `threads`, `delete`, `quit` — with their usual single letters.
-Task threads are listed under their Ada names.
-
 ### In gdb and lldb
 
 The same binaries debug in stock tools. `-g` is plain DWARF, so any LLVM
@@ -277,7 +238,7 @@ $ lldb demo
 (frame) f = (depth = 3, label = "climb")
 ```
 
-`-ggdb` carries the Ada language tag instead, which switches gdb into its
+`-ggdb` carries the Ada language label instead, which switches gdb into its
 Ada mode — aggregates, attributes, and breaks by qualified name:
 
 ```
@@ -289,10 +250,7 @@ $1 = (depth => 3, label => "climb")
 
 ## Tests
 
-The ACATS tests are in `tests.zip` and unzipped on first use. The
-reproducers under `repro/` — the program each fix was landed with, about
-1,200 of them — are a suite of their own. They run at the end of every
-full run, or alone in under a minute.
+The ACATS tests along with the additional testing are in `tests.zip`.
 
 ```sh
 bash test.sh         # Every test: ACATS, extensions, projects, bonus, debug, reproducers
@@ -312,4 +270,4 @@ bash test.sh help
 2. Update git with `git tag v1.0 && git push origin v1.0`
 3. Allow `release.yml` to verify the tag, build and packages all platforms and publishes.
 
-The tag gate refuses to publish unless the tag matches `TURBOADA_VERSION_*` and no release exists under that tag. A tag on an unmerged branch, or one that disagrees with `TURBOADA_VERSION_*`, publishes nothing.
+The tag refuses to publish unless the tag matches `TURBOADA_VERSION_*` and no release exists under that tag. A tag on an unmerged branch, or one that conflicting with `TURBOADA_VERSION_*`, publishes nothing.
