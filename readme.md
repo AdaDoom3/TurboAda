@@ -1,8 +1,6 @@
 # TurboAda
 
-[![Linux](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-linux.yml/badge.svg)](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-linux.yml)
-[![macOS](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-macos.yml/badge.svg)](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-macos.yml)
-[![Windows](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-windows.yml/badge.svg)](https://github.com/AdaDoom3/Ada83/actions/workflows/ci-windows.yml)
+[![CI](https://github.com/AdaDoom3/TurboAda/actions/workflows/ci.yml/badge.svg)](https://github.com/AdaDoom3/TurboAda/actions/workflows/ci.yml)
 
 <p align="center">
   <img src="turboada-logo.png" alt="logo" width="300">
