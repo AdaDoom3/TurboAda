@@ -18904,19 +18904,30 @@ provides, overrides or avoids, exactly as `os.ada` does with its `.set`
 alias table. Which of them the module references follows from what the
 program uses, and the unreferenced ones are pruned from the output:
 
-- `printf` and `exit` — the unhandled-exception report and program exit;
-  every main program references both.
+- `exit` and `fflush` — program exit, which first sends what the
+  standard streams hold; every main program references both.
 - `_Unwind_ForcedUnwind`, `_Unwind_GetIP`, `_Unwind_GetIPInfo`,
   `_Unwind_SetGR`, `_Unwind_SetIP`, `_Unwind_Find_FDE` and
   `__gcc_personality_v0` — exception propagation follows the Itanium
   unwinder ABI; any program with a handler or a raise references them,
   and a freestanding image links its own unwinder or libgcc's.
-- `malloc`, `calloc`, `realloc`, `free`, `aligned_alloc` — allocators,
-  tasking control blocks, and the file machinery of TEXT_IO.
-- `memcmp`, `strncasecmp` — composite equality and case-blind comparison.
-- The `f`-family of stdio (`fopen`, `fputc`, `fgetc`, `fwrite`, `fseek`,
-  `ftell`, `fflush`, ...) — only where TEXT_IO or the file forms of
-  input-output are used.
+- `malloc`, `calloc`, `free`, `aligned_alloc` — allocators, tasking
+  control blocks, and the secondary stack.
+- `memcmp`, `memcpy`, `memmove`, `memset`, `memchr`, `strlen` — composite
+  equality, copies the code generator turns into calls, and the C
+  strings of exception messages.
+- The `f`-family of stdio (`fopen`, `fclose`, `fputc`, `fgetc`, `ungetc`,
+  `fwrite`, `fread`, `fseek`, `ftell`, `fgets`, `tmpfile`, `remove`) and
+  the three standard streams — the unhandled-exception report writes to
+  standard output, and TEXT_IO and the file forms of input-output use the
+  rest.
+
+Reals are read and written without the C library: `'VALUE` and `'IMAGE`
+of a real type carry their own exact decimal conversion, so no `strtod`
+or `snprintf` is referenced and their results do not depend on a locale.
+On x86-64 `**` on a real type computes its power in extended precision
+itself (except with a compiler built by Microsoft's C compiler); elsewhere
+it calls `pow`.
 
 Two properties of the output do not change under the option. The target
 triple and data layout stamped at the head of the module are still the
@@ -19867,6 +19878,66 @@ own.
 | Windows | `SDL3.dll` and `soft_oal.dll`, the projects' own release builds; `zlib1.dll` and `opus.dll`, built from their releases |
 | Linux | `libSDL3.so.0`, `libopenal.so.1`, `libz.so.1` and `libopus.so.0`, built from their releases |
 | macOS | `libSDL3.0.dylib`, from the SDL release; `libopus.0.dylib`, built from its release; zlib and OpenAL are the system's |
+
+### F.9 How a program is linked
+
+On Linux for x86-64 a program is linked, wherever it can be, without the C
+library: the executable is static, asks for no program interpreter, and
+imports no symbol. The compiler supplies the few things a C library would
+otherwise have supplied — the process entry point, thread-local storage,
+tasks as threads it creates itself, the heap, `exit`, the memory leaves the
+code generator calls (`memcpy`, `memmove`, `memset`, `memcmp`), and the
+unwinder that propagates exceptions — as one module it links into the
+program, and reaches the operating system through its system calls alone.
+TEXT_IO, the file forms of input-output, CALENDAR and the tasking runtime
+call the kernel directly in every program on Linux, so their behaviour does
+not depend on how the program is linked: output is buffered and flushed as
+the C library would buffer and flush it, line by line on a terminal and in
+blocks of the file's preferred size otherwise, so standard output and
+standard error interleave as they do under the C library.
+
+A program is linked against the C library instead (hosted) when it names
+something only the C library or another library can provide: a unit with
+pragma DYNAMIC_LIBRARY ([F.1](#f1-implementation-dependent-pragmas)), a
+subprogram imported from C that the compiler does not itself define, an
+object or archive given on the command line or by a project, or a link
+switch. The choice is made at link time from what the linked program still
+needs, so the same compiled units link either way. The environment
+variable `TURBOADA_LINK` overrides it: `hosted` always links against the
+C library, and `pure` makes a program that cannot be linked without it an
+error naming the first symbol it needs.
+
+In a hosted program TEXT_IO still buffers its own output, apart from the
+C library's: text a C function writes through `printf` or `puts` and text
+TEXT_IO writes to the same standard output reach it in the order each
+buffer is flushed, not in the order they were written. TEXT_IO's buffers
+are flushed when the program ends, under a C main as under an Ada one.
+
+The static link is done by `ld.lld`, or `ld`, or the C driver told to
+supply nothing of its own, whichever is found first.
+
+On Windows for x86-64 the same choice is made the same way, and a program
+linked without the C library imports from `kernel32.dll` alone. The
+compiler's module supplies the entry point, which reads the command line
+as UTF-8 and splits it into arguments as the C runtime does (blanks part
+arguments outside double quotes; 2n backslashes before a quote are n
+backslashes and the quote opens or closes; 2n+1 are n and a literal quote;
+two quotes inside quotes are one), the constructors and destructors the
+linker lists, the thread-local storage directory, the heap over
+`VirtualAlloc`, the stack probe for frames larger than a page, and `exit`;
+exceptions propagate through the system's own structured exception
+handling as in every Windows program. The link is done by `lld-link`, or
+by `ld.lld` in its MinGW mode, with an import library for `kernel32.dll`
+that the compiler writes beside the object; a hosted program is linked by
+the C driver, as on Linux. TEXT_IO, the file forms of input-output,
+CALENDAR and the tasking runtime call `kernel32` directly in every program
+on Windows. Files are read and written byte for byte; the standard streams
+keep the console's text convention, so a line written to standard output
+or standard error ends in CR LF and a CR before an LF read from standard
+input is dropped.
+
+On macOS, and on Linux and Windows for other processors, every program is
+linked against the C library.
 
 ---
 

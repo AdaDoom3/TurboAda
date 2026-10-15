@@ -63,8 +63,18 @@
   #include <unistd.h>
   #include <pthread.h>
   #include <sys/wait.h>
+  #include <fcntl.h>
   #ifdef __APPLE__
     #include <mach-o/dyld.h>
+  #endif
+  #ifdef __linux__
+    #include <link.h>
+    #include <sys/auxv.h>
+    #include <sys/ioctl.h>
+    #include <sys/prctl.h>
+    #include <sys/resource.h>
+    #include <sys/syscall.h>
+    #include <sys/sysinfo.h>
   #endif
 #endif
 
@@ -387,12 +397,6 @@ bool Size_Is_Indivisible (u64 bytes);
   #define ADA_MAIN_STDIO_BINARY ""
 #endif
 
-#if defined(_WIN32) and not defined(ADA_WINDOWS_NATIVE)
-  #define ADA_SNPRINTF "__mingw_snprintf"
-#else
-  #define ADA_SNPRINTF "snprintf"
-#endif
-
 #define ADA_EH_CACHE_ENTRIES 128
 #define ADA_EH_CACHE_MASK    127
 _Static_assert (ADA_EH_CACHE_MASK == ADA_EH_CACHE_ENTRIES - 1 and
@@ -517,6 +521,7 @@ int             Host_Process_Wait           (Host_Process process);
 int             Host_Run_Tool               (const char *const *argv);
 Host_Worker_Status Host_Worker_Start        (Host_Process *process, int index);
 _Noreturn void  Host_Worker_Exit            (int status);
+bool            Host_Libraries_Loadable     (void);
 void           *Host_Library_Open           (const char *name);
 void           *Host_Library_Symbol         (void *library, const char *name);
 Host_Directory *Host_Directory_Open         (const char *path);
@@ -15192,6 +15197,7 @@ void Emit_Space_Run_Counter           (const char *end_noun,
                                        const char *it);
 void Emit_Runtime_String_Trim         ();
 void Emit_Runtime_Globals             ();
+void Emit_Runtime_Files               ();
 void Emit_Runtime_Storage             ();
 void Emit_Runtime_Synchronisation     ();
 
@@ -15245,9 +15251,6 @@ void Emit_Numeric_Image          (const Numeric_Image_Flavor *flavor,
                                   Rep rts_sbt);
 void Emit_Numeric_Width          (const Numeric_Image_Flavor *flavor);
 void Emit_Numeric_Value          (const Numeric_Image_Flavor *flavor);
-void Emit_Snprintf_Image         (const char *noun, const char *argument,
-                                  int capacity, const char *format,
-                                  Rep rts_sbt);
 void Emit_Real_Image             (Rep rts_sbt);
 void Emit_Enumeration_Row_Field  (const char *name, const char *row,
                                   const char *index, int field,
@@ -15552,6 +15555,13 @@ _Static_assert (TASK_CONTROL_BLOCK_OFFSET_OBJECT >=
 
 #define WIN32_STACK_IS_RESERVATION  65536
 
+#if defined(_WIN32) and defined(SIMD_X86_64)
+  #define TASK_FLOAT_SETUP                                                 \
+    "  call void asm sideeffect \"fninit\", \"~{fpsr},~{flags}\"()\n"
+#else
+  #define TASK_FLOAT_SETUP ""
+#endif
+
 #ifdef _WIN32
   _Static_assert (WIN32_STACK_IS_RESERVATION
                     == STACK_SIZE_PARAM_IS_A_RESERVATION,
@@ -15811,6 +15821,2813 @@ _Static_assert (
   "  %huge = icmp ugt i64 %ms64, 2147483646\n"                  \
   "  %ms64c = select i1 %huge, i64 2147483646, i64 %ms64\n"     \
   "  %ms = trunc i64 %ms64c to i32\n"
+
+#if defined(__linux__) and defined(SIMD_X86_64)
+  #define LINUX_CALL_NUMBER(x86_64, generic)  x86_64
+  #define LINUX_SYSTEM_CALL_ASM                                              \
+    "asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},"   \
+    "{r8},{r9},~{rcx},~{r11},~{memory}\""
+#elif defined(__linux__) and defined(SIMD_ARM64)
+  #define LINUX_CALL_NUMBER(x86_64, generic)  generic
+  #define LINUX_SYSTEM_CALL_ASM                                              \
+    "asm sideeffect \"svc #0\", \"={x0},{x8},{x0},{x1},{x2},{x3},{x4},"     \
+    "{x5},~{memory}\""
+#elif defined(__linux__) and defined(__riscv)
+  #define LINUX_CALL_NUMBER(x86_64, generic)  generic
+  #define LINUX_SYSTEM_CALL_ASM                                              \
+    "asm sideeffect \"ecall\", \"={x10},{x17},{x10},{x11},{x12},{x13},"     \
+    "{x14},{x15},~{memory}\""
+#endif
+
+#define LINUX_SYSTEM_CALL_LIST(_)                                            \
+  _ (read,              0,   63)                                             \
+  _ (write,             1,   64)                                             \
+  _ (close,             3,   57)                                             \
+  _ (fstat,             5,   80)                                             \
+  _ (lseek,             8,   62)                                             \
+  _ (mmap,              9,  222)                                             \
+  _ (mprotect,         10,  226)                                             \
+  _ (munmap,           11,  215)                                             \
+  _ (ioctl,            16,   29)                                             \
+  _ (sched_yield,      24,  124)                                             \
+  _ (nanosleep,        35,  101)                                             \
+  _ (sysinfo,          99,  179)                                             \
+  _ (prctl,           157,  167)                                             \
+  _ (futex,           202,   98)                                             \
+  _ (sched_getaffinity, 204, 123)                                            \
+  _ (clock_gettime,   228,  113)                                             \
+  _ (exit_group,      231,   94)                                             \
+  _ (openat,          257,   56)                                             \
+  _ (unlinkat,        263,   35)                                             \
+  _ (prlimit64,       302,  261)
+
+#ifdef LINUX_SYSTEM_CALL_ASM
+  #define OWN_FILES_AVAILABLE 1
+  #define LINUX_SYSTEM_CALL_PINNED(name, x86_64, generic)                    \
+    _Static_assert (SYS_##name == LINUX_CALL_NUMBER (x86_64, generic),       \
+                    "the system call number emitted for " #name " is not"    \
+                    " the host's");
+  LINUX_SYSTEM_CALL_LIST (LINUX_SYSTEM_CALL_PINNED)
+  #undef LINUX_SYSTEM_CALL_PINNED
+
+  #define LINUX_SYSTEM_CALL_WRAPPER(name, x86_64, generic)                   \
+    "define linkonce_odr i64 @__ada_sys_" #name "(i64 %a, i64 %b, i64 %c,"   \
+      " i64 %d, i64 %e, i64 %f) alwaysinline nounwind {\n"                   \
+    "  %r = call i64 " LINUX_SYSTEM_CALL_ASM "(i64 "                         \
+      TEXT_OF (LINUX_CALL_NUMBER (x86_64, generic)) ", i64 %a, i64 %b,"     \
+      " i64 %c, i64 %d, i64 %e, i64 %f)\n"                                   \
+    "  ret i64 %r\n"                                                         \
+    "}\n"
+
+  #define LINUX_CLOCK_REALTIME        0
+  #define LINUX_RLIMIT_STACK          3
+  #define LINUX_PR_SET_NAME          15
+  #define LINUX_EINTR                 4
+  #define LINUX_FUTEX_WAIT_PRIVATE  128
+  #define LINUX_FUTEX_WAKE_PRIVATE  129
+  #define LINUX_AFFINITY_BYTES      128
+  _Static_assert (LINUX_AFFINITY_BYTES == 16 * 8,
+                  "the affinity mask the emitted runtime counts is sixteen"
+                  " 64-bit words");
+  #define LINUX_SYSINFO_SIZE        112
+  #define LINUX_SYSINFO_TOTAL_RAM    32
+  #define LINUX_SYSINFO_MEMORY_UNIT 104
+  _Static_assert (LINUX_CLOCK_REALTIME == CLOCK_REALTIME and
+                  LINUX_RLIMIT_STACK == RLIMIT_STACK and
+                  LINUX_PR_SET_NAME == PR_SET_NAME and
+                  LINUX_EINTR == EINTR and
+                  LINUX_FUTEX_WAIT_PRIVATE == (0 | 128) and
+                  LINUX_FUTEX_WAKE_PRIVATE == (1 | 128),
+                  "a constant the emitted runtime passes to the kernel is"
+                  " not the host's");
+  _Static_assert (sizeof (struct sysinfo) == LINUX_SYSINFO_SIZE and
+                  offsetof (struct sysinfo, totalram) ==
+                    LINUX_SYSINFO_TOTAL_RAM and
+                  offsetof (struct sysinfo, mem_unit) ==
+                    LINUX_SYSINFO_MEMORY_UNIT,
+                  "the emitted runtime and <sys/sysinfo.h> disagree about"
+                  " the layout of struct sysinfo");
+
+  #define LINUX_TCGETS          21505
+  #define LINUX_STAT_BLOCK_SIZE    56
+  _Static_assert (LINUX_TCGETS == TCGETS and
+                  offsetof (struct stat, st_blksize) == LINUX_STAT_BLOCK_SIZE,
+                  "the emitted file runtime and the host disagree about a"
+                  " terminal query or the layout of struct stat");
+  #ifdef SIMD_X86_64
+    #define LINUX_O_TMPFILE_RDWR  4259842
+  #else
+    #define LINUX_O_TMPFILE_RDWR  4210690
+  #endif
+
+  #define LINUX_SYSTEM_CALL(name, a, b, c, d, e, f)                          \
+    "call i64 @__ada_sys_" #name "(i64 " a ", i64 " b ", i64 " c ", i64 " d \
+      ", i64 " e ", i64 " f ")"
+
+  static const char Runtime_System_Calls_Text[] =
+    "; ---- the kernel's system calls, one instruction each ----\n"
+    LINUX_SYSTEM_CALL_LIST (LINUX_SYSTEM_CALL_WRAPPER) "\n";
+
+#elif defined(_WIN32) and defined(SIMD_X86_64)
+  #define OWN_FILES_AVAILABLE    1
+  #define LINUX_TCGETS           21505
+  #define LINUX_O_TMPFILE_RDWR   4259842
+  #define LINUX_STAT_BLOCK_SIZE  56
+  #define LINUX_FUTEX_WAIT_PRIVATE 128
+  #define WINDOWS_STAT_BLOCK     4096
+  #define WINDOWS_PATH_UNITS     32768
+  #define WINDOWS_TEMPORARY_UNITS  261
+  #define WINDOWS_UTF_8          65001
+  #define WINDOWS_BROKEN_PIPE    109
+  #define WINDOWS_READ_ACCESS    "-2147483648"
+  #define WINDOWS_WRITE_ACCESS   "1073741824"
+  #define WINDOWS_BOTH_ACCESS    "-1073741824"
+  #define WINDOWS_APPEND_ACCESS  "1048836"
+  #define WINDOWS_SHARE_ALL      7
+  #define WINDOWS_TEMPORARY_FLAGS "67109120"
+  _Static_assert (WINDOWS_UTF_8 == CP_UTF8 and
+                  WINDOWS_BROKEN_PIPE == ERROR_BROKEN_PIPE and
+                  WINDOWS_TEMPORARY_UNITS == MAX_PATH + 1 and
+                  (int) GENERIC_READ == -2147483648 and
+                  GENERIC_WRITE == 1073741824 and
+                  (int) (GENERIC_READ | GENERIC_WRITE) == -1073741824 and
+                  (FILE_APPEND_DATA | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE)
+                    == 1048836 and
+                  (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                    == WINDOWS_SHARE_ALL and
+                  (FILE_FLAG_DELETE_ON_CLOSE | FILE_ATTRIBUTE_TEMPORARY)
+                    == 67109120 and
+                  CREATE_NEW == 1 and CREATE_ALWAYS == 2 and
+                  OPEN_EXISTING == 3 and OPEN_ALWAYS == 4 and
+                  TRUNCATE_EXISTING == 5 and FILE_TYPE_DISK == 1 and
+                  STD_INPUT_HANDLE == (DWORD) -10,
+                  "a constant the emitted file calls pass to kernel32 is not"
+                  " the host's");
+
+  #define WINDOWS_WIDE_STORAGE                                               \
+  "  %wide = alloca [" TEXT_OF (WINDOWS_PATH_UNITS) " x i16], align 2\n"
+  #define WINDOWS_WIDE_NAME(name, failed)                                    \
+  "  %np = inttoptr i64 " name " to ptr\n"                                   \
+  "  %units = call i32 @MultiByteToWideChar(i32 "                            \
+    TEXT_OF (WINDOWS_UTF_8) ", i32 0, ptr %np, i32 -1, ptr %wide, i32 "      \
+    TEXT_OF (WINDOWS_PATH_UNITS) ")\n"                                       \
+  "  %nameless = icmp eq i32 %units, 0\n"                                    \
+  "  br i1 %nameless, label %" failed ", label %named\n"                     \
+  "named:\n"
+
+  static const char Runtime_System_Calls_Text[] =
+    "; ---- the kernel calls the file layer makes, answered by kernel32 in\n"
+    ";      the kernel's terms: descriptors 0 to 2 are the standard handles,\n"
+    ";      a failure is negative, and the standard streams keep the text\n"
+    ";      mode of the console, a line ending in CR LF ----\n"
+    "@__ada_win_temporary_prefix = linkonce_odr constant [4 x i16] [i16 97, i16 100, i16 97, i16 0]\n"
+    "\n"
+    "define linkonce_odr ptr @__ada_win_handle(i64 %fd) nounwind {\n"
+    "entry:\n"
+    "  %standard = icmp ult i64 %fd, 3\n"
+    "  br i1 %standard, label %std, label %plain\n"
+    "std:\n"
+    "  %fd32 = trunc i64 %fd to i32\n"
+    "  %which = sub i32 -10, %fd32\n"
+    "  %h = call ptr @GetStdHandle(i32 %which)\n"
+    "  ret ptr %h\n"
+    "plain:\n"
+    "  %p = inttoptr i64 %fd to ptr\n"
+    "  ret ptr %p\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_win_write(ptr %h, ptr %data, i64 %n) nounwind {\n"
+    "entry:\n"
+    "  %put = alloca i32, align 4\n"
+    "  store i32 0, ptr %put\n"
+    "  %big = icmp ugt i64 %n, 1073741824\n"
+    "  %n64 = select i1 %big, i64 1073741824, i64 %n\n"
+    "  %n32 = trunc i64 %n64 to i32\n"
+    "  %ok = call i32 @WriteFile(ptr %h, ptr %data, i32 %n32, ptr %put, ptr null)\n"
+    "  %failed = icmp eq i32 %ok, 0\n"
+    "  %count32 = load i32, ptr %put\n"
+    "  %count = zext i32 %count32 to i64\n"
+    "  %r = select i1 %failed, i64 -5, i64 %count\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "; a standard stream's text up to its next line end, or that line end\n"
+    "; written as CR LF; the caller comes back for the rest\n"
+    "define linkonce_odr i64 @__ada_win_text_out(ptr %h, ptr %data, i64 %n) nounwind {\n"
+    "entry:\n"
+    "  %pair = alloca i16, align 2\n"
+    "  %nl = call ptr @memchr(ptr %data, i32 10, i64 %n)\n"
+    "  %none = icmp eq ptr %nl, null\n"
+    "  br i1 %none, label %plain, label %line\n"
+    "plain:\n"
+    "  %r = call i64 @__ada_win_write(ptr %h, ptr %data, i64 %n)\n"
+    "  ret i64 %r\n"
+    "line:\n"
+    "  %di = ptrtoint ptr %data to i64\n"
+    "  %li = ptrtoint ptr %nl to i64\n"
+    "  %before = sub i64 %li, %di\n"
+    "  %text = icmp ugt i64 %before, 0\n"
+    "  br i1 %text, label %head, label %ending\n"
+    "head:\n"
+    "  %w = call i64 @__ada_win_write(ptr %h, ptr %data, i64 %before)\n"
+    "  ret i64 %w\n"
+    "ending:\n"
+    "  store i16 2573, ptr %pair\n"
+    "  %e = call i64 @__ada_win_write(ptr %h, ptr %pair, i64 2)\n"
+    "  %whole = icmp eq i64 %e, 2\n"
+    "  %r1 = select i1 %whole, i64 1, i64 -5\n"
+    "  ret i64 %r1\n"
+    "}\n"
+    "\n"
+    "; standard input read as text: a CR before an LF is dropped\n"
+    "define linkonce_odr i64 @__ada_win_text_in(ptr %p, i64 %n) nounwind {\n"
+    "entry:\n"
+    "  br label %loop\n"
+    "loop:\n"
+    "  %i = phi i64 [ 0, %entry ], [ %i1, %next ]\n"
+    "  %o = phi i64 [ 0, %entry ], [ %o1, %next ]\n"
+    "  %done = icmp uge i64 %i, %n\n"
+    "  br i1 %done, label %out, label %look\n"
+    "look:\n"
+    "  %ip = getelementptr i8, ptr %p, i64 %i\n"
+    "  %c = load i8, ptr %ip\n"
+    "  %i1 = add i64 %i, 1\n"
+    "  %cr = icmp eq i8 %c, 13\n"
+    "  %more = icmp ult i64 %i1, %n\n"
+    "  %both = and i1 %cr, %more\n"
+    "  br i1 %both, label %peek, label %keep\n"
+    "peek:\n"
+    "  %np = getelementptr i8, ptr %p, i64 %i1\n"
+    "  %nc = load i8, ptr %np\n"
+    "  %lf = icmp eq i8 %nc, 10\n"
+    "  br i1 %lf, label %skip, label %keep\n"
+    "keep:\n"
+    "  %op = getelementptr i8, ptr %p, i64 %o\n"
+    "  store i8 %c, ptr %op\n"
+    "  %kept = add i64 %o, 1\n"
+    "  br label %next\n"
+    "skip:\n"
+    "  br label %next\n"
+    "next:\n"
+    "  %o1 = phi i64 [ %kept, %keep ], [ %o, %skip ]\n"
+    "  br label %loop\n"
+    "out:\n"
+    "  ret i64 %o\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_read(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %h = call ptr @__ada_win_handle(i64 %a)\n"
+    "  %got = alloca i32, align 4\n"
+    "  store i32 0, ptr %got\n"
+    "  %big = icmp ugt i64 %c, 1073741824\n"
+    "  %n64 = select i1 %big, i64 1073741824, i64 %c\n"
+    "  %n = trunc i64 %n64 to i32\n"
+    "  %data = inttoptr i64 %b to ptr\n"
+    "  %ok = call i32 @ReadFile(ptr %h, ptr %data, i32 %n, ptr %got, ptr null)\n"
+    "  %failed = icmp eq i32 %ok, 0\n"
+    "  br i1 %failed, label %why, label %read\n"
+    "why:\n"
+    "  %err = call i32 @GetLastError()\n"
+    "  %ended = icmp eq i32 %err, " TEXT_OF (WINDOWS_BROKEN_PIPE) "\n"
+    "  %r = select i1 %ended, i64 0, i64 -5\n"
+    "  ret i64 %r\n"
+    "read:\n"
+    "  %count32 = load i32, ptr %got\n"
+    "  %count = zext i32 %count32 to i64\n"
+    "  %input = icmp eq i64 %a, 0\n"
+    "  br i1 %input, label %text, label %out\n"
+    "text:\n"
+    "  %t = call i64 @__ada_win_text_in(ptr %data, i64 %count)\n"
+    "  ret i64 %t\n"
+    "out:\n"
+    "  ret i64 %count\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_write(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %h = call ptr @__ada_win_handle(i64 %a)\n"
+    "  %data = inttoptr i64 %b to ptr\n"
+    "  %standard = icmp ult i64 %a, 3\n"
+    "  br i1 %standard, label %text, label %raw\n"
+    "text:\n"
+    "  %t = call i64 @__ada_win_text_out(ptr %h, ptr %data, i64 %c)\n"
+    "  ret i64 %t\n"
+    "raw:\n"
+    "  %r = call i64 @__ada_win_write(ptr %h, ptr %data, i64 %c)\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_close(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %h = call ptr @__ada_win_handle(i64 %a)\n"
+    "  %ok = call i32 @CloseHandle(ptr %h)\n"
+    "  %failed = icmp eq i32 %ok, 0\n"
+    "  %r = select i1 %failed, i64 -9, i64 0\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_fstat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %s = inttoptr i64 %b to ptr\n"
+    "  %bsp = getelementptr i8, ptr %s, i64 " TEXT_OF (LINUX_STAT_BLOCK_SIZE) "\n"
+    "  store i32 " TEXT_OF (WINDOWS_STAT_BLOCK) ", ptr %bsp\n"
+    "  ret i64 0\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_ioctl(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %h = call ptr @__ada_win_handle(i64 %a)\n"
+    "  %mode = alloca i32, align 4\n"
+    "  %ok = call i32 @GetConsoleMode(ptr %h, ptr %mode)\n"
+    "  %console = icmp ne i32 %ok, 0\n"
+    "  %r = select i1 %console, i64 0, i64 -25\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_lseek(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %pos = alloca i64, align 8\n"
+    "  %h = call ptr @__ada_win_handle(i64 %a)\n"
+    "  %type = call i32 @GetFileType(ptr %h)\n"
+    "  %disk = icmp eq i32 %type, 1\n"
+    "  br i1 %disk, label %seek, label %refuse\n"
+    "refuse:\n"
+    "  ret i64 -29\n"
+    "seek:\n"
+    "  %whence = trunc i64 %c to i32\n"
+    "  %ok = call i32 @SetFilePointerEx(ptr %h, i64 %b, ptr %pos, i32 %whence)\n"
+    "  %failed = icmp eq i32 %ok, 0\n"
+    "  %at = load i64, ptr %pos\n"
+    "  %r = select i1 %failed, i64 -22, i64 %at\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "; C's open flags as CreateFileW's access and disposition; the unnamed\n"
+    "; temporary file is a fresh name in the temporary directory, deleted\n"
+    "; when it is closed\n"
+    "define linkonce_odr i64 @__ada_sys_openat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    WINDOWS_WIDE_STORAGE
+    "  %dir = alloca [" TEXT_OF (WINDOWS_TEMPORARY_UNITS) " x i16], align 2\n"
+    "  %file = alloca [" TEXT_OF (WINDOWS_TEMPORARY_UNITS) " x i16], align 2\n"
+    "  %temporary = icmp eq i64 %c, " TEXT_OF (LINUX_O_TMPFILE_RDWR) "\n"
+    "  br i1 %temporary, label %unnamed, label %name\n"
+    "name:\n"
+    WINDOWS_WIDE_NAME ("%b", "refuse")
+    "  %acc = and i64 %c, 3\n"
+    "  %write_only = icmp eq i64 %acc, 1\n"
+    "  %both = icmp eq i64 %acc, 2\n"
+    "  %reads = xor i1 %write_only, true\n"
+    "  %writes = or i1 %write_only, %both\n"
+    "  %appendb = and i64 %c, 1024\n"
+    "  %appends = icmp ne i64 %appendb, 0\n"
+    "  %ra = select i1 %reads, i32 " WINDOWS_READ_ACCESS ", i32 0\n"
+    "  %wkind = select i1 %appends, i32 " WINDOWS_APPEND_ACCESS ", i32 " WINDOWS_WRITE_ACCESS "\n"
+    "  %wa = select i1 %writes, i32 %wkind, i32 0\n"
+    "  %access = or i32 %ra, %wa\n"
+    "  %creatb = and i64 %c, 64\n"
+    "  %creat = icmp ne i64 %creatb, 0\n"
+    "  %exclb = and i64 %c, 128\n"
+    "  %excl = icmp ne i64 %exclb, 0\n"
+    "  %truncb = and i64 %c, 512\n"
+    "  %trunc = icmp ne i64 %truncb, 0\n"
+    "  %d_plain = select i1 %trunc, i32 5, i32 3\n"
+    "  %d_creat0 = select i1 %trunc, i32 2, i32 4\n"
+    "  %d_creat = select i1 %excl, i32 1, i32 %d_creat0\n"
+    "  %disposition = select i1 %creat, i32 %d_creat, i32 %d_plain\n"
+    "  %h = call ptr @CreateFileW(ptr %wide, i32 %access, i32 " TEXT_OF (WINDOWS_SHARE_ALL) ", ptr null, i32 %disposition, i32 128, ptr null)\n"
+    "  br label %opened\n"
+    "unnamed:\n"
+    "  %dn = call i32 @GetTempPathW(i32 " TEXT_OF (WINDOWS_TEMPORARY_UNITS) ", ptr %dir)\n"
+    "  %nodir = icmp eq i32 %dn, 0\n"
+    "  br i1 %nodir, label %refuse, label %fresh\n"
+    "fresh:\n"
+    "  %un = call i32 @GetTempFileNameW(ptr %dir, ptr @__ada_win_temporary_prefix, i32 0, ptr %file)\n"
+    "  %nofile = icmp eq i32 %un, 0\n"
+    "  br i1 %nofile, label %refuse, label %create\n"
+    "create:\n"
+    "  %th = call ptr @CreateFileW(ptr %file, i32 " WINDOWS_BOTH_ACCESS ", i32 " TEXT_OF (WINDOWS_SHARE_ALL) ", ptr null, i32 2, i32 " WINDOWS_TEMPORARY_FLAGS ", ptr null)\n"
+    "  br label %opened\n"
+    "opened:\n"
+    "  %hv = phi ptr [ %h, %named ], [ %th, %create ]\n"
+    "  %hi = ptrtoint ptr %hv to i64\n"
+    "  %invalid = icmp eq i64 %hi, -1\n"
+    "  br i1 %invalid, label %refuse, label %ok\n"
+    "ok:\n"
+    "  ret i64 %hi\n"
+    "refuse:\n"
+    "  ret i64 -2\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_unlinkat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    WINDOWS_WIDE_STORAGE
+    WINDOWS_WIDE_NAME ("%b", "refuse")
+    "  %directory = icmp eq i64 %c, 512\n"
+    "  br i1 %directory, label %rmdir, label %delete\n"
+    "rmdir:\n"
+    "  %rd = call i32 @RemoveDirectoryW(ptr %wide)\n"
+    "  br label %judge\n"
+    "delete:\n"
+    "  %rf = call i32 @DeleteFileW(ptr %wide)\n"
+    "  br label %judge\n"
+    "judge:\n"
+    "  %ok = phi i32 [ %rd, %rmdir ], [ %rf, %delete ]\n"
+    "  %failed = icmp eq i32 %ok, 0\n"
+    "  br i1 %failed, label %refuse, label %done\n"
+    "done:\n"
+    "  ret i64 0\n"
+    "refuse:\n"
+    "  ret i64 -2\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_clock_gettime(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %ts = inttoptr i64 %b to ptr\n"
+    "  store i64 0, ptr %ts\n"
+    "  %nsp = getelementptr i8, ptr %ts, i64 8\n"
+    "  %_q = call i32 @QueryPerformanceCounter(ptr %nsp)\n"
+    "  ret i64 0\n"
+    "}\n"
+    "\n"
+    "; a contended word lock yields its processor and looks again\n"
+    "define linkonce_odr i64 @__ada_sys_futex(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %wait = icmp eq i64 %b, " TEXT_OF (LINUX_FUTEX_WAIT_PRIVATE) "\n"
+    "  br i1 %wait, label %yield, label %out\n"
+    "yield:\n"
+    "  %_y = call i32 @SwitchToThread()\n"
+    "  br label %out\n"
+    "out:\n"
+    "  ret i64 0\n"
+    "}\n\n";
+#elif defined(__APPLE__)
+  #define OWN_FILES_AVAILABLE       1
+  #define LINUX_TCGETS              21505
+  #define LINUX_STAT_BLOCK_SIZE     56
+  #define LINUX_O_TMPFILE_RDWR      4259842
+  #define LINUX_FUTEX_WAIT_PRIVATE  128
+  #define POSIX_O_CREAT             512
+  #define POSIX_O_EXCL              2048
+  #define POSIX_O_TRUNC             1024
+  #define POSIX_O_APPEND            8
+  #define POSIX_O_CLOEXEC           16777216
+  #define POSIX_CLOCK_MONOTONIC     6
+  #define POSIX_ERROR_LOCATION      "@__error"
+  #define POSIX_STAT_BLOCK          4096
+  _Static_assert (POSIX_O_CREAT == O_CREAT and POSIX_O_EXCL == O_EXCL and
+                  POSIX_O_TRUNC == O_TRUNC and POSIX_O_APPEND == O_APPEND and
+                  POSIX_O_CLOEXEC == O_CLOEXEC and
+                  O_RDONLY == 0 and O_WRONLY == 1 and O_RDWR == 2 and
+                  SEEK_SET == 0 and SEEK_CUR == 1 and SEEK_END == 2 and
+                  POSIX_CLOCK_MONOTONIC == CLOCK_MONOTONIC,
+                  "a constant the emitted file calls pass to the C library is"
+                  " not the host's");
+
+  #define POSIX_ERRNO_RESULT(call_result)                                    \
+  "  %failed = icmp slt i64 " call_result ", 0\n"                            \
+  "  br i1 %failed, label %why, label %done\n"                               \
+  "why:\n"                                                                   \
+  "  %errno_at = call ptr " POSIX_ERROR_LOCATION "()\n"                      \
+  "  %errno = load i32, ptr %errno_at\n"                                     \
+  "  %errno_wide = sext i32 %errno to i64\n"                                 \
+  "  %negated = sub i64 0, %errno_wide\n"                                    \
+  "  ret i64 %negated\n"                                                     \
+  "done:\n"                                                                  \
+  "  ret i64 " call_result "\n"
+
+  static const char Runtime_System_Calls_Text[] =
+    "; ---- the kernel calls the file layer makes, answered by the system's\n"
+    ";      unbuffered calls in the kernel's terms: a failure is the\n"
+    ";      negated error number ----\n"
+    "define linkonce_odr i64 @__ada_sys_read(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %fd = trunc i64 %a to i32\n"
+    "  %p = inttoptr i64 %b to ptr\n"
+    "  %r = call i64 @read(i32 %fd, ptr %p, i64 %c)\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_write(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %fd = trunc i64 %a to i32\n"
+    "  %p = inttoptr i64 %b to ptr\n"
+    "  %r = call i64 @write(i32 %fd, ptr %p, i64 %c)\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_close(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %fd = trunc i64 %a to i32\n"
+    "  %r32 = call i32 @close(i32 %fd)\n"
+    "  %r = sext i32 %r32 to i64\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "; the C library's own buffer for a file is a page\n"
+    "define linkonce_odr i64 @__ada_sys_fstat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %s = inttoptr i64 %b to ptr\n"
+    "  %bsp = getelementptr i8, ptr %s, i64 " TEXT_OF (LINUX_STAT_BLOCK_SIZE) "\n"
+    "  store i32 " TEXT_OF (POSIX_STAT_BLOCK) ", ptr %bsp\n"
+    "  ret i64 0\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_ioctl(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %fd = trunc i64 %a to i32\n"
+    "  %t = call i32 @isatty(i32 %fd)\n"
+    "  %terminal = icmp ne i32 %t, 0\n"
+    "  %r = select i1 %terminal, i64 0, i64 -25\n"
+    "  ret i64 %r\n"
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_lseek(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %fd = trunc i64 %a to i32\n"
+    "  %whence = trunc i64 %c to i32\n"
+    "  %r = call i64 @lseek(i32 %fd, i64 %b, i32 %whence)\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "; the kernel's open flags in the C library's spelling; there is no\n"
+    "; unnamed temporary file, so the file layer names one\n"
+    "define linkonce_odr i64 @__ada_sys_openat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %unnamed = icmp eq i64 %c, " TEXT_OF (LINUX_O_TMPFILE_RDWR) "\n"
+    "  br i1 %unnamed, label %refuse, label %open\n"
+    "refuse:\n"
+    "  ret i64 -2\n"
+    "open:\n"
+    "  %acc = and i64 %c, 3\n"
+    "  %creatb = and i64 %c, 64\n"
+    "  %creat = icmp ne i64 %creatb, 0\n"
+    "  %exclb = and i64 %c, 128\n"
+    "  %excl = icmp ne i64 %exclb, 0\n"
+    "  %truncb = and i64 %c, 512\n"
+    "  %trunc = icmp ne i64 %truncb, 0\n"
+    "  %appendb = and i64 %c, 1024\n"
+    "  %append = icmp ne i64 %appendb, 0\n"
+    "  %fc = select i1 %creat, i64 " TEXT_OF (POSIX_O_CREAT) ", i64 0\n"
+    "  %fe = select i1 %excl, i64 " TEXT_OF (POSIX_O_EXCL) ", i64 0\n"
+    "  %ft = select i1 %trunc, i64 " TEXT_OF (POSIX_O_TRUNC) ", i64 0\n"
+    "  %fa = select i1 %append, i64 " TEXT_OF (POSIX_O_APPEND) ", i64 0\n"
+    "  %f1 = or i64 %acc, %fc\n"
+    "  %f2 = or i64 %f1, %fe\n"
+    "  %f3 = or i64 %f2, %ft\n"
+    "  %f4 = or i64 %f3, %fa\n"
+    "  %f5 = or i64 %f4, " TEXT_OF (POSIX_O_CLOEXEC) "\n"
+    "  %flags = trunc i64 %f5 to i32\n"
+    "  %mode = trunc i64 %d to i32\n"
+    "  %name = inttoptr i64 %b to ptr\n"
+    "  %r32 = call i32 (ptr, i32, ...) @open(ptr %name, i32 %flags, i32 %mode)\n"
+    "  %r = sext i32 %r32 to i64\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_unlinkat(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %name = inttoptr i64 %b to ptr\n"
+    "  %directory = icmp eq i64 %c, 512\n"
+    "  br i1 %directory, label %rmdir, label %unlink\n"
+    "rmdir:\n"
+    "  %rd = call i32 @rmdir(ptr %name)\n"
+    "  br label %judge\n"
+    "unlink:\n"
+    "  %ru = call i32 @unlink(ptr %name)\n"
+    "  br label %judge\n"
+    "judge:\n"
+    "  %r32 = phi i32 [ %rd, %rmdir ], [ %ru, %unlink ]\n"
+    "  %r = sext i32 %r32 to i64\n"
+    POSIX_ERRNO_RESULT ("%r")
+    "}\n"
+    "\n"
+    "define linkonce_odr i64 @__ada_sys_clock_gettime(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "  %ts = inttoptr i64 %b to ptr\n"
+    "  %_c = call i32 @clock_gettime(i32 " TEXT_OF (POSIX_CLOCK_MONOTONIC) ", ptr %ts)\n"
+    "  ret i64 0\n"
+    "}\n"
+    "\n"
+    "; a contended word lock yields its processor and looks again\n"
+    "define linkonce_odr i64 @__ada_sys_futex(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) nounwind {\n"
+    "entry:\n"
+    "  %wait = icmp eq i64 %b, " TEXT_OF (LINUX_FUTEX_WAIT_PRIVATE) "\n"
+    "  br i1 %wait, label %yield, label %out\n"
+    "yield:\n"
+    "  %_y = call i32 @sched_yield()\n"
+    "  br label %out\n"
+    "out:\n"
+    "  ret i64 0\n"
+    "}\n\n";
+#else
+  static const char Runtime_System_Calls_Text[] = "";
+#endif
+
+#ifdef OWN_FILES_AVAILABLE
+static const char Runtime_Own_Files_Text[] =
+  "; ---- buffered files over the kernel's descriptors, with the C library's\n"
+  ";      stdio for a model: the same calls, the same buffer sizes and the\n"
+  ";      same moments of writing, so output interleaves as it did ----\n"
+  "; a file: { i32 descriptor, i32 flags, i32 lock, i32 pushed back,\n"
+  ";   ptr buffer, i64 capacity, i64 read cursor, i64 read end,\n"
+  ";   i64 write fill, ptr next open file, i64 spare }\n"
+  "; flags: 1 read, 2 write, 4 append, 8 end of file, 16 error,\n"
+  ";   32 line buffered, 64 unbuffered, 128 standard, 256 ready\n"
+  "@__ada_file_stdin = linkonce_odr global { i32, i32, i32, i32, ptr, i64, i64, i64, i64, ptr, i64 } { i32 0, i32 129, i32 0, i32 -1, ptr null, i64 0, i64 0, i64 0, i64 0, ptr null, i64 0 }, align 8\n"
+  "@__ada_file_stdout = linkonce_odr global { i32, i32, i32, i32, ptr, i64, i64, i64, i64, ptr, i64 } { i32 1, i32 130, i32 0, i32 -1, ptr null, i64 0, i64 0, i64 0, i64 0, ptr null, i64 0 }, align 8\n"
+  "@__ada_file_stderr = linkonce_odr global { i32, i32, i32, i32, ptr, i64, i64, i64, i64, ptr, i64 } { i32 2, i32 194, i32 0, i32 -1, ptr null, i64 0, i64 0, i64 0, i64 0, ptr null, i64 0 }, align 8\n"
+  "@__ada_file_list = linkonce_odr global ptr null, align 8\n"
+  "@__ada_file_list_lock = linkonce_odr global i32 0, align 4\n"
+  "@__ada_file_temporary_directory = linkonce_odr constant [5 x i8] c\"/tmp\\00\"\n"
+  "@__ada_file_temporary_count = linkonce_odr global i32 0, align 4\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_stdin() nounwind willreturn memory(none) {\n"
+  "  ret i64 ptrtoint (ptr @__ada_file_stdin to i64)\n"
+  "}\n"
+  "define linkonce_odr i64 @__ada_stdout() nounwind willreturn memory(none) {\n"
+  "  ret i64 ptrtoint (ptr @__ada_file_stdout to i64)\n"
+  "}\n"
+  "define linkonce_odr i64 @__ada_stderr() nounwind willreturn memory(none) {\n"
+  "  ret i64 ptrtoint (ptr @__ada_file_stderr to i64)\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr void @__ada_word_lock(ptr %w) nounwind {\n"
+  "entry:\n"
+  "  %fast = cmpxchg ptr %w, i32 0, i32 1 acquire monotonic\n"
+  "  %got = extractvalue { i32, i1 } %fast, 1\n"
+  "  br i1 %got, label %out, label %contend\n"
+  "contend:\n"
+  "  %was = atomicrmw xchg ptr %w, i32 2 acquire\n"
+  "  %won = icmp eq i32 %was, 0\n"
+  "  br i1 %won, label %out, label %sleep\n"
+  "sleep:\n"
+  "  %wi = ptrtoint ptr %w to i64\n"
+  "  %_fw = call i64 @__ada_sys_futex(i64 %wi, i64 128, i64 2, i64 0, i64 0, i64 0)\n"
+  "  br label %contend\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr void @__ada_word_unlock(ptr %w) nounwind {\n"
+  "entry:\n"
+  "  %was = atomicrmw xchg ptr %w, i32 0 release\n"
+  "  %slept = icmp eq i32 %was, 2\n"
+  "  br i1 %slept, label %wake, label %out\n"
+  "wake:\n"
+  "  %wi = ptrtoint ptr %w to i64\n"
+  "  %_fk = call i64 @__ada_sys_futex(i64 %wi, i64 129, i64 1, i64 0, i64 0, i64 0)\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; every byte of %n at %data to descriptor %fd, through interruptions and\n"
+  "; short writes; 0, or -1 when the kernel refuses\n"
+  "define linkonce_odr i32 @__ada_descriptor_write(i32 %fd, ptr %data, i64 %n) nounwind {\n"
+  "entry:\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  br label %more\n"
+  "more:\n"
+  "  %p = phi ptr [ %data, %entry ], [ %p1, %wrote ], [ %p, %retry ]\n"
+  "  %left = phi i64 [ %n, %entry ], [ %left1, %wrote ], [ %left, %retry ]\n"
+  "  %done = icmp sle i64 %left, 0\n"
+  "  br i1 %done, label %ok, label %write\n"
+  "write:\n"
+  "  %pi = ptrtoint ptr %p to i64\n"
+  "  %r = call i64 @__ada_sys_write(i64 %fdw, i64 %pi, i64 %left, i64 0, i64 0, i64 0)\n"
+  "  %interrupted = icmp eq i64 %r, -4\n"
+  "  br i1 %interrupted, label %retry, label %judge\n"
+  "retry:\n"
+  "  br label %more\n"
+  "judge:\n"
+  "  %failed = icmp slt i64 %r, 1\n"
+  "  br i1 %failed, label %bad, label %wrote\n"
+  "wrote:\n"
+  "  %p1 = getelementptr i8, ptr %p, i64 %r\n"
+  "  %left1 = sub i64 %left, %r\n"
+  "  br label %more\n"
+  "ok:\n"
+  "  ret i32 0\n"
+  "bad:\n"
+  "  ret i32 -1\n"
+  "}\n"
+  "\n"
+  "; up to %n bytes from %fd into %data, past interruptions: the count, 0 at\n"
+  "; the end, or -1\n"
+  "define linkonce_odr i64 @__ada_descriptor_read(i32 %fd, ptr %data, i64 %n) nounwind {\n"
+  "entry:\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %di = ptrtoint ptr %data to i64\n"
+  "  br label %again\n"
+  "again:\n"
+  "  %r = call i64 @__ada_sys_read(i64 %fdw, i64 %di, i64 %n, i64 0, i64 0, i64 0)\n"
+  "  %interrupted = icmp eq i64 %r, -4\n"
+  "  br i1 %interrupted, label %again, label %judge\n"
+  "judge:\n"
+  "  %failed = icmp slt i64 %r, 0\n"
+  "  %result = select i1 %failed, i64 -1, i64 %r\n"
+  "  ret i64 %result\n"
+  "}\n"
+  "\n"
+  "; the first use of a file settles its buffer: none for an unbuffered\n"
+  "; one, the descriptor's preferred block otherwise, line by line on a\n"
+  "; terminal\n"
+  "define linkonce_odr void @__ada_file_ready(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %readyb = and i32 %flags, 256\n"
+  "  %is_ready = icmp ne i32 %readyb, 0\n"
+  "  br i1 %is_ready, label %out, label %settle\n"
+  "settle:\n"
+  "  %stat = alloca [144 x i8], align 8\n"
+  "  %termios = alloca [64 x i8], align 8\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %ti = ptrtoint ptr %termios to i64\n"
+  "  %tty_rc = call i64 @__ada_sys_ioctl(i64 %fdw, i64 " TEXT_OF (LINUX_TCGETS) ", i64 %ti, i64 0, i64 0, i64 0)\n"
+  "  %tty = icmp eq i64 %tty_rc, 0\n"
+  "  %line = select i1 %tty, i32 32, i32 0\n"
+  "  %si = ptrtoint ptr %stat to i64\n"
+  "  %st_rc = call i64 @__ada_sys_fstat(i64 %fdw, i64 %si, i64 0, i64 0, i64 0, i64 0)\n"
+  "  %st_ok = icmp eq i64 %st_rc, 0\n"
+  "  %bsp = getelementptr i8, ptr %stat, i64 56\n"
+  "  %bs32 = load i32, ptr %bsp\n"
+  "  %bs = sext i32 %bs32 to i64\n"
+  "  %bs_ok = icmp sgt i64 %bs, 0\n"
+  "  %use_bs = and i1 %st_ok, %bs_ok\n"
+  "  %block = select i1 %use_bs, i64 %bs, i64 8192\n"
+  "  %unbufb = and i32 %flags, 64\n"
+  "  %unbuffered = icmp ne i32 %unbufb, 0\n"
+  "  %cap = select i1 %unbuffered, i64 0, i64 %block\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  store i64 %cap, ptr %capp\n"
+  "  %f1 = or i32 %flags, 256\n"
+  "  %f2 = or i32 %f1, %line\n"
+  "  store i32 %f2, ptr %flp\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; the buffer of a buffered file, made on first need; null when there is\n"
+  "; no room for it, and the file then goes unbuffered.  Whatever buffers\n"
+  "; is flushed as the process ends, even under a main that is not Ada\n"
+  "define linkonce_odr ptr @__ada_file_buffer(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %bp = getelementptr i8, ptr %f, i64 16\n"
+  "  %b = load ptr, ptr %bp\n"
+  "  %have = icmp ne ptr %b, null\n"
+  "  br i1 %have, label %out, label %make\n"
+  "make:\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  %cap = load i64, ptr %capp\n"
+  "  %none = icmp eq i64 %cap, 0\n"
+  "  br i1 %none, label %out, label %alloc\n"
+  "alloc:\n"
+  "  %nb = call ptr @malloc(i64 %cap)\n"
+  "  store ptr %nb, ptr %bp\n"
+  "  %failed = icmp eq ptr %nb, null\n"
+  "  br i1 %failed, label %unbuffer, label %out\n"
+  "unbuffer:\n"
+  "  store i64 0, ptr %capp\n"
+  "  br label %out\n"
+  "out:\n"
+  "  %r = phi ptr [ %b, %entry ], [ null, %make ], [ %nb, %alloc ], [ null, %unbuffer ]\n"
+  "  ret ptr %r\n"
+  "}\n"
+  " @llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__ada_files_flush_all, ptr null }]\n"
+  "\n"
+  "; what is written and waiting goes out; what was read ahead and not\n"
+  "; consumed is given back by seeking over it, where the file can seek\n"
+  "define linkonce_odr i32 @__ada_file_flush_locked(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %pending = icmp sgt i64 %wpos, 0\n"
+  "  br i1 %pending, label %write, label %reads\n"
+  "write:\n"
+  "  store i64 0, ptr %wpp\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %bp = getelementptr i8, ptr %f, i64 16\n"
+  "  %b = load ptr, ptr %bp\n"
+  "  %rc = call i32 @__ada_descriptor_write(i32 %fd, ptr %b, i64 %wpos)\n"
+  "  %bad = icmp ne i32 %rc, 0\n"
+  "  br i1 %bad, label %error, label %reads\n"
+  "error:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %fe = or i32 %flags, 16\n"
+  "  store i32 %fe, ptr %flp\n"
+  "  ret i32 -1\n"
+  "reads:\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %unread = sub i64 %rend, %rpos\n"
+  "  %pushed = icmp sge i32 %pb, 0\n"
+  "  %pushed64 = zext i1 %pushed to i64\n"
+  "  %ahead = add i64 %unread, %pushed64\n"
+  "  %any = icmp sgt i64 %ahead, 0\n"
+  "  br i1 %any, label %give_back, label %ok\n"
+  "give_back:\n"
+  "  %fd2 = load i32, ptr %f\n"
+  "  %fdw = sext i32 %fd2 to i64\n"
+  "  %back = sub i64 0, %ahead\n"
+  "  %sk = call i64 @__ada_sys_lseek(i64 %fdw, i64 %back, i64 1, i64 0, i64 0, i64 0)\n"
+  "  %sought = icmp sge i64 %sk, 0\n"
+  "  br i1 %sought, label %discard, label %ok\n"
+  "discard:\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 0, ptr %rep\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  br label %ok\n"
+  "ok:\n"
+  "  ret i32 0\n"
+  "}\n"
+  "\n"
+  "; a file about to be written stops reading ahead\n"
+  "define linkonce_odr void @__ada_file_to_write(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %unread = icmp ne i64 %rend, %rpos\n"
+  "  %pushed = icmp sge i32 %pb, 0\n"
+  "  %ahead = or i1 %unread, %pushed\n"
+  "  br i1 %ahead, label %drop, label %out\n"
+  "drop:\n"
+  "  %_r = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 0, ptr %rep\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_fflush(i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %all = icmp eq i64 %stream, 0\n"
+  "  br i1 %all, label %every, label %one\n"
+  "every:\n"
+  "  call void @__ada_files_flush_all()\n"
+  "  ret i32 0\n"
+  "one:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %rc = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 %rc\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr void @__ada_file_flush_writes(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %pending = icmp sgt i64 %wpos, 0\n"
+  "  br i1 %pending, label %write, label %out\n"
+  "write:\n"
+  "  %_r = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  br label %out\n"
+  "out:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; at the end of the program, and before a terminal is read: everything\n"
+  "; written and waiting goes out\n"
+  "define linkonce_odr void @__ada_files_flush_all() nounwind {\n"
+  "entry:\n"
+  "  call void @__ada_file_flush_writes(ptr @__ada_file_stdout)\n"
+  "  call void @__ada_file_flush_writes(ptr @__ada_file_stderr)\n"
+  "  call void @__ada_word_lock(ptr @__ada_file_list_lock)\n"
+  "  %first = load ptr, ptr @__ada_file_list\n"
+  "  br label %walk\n"
+  "walk:\n"
+  "  %f = phi ptr [ %first, %entry ], [ %next, %step ]\n"
+  "  %end = icmp eq ptr %f, null\n"
+  "  br i1 %end, label %out, label %step\n"
+  "step:\n"
+  "  call void @__ada_file_flush_writes(ptr %f)\n"
+  "  %np = getelementptr i8, ptr %f, i64 56\n"
+  "  %next = load ptr, ptr %np\n"
+  "  br label %walk\n"
+  "out:\n"
+  "  call void @__ada_word_unlock(ptr @__ada_file_list_lock)\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_fputc(i32 %c, i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %may = call i1 @__ada_file_may(ptr %f, i32 2)\n"
+  "  br i1 %may, label %go, label %failed\n"
+  "go:\n"
+  "  call void @__ada_file_ready(ptr %f)\n"
+  "  call void @__ada_file_to_write(ptr %f)\n"
+  "  %byte = trunc i32 %c to i8\n"
+  "  %b = call ptr @__ada_file_buffer(ptr %f)\n"
+  "  %direct = icmp eq ptr %b, null\n"
+  "  br i1 %direct, label %unbuffered, label %buffered\n"
+  "unbuffered:\n"
+  "  %one = alloca i8, align 1\n"
+  "  store i8 %byte, ptr %one\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %rc = call i32 @__ada_descriptor_write(i32 %fd, ptr %one, i64 1)\n"
+  "  %ubad = icmp ne i32 %rc, 0\n"
+  "  br i1 %ubad, label %failed, label %done\n"
+  "buffered:\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %cap = load i64, ptr %capp\n"
+  "  %full = icmp sge i64 %wpos, %cap\n"
+  "  br i1 %full, label %make_room, label %store\n"
+  "make_room:\n"
+  "  %fr = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %fbad = icmp ne i32 %fr, 0\n"
+  "  br i1 %fbad, label %failed, label %store\n"
+  "store:\n"
+  "  %w = load i64, ptr %wpp\n"
+  "  %slot = getelementptr i8, ptr %b, i64 %w\n"
+  "  store i8 %byte, ptr %slot\n"
+  "  %w1 = add i64 %w, 1\n"
+  "  store i64 %w1, ptr %wpp\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %lineb = and i32 %flags, 32\n"
+  "  %line = icmp ne i32 %lineb, 0\n"
+  "  %newline = icmp eq i8 %byte, 10\n"
+  "  %eol = and i1 %line, %newline\n"
+  "  br i1 %eol, label %line_out, label %done\n"
+  "line_out:\n"
+  "  %lr = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %lbad = icmp ne i32 %lr, 0\n"
+  "  br i1 %lbad, label %failed, label %done\n"
+  "done:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  %r = and i32 %c, 255\n"
+  "  ret i32 %r\n"
+  "failed:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 -1\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_fwrite(i64 %data, i64 %size, i64 %count, i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %total = mul i64 %size, %count\n"
+  "  %nothing = icmp eq i64 %total, 0\n"
+  "  br i1 %nothing, label %zero, label %go\n"
+  "zero:\n"
+  "  ret i64 0\n"
+  "go:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %src = inttoptr i64 %data to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %may = call i1 @__ada_file_may(ptr %f, i32 2)\n"
+  "  br i1 %may, label %permitted, label %failed\n"
+  "permitted:\n"
+  "  call void @__ada_file_ready(ptr %f)\n"
+  "  call void @__ada_file_to_write(ptr %f)\n"
+  "  %b = call ptr @__ada_file_buffer(ptr %f)\n"
+  "  %direct = icmp eq ptr %b, null\n"
+  "  %fd = load i32, ptr %f\n"
+  "  br i1 %direct, label %unbuffered, label %buffered\n"
+  "unbuffered:\n"
+  "  %urc = call i32 @__ada_descriptor_write(i32 %fd, ptr %src, i64 %total)\n"
+  "  %ubad = icmp ne i32 %urc, 0\n"
+  "  br i1 %ubad, label %failed, label %done\n"
+  "buffered:\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %cap = load i64, ptr %capp\n"
+  "  %space = sub i64 %cap, %wpos\n"
+  "  %fits = icmp ule i64 %total, %space\n"
+  "  %first = select i1 %fits, i64 %total, i64 %space\n"
+  "  %at = getelementptr i8, ptr %b, i64 %wpos\n"
+  "  call void @llvm.memcpy.p0.p0.i64(ptr %at, ptr %src, i64 %first, i1 false)\n"
+  "  %w1 = add i64 %wpos, %first\n"
+  "  store i64 %w1, ptr %wpp\n"
+  "  %rest = sub i64 %total, %first\n"
+  "  %more = icmp ne i64 %rest, 0\n"
+  "  br i1 %more, label %overflow, label %settled\n"
+  "overflow:\n"
+  "  %orc = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %obad = icmp ne i32 %orc, 0\n"
+  "  br i1 %obad, label %failed, label %blocks\n"
+  "blocks:\n"
+  "  %tail = urem i64 %rest, %cap\n"
+  "  %big = icmp uge i64 %cap, 128\n"
+  "  %kept = select i1 %big, i64 %tail, i64 0\n"
+  "  %straight = sub i64 %rest, %kept\n"
+  "  %from = getelementptr i8, ptr %src, i64 %first\n"
+  "  %has_straight = icmp ne i64 %straight, 0\n"
+  "  br i1 %has_straight, label %write_straight, label %buffer_tail\n"
+  "write_straight:\n"
+  "  %src_rc = call i32 @__ada_descriptor_write(i32 %fd, ptr %from, i64 %straight)\n"
+  "  %sbad = icmp ne i32 %src_rc, 0\n"
+  "  br i1 %sbad, label %failed, label %buffer_tail\n"
+  "buffer_tail:\n"
+  "  %has_tail = icmp ne i64 %kept, 0\n"
+  "  br i1 %has_tail, label %copy_tail, label %settled\n"
+  "copy_tail:\n"
+  "  %tfrom = getelementptr i8, ptr %from, i64 %straight\n"
+  "  call void @llvm.memcpy.p0.p0.i64(ptr %b, ptr %tfrom, i64 %kept, i1 false)\n"
+  "  store i64 %kept, ptr %wpp\n"
+  "  br label %settled\n"
+  "settled:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %lineb = and i32 %flags, 32\n"
+  "  %line = icmp ne i32 %lineb, 0\n"
+  "  br i1 %line, label %line_check, label %done\n"
+  "line_check:\n"
+  "  %nl = call ptr @memchr(ptr %src, i32 10, i64 %total)\n"
+  "  %has_nl = icmp ne ptr %nl, null\n"
+  "  br i1 %has_nl, label %line_out, label %done\n"
+  "line_out:\n"
+  "  %lrc = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %lbad = icmp ne i32 %lrc, 0\n"
+  "  br i1 %lbad, label %failed, label %done\n"
+  "done:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 %count\n"
+  "failed:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 0\n"
+  "}\n"
+  "\n"
+  "; a read from a terminal first sends what the program wrote, so a prompt\n"
+  "; is seen before its answer is awaited\n"
+  "define linkonce_odr i64 @__ada_file_fill(ptr %f, ptr %into, i64 %n) nounwind {\n"
+  "entry:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %interactive = and i32 %flags, 96\n"
+  "  %eager = icmp ne i32 %interactive, 0\n"
+  "  br i1 %eager, label %prompt, label %read\n"
+  "prompt:\n"
+  "  %is_stdout = icmp eq ptr %f, @__ada_file_stdout\n"
+  "  br i1 %is_stdout, label %read, label %send\n"
+  "send:\n"
+  "  call void @__ada_file_flush_writes(ptr @__ada_file_stdout)\n"
+  "  br label %read\n"
+  "read:\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %r = call i64 @__ada_descriptor_read(i32 %fd, ptr %into, i64 %n)\n"
+  "  %ended = icmp eq i64 %r, 0\n"
+  "  %failed = icmp slt i64 %r, 0\n"
+  "  %mark_end = select i1 %ended, i32 8, i32 0\n"
+  "  %mark_err = select i1 %failed, i32 16, i32 0\n"
+  "  %marks = or i32 %mark_end, %mark_err\n"
+  "  %flags2 = load i32, ptr %flp\n"
+  "  %flags3 = or i32 %flags2, %marks\n"
+  "  store i32 %flags3, ptr %flp\n"
+  "  ret i64 %r\n"
+  "}\n"
+  "\n"
+  "; the next byte of a locked, ready file, or -1\n"
+  "define linkonce_odr i32 @__ada_file_getc_locked(ptr %f) nounwind {\n"
+  "entry:\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %writing = icmp sgt i64 %wpos, 0\n"
+  "  br i1 %writing, label %switch, label %pushed\n"
+  "switch:\n"
+  "  %_s = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  br label %pushed\n"
+  "pushed:\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %has_pb = icmp sge i32 %pb, 0\n"
+  "  br i1 %has_pb, label %take_pb, label %buffered\n"
+  "take_pb:\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  ret i32 %pb\n"
+  "buffered:\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %has = icmp slt i64 %rpos, %rend\n"
+  "  %b = call ptr @__ada_file_buffer(ptr %f)\n"
+  "  br i1 %has, label %take, label %refill\n"
+  "take:\n"
+  "  %p = getelementptr i8, ptr %b, i64 %rpos\n"
+  "  %c = load i8, ptr %p\n"
+  "  %rpos1 = add i64 %rpos, 1\n"
+  "  store i64 %rpos1, ptr %rpp\n"
+  "  %cw = zext i8 %c to i32\n"
+  "  ret i32 %cw\n"
+  "refill:\n"
+  "  %direct = icmp eq ptr %b, null\n"
+  "  br i1 %direct, label %single, label %block\n"
+  "single:\n"
+  "  %one = alloca i8, align 1\n"
+  "  %r1 = call i64 @__ada_file_fill(ptr %f, ptr %one, i64 1)\n"
+  "  %got1 = icmp eq i64 %r1, 1\n"
+  "  br i1 %got1, label %single_ok, label %none\n"
+  "single_ok:\n"
+  "  %c1 = load i8, ptr %one\n"
+  "  %c1w = zext i8 %c1 to i32\n"
+  "  ret i32 %c1w\n"
+  "block:\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  %cap = load i64, ptr %capp\n"
+  "  %rn = call i64 @__ada_file_fill(ptr %f, ptr %b, i64 %cap)\n"
+  "  %gotn = icmp sgt i64 %rn, 0\n"
+  "  br i1 %gotn, label %block_ok, label %none_reset\n"
+  "block_ok:\n"
+  "  store i64 1, ptr %rpp\n"
+  "  store i64 %rn, ptr %rep\n"
+  "  %c2 = load i8, ptr %b\n"
+  "  %c2w = zext i8 %c2 to i32\n"
+  "  ret i32 %c2w\n"
+  "none_reset:\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 0, ptr %rep\n"
+  "  br label %none\n"
+  "none:\n"
+  "  ret i32 -1\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_fgetc(i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %may = call i1 @__ada_file_may(ptr %f, i32 1)\n"
+  "  br i1 %may, label %go, label %refused\n"
+  "go:\n"
+  "  call void @__ada_file_ready(ptr %f)\n"
+  "  %c = call i32 @__ada_file_getc_locked(ptr %f)\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 %c\n"
+  "refused:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 -1\n"
+  "}\n"
+  "\n"
+  "; a file opened without the access %need is refused it, as C's is, and\n"
+  "; marked in error\n"
+  "define linkonce_odr i1 @__ada_file_may(ptr %f, i32 %need) nounwind {\n"
+  "entry:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %has = and i32 %flags, %need\n"
+  "  %ok = icmp ne i32 %has, 0\n"
+  "  br i1 %ok, label %yes, label %no\n"
+  "yes:\n"
+  "  ret i1 true\n"
+  "no:\n"
+  "  %fe = or i32 %flags, 16\n"
+  "  store i32 %fe, ptr %flp\n"
+  "  ret i1 false\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_fgets(i64 %buffer, i32 %size, i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %out = inttoptr i64 %buffer to ptr\n"
+  "  %room = sext i32 %size to i64\n"
+  "  %limit = sub i64 %room, 1\n"
+  "  %small = icmp slt i64 %limit, 0\n"
+  "  br i1 %small, label %refuse, label %room_check\n"
+  "refuse:\n"
+  "  ret i64 0\n"
+  "room_check:\n"
+  "  %just_terminator = icmp eq i64 %limit, 0\n"
+  "  br i1 %just_terminator, label %terminator, label %go\n"
+  "terminator:\n"
+  "  store i8 0, ptr %out\n"
+  "  ret i64 %buffer\n"
+  "go:\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %may = call i1 @__ada_file_may(ptr %f, i32 1)\n"
+  "  br i1 %may, label %ready, label %denied\n"
+  "denied:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 0\n"
+  "ready:\n"
+  "  call void @__ada_file_ready(ptr %f)\n"
+  "  br label %loop\n"
+  "loop:\n"
+  "  %n = phi i64 [ 0, %ready ], [ %n1, %keep ]\n"
+  "  %full = icmp sge i64 %n, %limit\n"
+  "  br i1 %full, label %finish, label %next\n"
+  "next:\n"
+  "  %c = call i32 @__ada_file_getc_locked(ptr %f)\n"
+  "  %eof = icmp slt i32 %c, 0\n"
+  "  br i1 %eof, label %finish, label %keep\n"
+  "keep:\n"
+  "  %c8 = trunc i32 %c to i8\n"
+  "  %slot = getelementptr i8, ptr %out, i64 %n\n"
+  "  store i8 %c8, ptr %slot\n"
+  "  %n1 = add i64 %n, 1\n"
+  "  %newline = icmp eq i8 %c8, 10\n"
+  "  br i1 %newline, label %finish_line, label %loop\n"
+  "finish_line:\n"
+  "  br label %finish\n"
+  "finish:\n"
+  "  %count = phi i64 [ %n, %loop ], [ %n, %next ], [ %n1, %finish_line ]\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  %end = getelementptr i8, ptr %out, i64 %count\n"
+  "  store i8 0, ptr %end\n"
+  "  %empty = icmp eq i64 %count, 0\n"
+  "  %result = select i1 %empty, i64 0, i64 %buffer\n"
+  "  ret i64 %result\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_ungetc(i32 %c, i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %eof = icmp slt i32 %c, 0\n"
+  "  br i1 %eof, label %refuse, label %go\n"
+  "refuse:\n"
+  "  ret i32 -1\n"
+  "go:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %byte = and i32 %c, 255\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %pbp0 = getelementptr i8, ptr %f, i64 12\n"
+  "  %pb0 = load i32, ptr %pbp0\n"
+  "  %no_pb = icmp slt i32 %pb0, 0\n"
+  "  %behind0 = icmp sgt i64 %rpos, 0\n"
+  "  %behind = and i1 %behind0, %no_pb\n"
+  "  br i1 %behind, label %compare, label %slot\n"
+  "compare:\n"
+  "  %rpos1 = sub i64 %rpos, 1\n"
+  "  %bp = getelementptr i8, ptr %f, i64 16\n"
+  "  %b = load ptr, ptr %bp\n"
+  "  %p = getelementptr i8, ptr %b, i64 %rpos1\n"
+  "  %was = load i8, ptr %p\n"
+  "  %c8 = trunc i32 %byte to i8\n"
+  "  %same = icmp eq i8 %was, %c8\n"
+  "  br i1 %same, label %step_back, label %slot\n"
+  "step_back:\n"
+  "  store i64 %rpos1, ptr %rpp\n"
+  "  br label %done\n"
+  "slot:\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %taken = icmp sge i32 %pb, 0\n"
+  "  br i1 %taken, label %full, label %keep\n"
+  "full:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 -1\n"
+  "keep:\n"
+  "  store i32 %byte, ptr %pbp\n"
+  "  br label %done\n"
+  "done:\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %cleared = and i32 %flags, -9\n"
+  "  store i32 %cleared, ptr %flp\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 %byte\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_fread(i64 %data, i64 %size, i64 %count, i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %total = mul i64 %size, %count\n"
+  "  %nothing = icmp eq i64 %total, 0\n"
+  "  br i1 %nothing, label %zero, label %go\n"
+  "zero:\n"
+  "  ret i64 0\n"
+  "go:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %dst = inttoptr i64 %data to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %may = call i1 @__ada_file_may(ptr %f, i32 1)\n"
+  "  br i1 %may, label %permitted, label %denied\n"
+  "denied:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 0\n"
+  "permitted:\n"
+  "  call void @__ada_file_ready(ptr %f)\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %writing = icmp sgt i64 %wpos, 0\n"
+  "  br i1 %writing, label %switch, label %pushed\n"
+  "switch:\n"
+  "  %_s = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  br label %pushed\n"
+  "pushed:\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %has_pb = icmp sge i32 %pb, 0\n"
+  "  br i1 %has_pb, label %take_pb, label %start\n"
+  "take_pb:\n"
+  "  %pb8 = trunc i32 %pb to i8\n"
+  "  store i8 %pb8, ptr %dst\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  br label %start\n"
+  "start:\n"
+  "  %got0 = phi i64 [ 0, %pushed ], [ 1, %take_pb ]\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %capp = getelementptr i8, ptr %f, i64 24\n"
+  "  %b = call ptr @__ada_file_buffer(ptr %f)\n"
+  "  br label %loop\n"
+  "loop:\n"
+  "  %got = phi i64 [ %got0, %start ], [ %got_b, %from_buffer ], [ %got_d, %direct_ok ], [ %got, %refilled ]\n"
+  "  %want = sub i64 %total, %got\n"
+  "  %done_all = icmp sle i64 %want, 0\n"
+  "  br i1 %done_all, label %finish, label %need\n"
+  "need:\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %have = sub i64 %rend, %rpos\n"
+  "  %some = icmp sgt i64 %have, 0\n"
+  "  br i1 %some, label %from_buffer, label %empty\n"
+  "from_buffer:\n"
+  "  %enough = icmp ule i64 %want, %have\n"
+  "  %take = select i1 %enough, i64 %want, i64 %have\n"
+  "  %src = getelementptr i8, ptr %b, i64 %rpos\n"
+  "  %to = getelementptr i8, ptr %dst, i64 %got\n"
+  "  call void @llvm.memcpy.p0.p0.i64(ptr %to, ptr %src, i64 %take, i1 false)\n"
+  "  %rpos1 = add i64 %rpos, %take\n"
+  "  store i64 %rpos1, ptr %rpp\n"
+  "  %got_b = add i64 %got, %take\n"
+  "  br label %loop\n"
+  "empty:\n"
+  "  %cap = load i64, ptr %capp\n"
+  "  %buffered = icmp ne ptr %b, null\n"
+  "  %smaller = icmp ult i64 %want, %cap\n"
+  "  %refill_ok = and i1 %buffered, %smaller\n"
+  "  br i1 %refill_ok, label %refill, label %direct\n"
+  "refill:\n"
+  "  %rn = call i64 @__ada_file_fill(ptr %f, ptr %b, i64 %cap)\n"
+  "  %rgot = icmp sgt i64 %rn, 0\n"
+  "  br i1 %rgot, label %refilled, label %finish_reset\n"
+  "refilled:\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 %rn, ptr %rep\n"
+  "  br label %loop\n"
+  "finish_reset:\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 0, ptr %rep\n"
+  "  br label %finish\n"
+  "direct:\n"
+  "  %big = icmp uge i64 %cap, 128\n"
+  "  %part = urem i64 %want, %cap\n"
+  "  %trim = select i1 %big, i64 %part, i64 0\n"
+  "  %ask0 = sub i64 %want, %trim\n"
+  "  %ask_zero = icmp eq i64 %ask0, 0\n"
+  "  %ask = select i1 %ask_zero, i64 %want, i64 %ask0\n"
+  "  %dto = getelementptr i8, ptr %dst, i64 %got\n"
+  "  %dn = call i64 @__ada_file_fill(ptr %f, ptr %dto, i64 %ask)\n"
+  "  %dgot = icmp sgt i64 %dn, 0\n"
+  "  br i1 %dgot, label %direct_ok, label %finish\n"
+  "direct_ok:\n"
+  "  %got_d = add i64 %got, %dn\n"
+  "  br label %loop\n"
+  "finish:\n"
+  "  %final = phi i64 [ %got, %loop ], [ %got, %finish_reset ], [ %got, %direct ]\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  %items = udiv i64 %final, %size\n"
+  "  ret i64 %items\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_ftell(i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %appendb = and i32 %flags, 4\n"
+  "  %appending = icmp ne i32 %appendb, 0\n"
+  "  %writing = icmp sgt i64 %wpos, 0\n"
+  "  %to_end = and i1 %appending, %writing\n"
+  "  %whence = select i1 %to_end, i64 2, i64 1\n"
+  "  %pos = call i64 @__ada_sys_lseek(i64 %fdw, i64 0, i64 %whence, i64 0, i64 0, i64 0)\n"
+  "  %bad = icmp slt i64 %pos, 0\n"
+  "  br i1 %bad, label %failed, label %adjust\n"
+  "adjust:\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  %unread = sub i64 %rend, %rpos\n"
+  "  %pushed = icmp sge i32 %pb, 0\n"
+  "  %pushed64 = zext i1 %pushed to i64\n"
+  "  %ahead = add i64 %unread, %pushed64\n"
+  "  %after_write = add i64 %pos, %wpos\n"
+  "  %after_read = sub i64 %after_write, %ahead\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 %after_read\n"
+  "failed:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i64 -1\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_fseek(i64 %stream, i64 %offset, i32 %whence) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %wpp = getelementptr i8, ptr %f, i64 48\n"
+  "  %wpos = load i64, ptr %wpp\n"
+  "  %writing = icmp sgt i64 %wpos, 0\n"
+  "  br i1 %writing, label %flush, label %place\n"
+  "flush:\n"
+  "  %frc = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %fbad = icmp ne i32 %frc, 0\n"
+  "  br i1 %fbad, label %failed, label %place\n"
+  "place:\n"
+  "  %rpp = getelementptr i8, ptr %f, i64 32\n"
+  "  %rep = getelementptr i8, ptr %f, i64 40\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  %pb = load i32, ptr %pbp\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  %rpos = load i64, ptr %rpp\n"
+  "  %rend = load i64, ptr %rep\n"
+  "  %unread0 = sub i64 %rend, %rpos\n"
+  "  %pushed = icmp sge i32 %pb, 0\n"
+  "  %pushed64 = zext i1 %pushed to i64\n"
+  "  %unread = add i64 %unread0, %pushed64\n"
+  "  %relative = icmp eq i32 %whence, 1\n"
+  "  %moved = sub i64 %offset, %unread\n"
+  "  %target = select i1 %relative, i64 %moved, i64 %offset\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %wh = sext i32 %whence to i64\n"
+  "  %r = call i64 @__ada_sys_lseek(i64 %fdw, i64 %target, i64 %wh, i64 0, i64 0, i64 0)\n"
+  "  %sbad = icmp slt i64 %r, 0\n"
+  "  br i1 %sbad, label %failed, label %sought\n"
+  "sought:\n"
+  "  store i64 0, ptr %rpp\n"
+  "  store i64 0, ptr %rep\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %cleared = and i32 %flags, -9\n"
+  "  store i32 %cleared, ptr %flp\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 0\n"
+  "failed:\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  ret i32 -1\n"
+  "}\n"
+  "\n"
+  "; a file record for descriptor %fd, on the list of open files\n"
+  "define linkonce_odr i64 @__ada_file_adopt(i32 %fd, i32 %flags) nounwind {\n"
+  "entry:\n"
+  "  %f = call ptr @malloc(i64 80)\n"
+  "  %failed = icmp eq ptr %f, null\n"
+  "  br i1 %failed, label %refuse, label %fill\n"
+  "refuse:\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %_c = call i64 @__ada_sys_close(i64 %fdw, i64 0, i64 0, i64 0, i64 0, i64 0)\n"
+  "  ret i64 0\n"
+  "fill:\n"
+  "  call void @llvm.memset.p0.i64(ptr %f, i8 0, i64 80, i1 false)\n"
+  "  store i32 %fd, ptr %f\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  store i32 %flags, ptr %flp\n"
+  "  %pbp = getelementptr i8, ptr %f, i64 12\n"
+  "  store i32 -1, ptr %pbp\n"
+  "  call void @__ada_word_lock(ptr @__ada_file_list_lock)\n"
+  "  %first = load ptr, ptr @__ada_file_list\n"
+  "  %np = getelementptr i8, ptr %f, i64 56\n"
+  "  store ptr %first, ptr %np\n"
+  "  store ptr %f, ptr @__ada_file_list\n"
+  "  call void @__ada_word_unlock(ptr @__ada_file_list_lock)\n"
+  "  %fi = ptrtoint ptr %f to i64\n"
+  "  ret i64 %fi\n"
+  "}\n"
+  "\n"
+  "; C's fopen modes: r, w or a, with + to both read and write; b is\n"
+  "; meaningless here and ignored\n"
+  "define linkonce_odr i64 @__ada_fopen(i64 %name, i64 %mode) nounwind {\n"
+  "entry:\n"
+  "  %m = inttoptr i64 %mode to ptr\n"
+  "  %first = load i8, ptr %m\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %p = phi ptr [ %m, %entry ], [ %pn, %scan_next ]\n"
+  "  %plus = phi i1 [ false, %entry ], [ %plus1, %scan_next ]\n"
+  "  %c = load i8, ptr %p\n"
+  "  %ended = icmp eq i8 %c, 0\n"
+  "  br i1 %ended, label %decide, label %scan_next\n"
+  "scan_next:\n"
+  "  %is_plus = icmp eq i8 %c, 43\n"
+  "  %plus1 = or i1 %plus, %is_plus\n"
+  "  %pn = getelementptr i8, ptr %p, i64 1\n"
+  "  br label %scan\n"
+  "decide:\n"
+  "  %is_r = icmp eq i8 %first, 114\n"
+  "  %is_w = icmp eq i8 %first, 119\n"
+  "  %is_a = icmp eq i8 %first, 97\n"
+  "  %known0 = or i1 %is_r, %is_w\n"
+  "  %known = or i1 %known0, %is_a\n"
+  "  br i1 %known, label %open, label %refuse\n"
+  "refuse:\n"
+  "  ret i64 0\n"
+  "open:\n"
+  "  %access_one = select i1 %is_r, i32 0, i32 1\n"
+  "  %access = select i1 %plus, i32 2, i32 %access_one\n"
+  "  %create = select i1 %is_r, i32 0, i32 64\n"
+  "  %truncate = select i1 %is_w, i32 512, i32 0\n"
+  "  %append = select i1 %is_a, i32 1024, i32 0\n"
+  "  %o1 = or i32 %access, %create\n"
+  "  %o2 = or i32 %o1, %truncate\n"
+  "  %oflags = or i32 %o2, %append\n"
+  "  %ow = zext i32 %oflags to i64\n"
+  "  br label %again\n"
+  "again:\n"
+  "  %fd = call i64 @__ada_sys_openat(i64 -100, i64 %name, i64 %ow, i64 438, i64 0, i64 0)\n"
+  "  %interrupted = icmp eq i64 %fd, -4\n"
+  "  br i1 %interrupted, label %again, label %opened\n"
+  "opened:\n"
+  "  %bad = icmp slt i64 %fd, 0\n"
+  "  br i1 %bad, label %refuse, label %adopt\n"
+  "adopt:\n"
+  "  %readable = or i1 %is_r, %plus\n"
+  "  %writable0 = xor i1 %is_r, true\n"
+  "  %writable = or i1 %writable0, %plus\n"
+  "  %rb = select i1 %readable, i32 1, i32 0\n"
+  "  %wb = select i1 %writable, i32 2, i32 0\n"
+  "  %ab = select i1 %is_a, i32 4, i32 0\n"
+  "  %fl0 = or i32 %rb, %wb\n"
+  "  %fl = or i32 %fl0, %ab\n"
+  "  %only_append = xor i1 %plus, true\n"
+  "  %to_end = and i1 %is_a, %only_append\n"
+  "  br i1 %to_end, label %seek_end, label %record\n"
+  "seek_end:\n"
+  "  %_e = call i64 @__ada_sys_lseek(i64 %fd, i64 0, i64 2, i64 0, i64 0, i64 0)\n"
+  "  br label %record\n"
+  "record:\n"
+  "  %fd32 = trunc i64 %fd to i32\n"
+  "  %file = call i64 @__ada_file_adopt(i32 %fd32, i32 %fl)\n"
+  "  ret i64 %file\n"
+  "}\n"
+  "\n"
+  "; a file with no name, gone when it is closed: an unnamed one where the\n"
+  "; file system offers it, else a fresh name removed as soon as it is open\n"
+  "define linkonce_odr i64 @__ada_tmpfile() nounwind {\n"
+  "entry:\n"
+  "  %dir = ptrtoint ptr @__ada_file_temporary_directory to i64\n"
+  "  %fd = call i64 @__ada_sys_openat(i64 -100, i64 %dir, i64 " TEXT_OF (LINUX_O_TMPFILE_RDWR) ", i64 384, i64 0, i64 0)\n"
+  "  %ok = icmp sge i64 %fd, 0\n"
+  "  br i1 %ok, label %adopt, label %named\n"
+  "named:\n"
+  "  %name = alloca [32 x i8], align 1\n"
+  "  br label %attempt\n"
+  "attempt:\n"
+  "  %tries = phi i32 [ 0, %named ], [ %tries1, %retry ]\n"
+  "  %k = atomicrmw add ptr @__ada_file_temporary_count, i32 1 monotonic\n"
+  "  %tsp = alloca [16 x i8], align 8\n"
+  "  %tsi = ptrtoint ptr %tsp to i64\n"
+  "  %_t = call i64 @__ada_sys_clock_gettime(i64 1, i64 %tsi, i64 0, i64 0, i64 0, i64 0)\n"
+  "  %nsp = getelementptr i8, ptr %tsp, i64 8\n"
+  "  %ns = load i64, ptr %nsp\n"
+  "  %kw = zext i32 %k to i64\n"
+  "  %mixed0 = mul i64 %kw, 2654435761\n"
+  "  %mixed = xor i64 %mixed0, %ns\n"
+  "  call void @llvm.memcpy.p0.p0.i64(ptr %name, ptr @__ada_file_temporary_directory, i64 4, i1 false)\n"
+  "  %slash = getelementptr i8, ptr %name, i64 4\n"
+  "  store i8 47, ptr %slash\n"
+  "  %ap = getelementptr i8, ptr %name, i64 5\n"
+  "  store i8 97, ptr %ap\n"
+  "  br label %digits\n"
+  "digits:\n"
+  "  %i = phi i64 [ 0, %attempt ], [ %i1, %digits ]\n"
+  "  %v = phi i64 [ %mixed, %attempt ], [ %v1, %digits ]\n"
+  "  %d = and i64 %v, 15\n"
+  "  %d8 = trunc i64 %d to i8\n"
+  "  %ch = add i8 %d8, 97\n"
+  "  %at = add i64 %i, 6\n"
+  "  %dp = getelementptr i8, ptr %name, i64 %at\n"
+  "  store i8 %ch, ptr %dp\n"
+  "  %v1 = lshr i64 %v, 4\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  %more = icmp ult i64 %i1, 16\n"
+  "  br i1 %more, label %digits, label %terminate\n"
+  "terminate:\n"
+  "  %endp = getelementptr i8, ptr %name, i64 22\n"
+  "  store i8 0, ptr %endp\n"
+  "  %ni = ptrtoint ptr %name to i64\n"
+  "  %fd2 = call i64 @__ada_sys_openat(i64 -100, i64 %ni, i64 194, i64 384, i64 0, i64 0)\n"
+  "  %ok2 = icmp sge i64 %fd2, 0\n"
+  "  br i1 %ok2, label %unlink, label %retry\n"
+  "retry:\n"
+  "  %tries1 = add i32 %tries, 1\n"
+  "  %give_up = icmp ugt i32 %tries1, 100\n"
+  "  br i1 %give_up, label %refuse, label %attempt\n"
+  "refuse:\n"
+  "  ret i64 0\n"
+  "unlink:\n"
+  "  %_u = call i64 @__ada_sys_unlinkat(i64 -100, i64 %ni, i64 0, i64 0, i64 0, i64 0)\n"
+  "  br label %adopt\n"
+  "adopt:\n"
+  "  %fdf = phi i64 [ %fd, %entry ], [ %fd2, %unlink ]\n"
+  "  %fd32 = trunc i64 %fdf to i32\n"
+  "  %file = call i64 @__ada_file_adopt(i32 %fd32, i32 3)\n"
+  "  ret i64 %file\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_fclose(i64 %stream) nounwind {\n"
+  "entry:\n"
+  "  %f = inttoptr i64 %stream to ptr\n"
+  "  %lk = getelementptr i8, ptr %f, i64 8\n"
+  "  call void @__ada_word_lock(ptr %lk)\n"
+  "  %rc = call i32 @__ada_file_flush_locked(ptr %f)\n"
+  "  %fd = load i32, ptr %f\n"
+  "  %fdw = sext i32 %fd to i64\n"
+  "  %cr = call i64 @__ada_sys_close(i64 %fdw, i64 0, i64 0, i64 0, i64 0, i64 0)\n"
+  "  %bp = getelementptr i8, ptr %f, i64 16\n"
+  "  %b = load ptr, ptr %bp\n"
+  "  call void @free(ptr %b)\n"
+  "  store ptr null, ptr %bp\n"
+  "  store i32 -1, ptr %f\n"
+  "  %flp = getelementptr i8, ptr %f, i64 4\n"
+  "  %flags = load i32, ptr %flp\n"
+  "  %standardb = and i32 %flags, 128\n"
+  "  %standard = icmp ne i32 %standardb, 0\n"
+  "  call void @__ada_word_unlock(ptr %lk)\n"
+  "  %cbad = icmp slt i64 %cr, 0\n"
+  "  %fbad = icmp ne i32 %rc, 0\n"
+  "  %bad = or i1 %cbad, %fbad\n"
+  "  %result = select i1 %bad, i32 -1, i32 0\n"
+  "  br i1 %standard, label %kept, label %unlist\n"
+  "kept:\n"
+  "  store i32 128, ptr %flp\n"
+  "  ret i32 %result\n"
+  "unlist:\n"
+  "  call void @__ada_word_lock(ptr @__ada_file_list_lock)\n"
+  "  br label %find\n"
+  "find:\n"
+  "  %link = phi ptr [ @__ada_file_list, %unlist ], [ %next_link, %advance ]\n"
+  "  %cur = load ptr, ptr %link\n"
+  "  %gone = icmp eq ptr %cur, null\n"
+  "  br i1 %gone, label %unlisted, label %compare\n"
+  "compare:\n"
+  "  %next_link = getelementptr i8, ptr %cur, i64 56\n"
+  "  %match = icmp eq ptr %cur, %f\n"
+  "  br i1 %match, label %splice, label %advance\n"
+  "advance:\n"
+  "  br label %find\n"
+  "splice:\n"
+  "  %after = load ptr, ptr %next_link\n"
+  "  store ptr %after, ptr %link\n"
+  "  br label %unlisted\n"
+  "unlisted:\n"
+  "  call void @__ada_word_unlock(ptr @__ada_file_list_lock)\n"
+  "  call void @free(ptr %f)\n"
+  "  ret i32 %result\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i32 @__ada_remove(i64 %name) nounwind {\n"
+  "entry:\n"
+  "  %r = call i64 @__ada_sys_unlinkat(i64 -100, i64 %name, i64 0, i64 0, i64 0, i64 0)\n"
+  "  %directory = icmp eq i64 %r, -21\n"
+  "  br i1 %directory, label %rmdir, label %judge\n"
+  "rmdir:\n"
+  "  %r2 = call i64 @__ada_sys_unlinkat(i64 -100, i64 %name, i64 512, i64 0, i64 0, i64 0)\n"
+  "  br label %judge\n"
+  "judge:\n"
+  "  %rf = phi i64 [ %r, %entry ], [ %r2, %rmdir ]\n"
+  "  %bad = icmp slt i64 %rf, 0\n"
+  "  %result = select i1 %bad, i32 -1, i32 0\n"
+  "  ret i32 %result\n"
+  "}\n";
+#endif
+
+#define REAL_ROUNDING_FUNCTION(type, suffix, integral)                       \
+  "define linkonce_odr " type " @__ada_round_" suffix "(" type " %x)"       \
+    " alwaysinline nounwind willreturn memory(none) {\n"                     \
+  "  %a = call " type " @llvm.fabs." suffix "(" type " %x)\n"               \
+  "  %big = fcmp oge " type " %a, " integral "\n"                           \
+  "  %up = fadd " type " %a, " integral "\n"                                \
+  "  %even = fsub " type " %up, " integral "\n"                             \
+  "  %rest = fsub " type " %a, %even\n"                                     \
+  "  %tie = fcmp oeq " type " %rest, 0.5\n"                                 \
+  "  %away = fadd " type " %even, 1.0\n"                                    \
+  "  %near = select i1 %tie, " type " %away, " type " %even\n"              \
+  "  %m = select i1 %big, " type " %a, " type " %near\n"                    \
+  "  %r = call " type " @llvm.copysign." suffix "(" type " %m, " type      \
+    " %x)\n"                                                                 \
+  "  ret " type " %r\n"                                                      \
+  "}\n\n"
+
+#if defined(SIMD_X86_64) and not defined(ADA_WINDOWS_NATIVE)
+  #define ADA_EXTENDED_POWER 1
+  #define REAL_POWER_TEXT                                                    \
+    "; a real to an integer power: square and multiply on pairs of\n"      \
+    "; extended values whose sum carries the product exactly, so the one\n" \
+    "; rounding is the last; a power far outside the extended range takes\n" \
+    "; the plain extended product, which overflows or vanishes as it must\n" \
+    "define linkonce_odr x86_fp80 @__ada_ext_product_error(x86_fp80 %a, x86_fp80 %b, x86_fp80 %p) alwaysinline nounwind willreturn memory(none) {\n" \
+    "  %ca = fmul x86_fp80 %a, 0xK401F8000000080000000\n"                    \
+    "  %cad = fsub x86_fp80 %ca, %a\n"                                       \
+    "  %a1 = fsub x86_fp80 %ca, %cad\n"                                      \
+    "  %a2 = fsub x86_fp80 %a, %a1\n"                                        \
+    "  %cb = fmul x86_fp80 %b, 0xK401F8000000080000000\n"                    \
+    "  %cbd = fsub x86_fp80 %cb, %b\n"                                       \
+    "  %b1 = fsub x86_fp80 %cb, %cbd\n"                                      \
+    "  %b2 = fsub x86_fp80 %b, %b1\n"                                        \
+    "  %h = fmul x86_fp80 %a1, %b1\n"                                        \
+    "  %e0 = fsub x86_fp80 %h, %p\n"                                         \
+    "  %m1 = fmul x86_fp80 %a1, %b2\n"                                       \
+    "  %e1 = fadd x86_fp80 %e0, %m1\n"                                       \
+    "  %m2 = fmul x86_fp80 %a2, %b1\n"                                       \
+    "  %e2 = fadd x86_fp80 %e1, %m2\n"                                       \
+    "  %m3 = fmul x86_fp80 %a2, %b2\n"                                       \
+    "  %e3 = fadd x86_fp80 %e2, %m3\n"                                       \
+    "  ret x86_fp80 %e3\n"                                                   \
+    "}\n"                                                                    \
+    "\n"                                                                     \
+    "define linkonce_odr { x86_fp80, x86_fp80 } @__ada_ext_multiply(x86_fp80 %ah, x86_fp80 %al, x86_fp80 %bh, x86_fp80 %bl) alwaysinline nounwind willreturn memory(none) {\n" \
+    "  %p = fmul x86_fp80 %ah, %bh\n"                                        \
+    "  %e = call x86_fp80 @__ada_ext_product_error(x86_fp80 %ah, x86_fp80 %bh, x86_fp80 %p)\n" \
+    "  %c1 = fmul x86_fp80 %ah, %bl\n"                                       \
+    "  %c2 = fmul x86_fp80 %al, %bh\n"                                       \
+    "  %c = fadd x86_fp80 %c1, %c2\n"                                        \
+    "  %e2 = fadd x86_fp80 %e, %c\n"                                         \
+    "  %h = fadd x86_fp80 %p, %e2\n"                                         \
+    "  %hp = fsub x86_fp80 %h, %p\n"                                         \
+    "  %l = fsub x86_fp80 %e2, %hp\n"                                        \
+    "  %r0 = insertvalue { x86_fp80, x86_fp80 } undef, x86_fp80 %h, 0\n"     \
+    "  %r1 = insertvalue { x86_fp80, x86_fp80 } %r0, x86_fp80 %l, 1\n"       \
+    "  ret { x86_fp80, x86_fp80 } %r1\n"                                     \
+    "}\n"                                                                    \
+    "\n"                                                                     \
+    "define linkonce_odr { x86_fp80, x86_fp80 } @__ada_ext_power(double %x, i64 %n) nounwind willreturn memory(none) {\n" \
+    "entry:\n"                                                               \
+    "  %inverse = icmp slt i64 %n, 0\n"                                      \
+    "  %flipped = sub i64 0, %n\n"                                           \
+    "  %count = select i1 %inverse, i64 %flipped, i64 %n\n"                  \
+    "  %base = fpext double %x to x86_fp80\n"                                \
+    "  %bits = bitcast double %x to i64\n"                                   \
+    "  %field = lshr i64 %bits, 52\n"                                        \
+    "  %biased = and i64 %field, 2047\n"                                     \
+    "  %special = icmp eq i64 %biased, 2047\n"                               \
+    "  %tiny = icmp eq i64 %biased, 0\n"                                     \
+    "  %unbiased = sub i64 %biased, 1023\n"                                  \
+    "  %fraction = and i64 %bits, 4503599627370495\n"                        \
+    "  %unit = or i64 %fraction, 4607182418800017408\n"                      \
+    "  %m = bitcast i64 %unit to double\n"                                   \
+    "  %above = icmp sge i64 %unbiased, 0\n"                                 \
+    "  %e_up = sitofp i64 %unbiased to double\n"                             \
+    "  %m_up = fsub double %m, 1.0\n"                                        \
+    "  %slope_up = fmul double %m_up, 1.5\n"                                 \
+    "  %bound_up = fadd double %e_up, %slope_up\n"                           \
+    "  %e_down0 = sub i64 -1, %unbiased\n"                                   \
+    "  %e_down = sitofp i64 %e_down0 to double\n"                            \
+    "  %m_down = fsub double 2.0, %m\n"                                      \
+    "  %slope_down = fmul double %m_down, 1.5\n"                             \
+    "  %bound_down = fadd double %e_down, %slope_down\n"                     \
+    "  %bound = select i1 %above, double %bound_up, double %bound_down\n"    \
+    "  %times = uitofp i64 %count to double\n"                               \
+    "  %magnitude = fmul double %bound, %times\n"                            \
+    "  %far = fcmp ogt double %magnitude, 16000.0\n"                         \
+    "  %odd1 = or i1 %special, %tiny\n"                                      \
+    "  %plain = or i1 %odd1, %far\n"                                         \
+    "  br i1 %plain, label %simple, label %exact\n"                          \
+    "simple:\n"                                                              \
+    "  %se = phi i64 [ %count, %entry ], [ %se1, %simple_step ]\n"           \
+    "  %sb = phi x86_fp80 [ %base, %entry ], [ %sb1, %simple_step ]\n"       \
+    "  %sr = phi x86_fp80 [ 0xK3FFF8000000000000000, %entry ], [ %sr1, %simple_step ]\n" \
+    "  %sdone = icmp eq i64 %se, 0\n"                                        \
+    "  br i1 %sdone, label %simple_end, label %simple_step\n"                \
+    "simple_step:\n"                                                         \
+    "  %sodd = trunc i64 %se to i1\n"                                        \
+    "  %srb = fmul x86_fp80 %sr, %sb\n"                                      \
+    "  %sr1 = select i1 %sodd, x86_fp80 %srb, x86_fp80 %sr\n"                \
+    "  %se1 = lshr i64 %se, 1\n"                                             \
+    "  %sb1 = fmul x86_fp80 %sb, %sb\n"                                      \
+    "  br label %simple\n"                                                   \
+    "simple_end:\n"                                                          \
+    "  %srec = fdiv x86_fp80 0xK3FFF8000000000000000, %sr\n"                 \
+    "  %swide = select i1 %inverse, x86_fp80 %srec, x86_fp80 %sr\n"          \
+    "  %s0 = insertvalue { x86_fp80, x86_fp80 } undef, x86_fp80 %swide, 0\n" \
+    "  %s1 = insertvalue { x86_fp80, x86_fp80 } %s0, x86_fp80 0xK00000000000000000000, 1\n" \
+    "  ret { x86_fp80, x86_fp80 } %s1\n"                                     \
+    "exact:\n"                                                               \
+    "  %e = phi i64 [ %count, %entry ], [ %e1, %exact_next ]\n"              \
+    "  %bh = phi x86_fp80 [ %base, %entry ], [ %bh1, %exact_next ]\n"        \
+    "  %bl = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %bl1, %exact_next ]\n" \
+    "  %rh = phi x86_fp80 [ 0xK3FFF8000000000000000, %entry ], [ %rh1, %exact_next ]\n" \
+    "  %rl = phi x86_fp80 [ 0xK00000000000000000000, %entry ], [ %rl1, %exact_next ]\n" \
+    "  %edone = icmp eq i64 %e, 0\n"                                         \
+    "  br i1 %edone, label %settle, label %exact_step\n"                     \
+    "exact_step:\n"                                                          \
+    "  %eodd = trunc i64 %e to i1\n"                                         \
+    "  br i1 %eodd, label %exact_take, label %exact_square\n"                \
+    "exact_take:\n"                                                          \
+    "  %rp = call { x86_fp80, x86_fp80 } @__ada_ext_multiply(x86_fp80 %rh, x86_fp80 %rl, x86_fp80 %bh, x86_fp80 %bl)\n" \
+    "  %rph = extractvalue { x86_fp80, x86_fp80 } %rp, 0\n"                  \
+    "  %rpl = extractvalue { x86_fp80, x86_fp80 } %rp, 1\n"                  \
+    "  br label %exact_square\n"                                             \
+    "exact_square:\n"                                                        \
+    "  %rh1 = phi x86_fp80 [ %rh, %exact_step ], [ %rph, %exact_take ]\n"    \
+    "  %rl1 = phi x86_fp80 [ %rl, %exact_step ], [ %rpl, %exact_take ]\n"    \
+    "  %e1 = lshr i64 %e, 1\n"                                               \
+    "  %more = icmp ne i64 %e1, 0\n"                                         \
+    "  br i1 %more, label %exact_grow, label %exact_next\n"                  \
+    "exact_grow:\n"                                                          \
+    "  %bp = call { x86_fp80, x86_fp80 } @__ada_ext_multiply(x86_fp80 %bh, x86_fp80 %bl, x86_fp80 %bh, x86_fp80 %bl)\n" \
+    "  %bph = extractvalue { x86_fp80, x86_fp80 } %bp, 0\n"                  \
+    "  %bpl = extractvalue { x86_fp80, x86_fp80 } %bp, 1\n"                  \
+    "  br label %exact_next\n"                                               \
+    "exact_next:\n"                                                          \
+    "  %bh1 = phi x86_fp80 [ %bh, %exact_square ], [ %bph, %exact_grow ]\n"  \
+    "  %bl1 = phi x86_fp80 [ %bl, %exact_square ], [ %bpl, %exact_grow ]\n"  \
+    "  br label %exact\n"                                                    \
+    "settle:\n"                                                              \
+    "  br i1 %inverse, label %invert, label %round\n"                        \
+    "invert:\n"                                                              \
+    "  %q1 = fdiv x86_fp80 0xK3FFF8000000000000000, %rh\n"                   \
+    "  %qp = fmul x86_fp80 %q1, %rh\n"                                       \
+    "  %qe = call x86_fp80 @__ada_ext_product_error(x86_fp80 %q1, x86_fp80 %rh, x86_fp80 %qp)\n" \
+    "  %left0 = fsub x86_fp80 0xK3FFF8000000000000000, %qp\n"                \
+    "  %left1 = fsub x86_fp80 %left0, %qe\n"                                 \
+    "  %ql = fmul x86_fp80 %q1, %rl\n"                                       \
+    "  %left2 = fsub x86_fp80 %left1, %ql\n"                                 \
+    "  %q2 = fdiv x86_fp80 %left2, %rh\n"                                    \
+    "  %ih = fadd x86_fp80 %q1, %q2\n"                                       \
+    "  %ihd = fsub x86_fp80 %ih, %q1\n"                                      \
+    "  %il = fsub x86_fp80 %q2, %ihd\n"                                      \
+    "  br label %round\n"                                                    \
+    "round:\n"                                                               \
+    "  %h = phi x86_fp80 [ %rh, %settle ], [ %ih, %invert ]\n"               \
+    "  %l = phi x86_fp80 [ %rl, %settle ], [ %il, %invert ]\n"               \
+    "  %p0 = insertvalue { x86_fp80, x86_fp80 } undef, x86_fp80 %h, 0\n"     \
+    "  %p1 = insertvalue { x86_fp80, x86_fp80 } %p0, x86_fp80 %l, 1\n"       \
+    "  ret { x86_fp80, x86_fp80 } %p1\n"                                     \
+    "}\n"                                                                    \
+    "\n"                                                                     \
+    "define linkonce_odr double @__ada_power_f64(double %x, i64 %n) nounwind willreturn memory(none) {\n" \
+    "  %pair = call { x86_fp80, x86_fp80 } @__ada_ext_power(double %x, i64 %n)\n" \
+    "  %h = extractvalue { x86_fp80, x86_fp80 } %pair, 0\n"                  \
+    "  %l = extractvalue { x86_fp80, x86_fp80 } %pair, 1\n"                  \
+    "  %hf = call x86_fp80 @__ada_ext_nudge(x86_fp80 %h, x86_fp80 %l, i80 2047, i80 1024)\n" \
+    "  %r = fptrunc x86_fp80 %hf to double\n"                                \
+    "  ret double %r\n"                                                      \
+    "}\n"                                                                    \
+    "\n"                                                                     \
+    "define linkonce_odr float @__ada_power_f32(float %x, i64 %n) nounwind willreturn memory(none) {\n" \
+    "  %xd = fpext float %x to double\n"                                     \
+    "  %pair = call { x86_fp80, x86_fp80 } @__ada_ext_power(double %xd, i64 %n)\n" \
+    "  %h = extractvalue { x86_fp80, x86_fp80 } %pair, 0\n"                  \
+    "  %l = extractvalue { x86_fp80, x86_fp80 } %pair, 1\n"                  \
+    "  %hf = call x86_fp80 @__ada_ext_nudge(x86_fp80 %h, x86_fp80 %l, i80 1099511627775, i80 549755813888)\n" \
+    "  %r = fptrunc x86_fp80 %hf to float\n"                                 \
+    "  ret float %r\n"                                                       \
+    "}\n"                                                                    \
+    "\n"                                                                     \
+    "; a value exactly midway between two narrower neighbours is moved one\n" \
+    "; place of its own towards the remainder %l carries, so the narrowing\n" \
+    "; rounds the sum and not the head alone\n"                              \
+    "define linkonce_odr x86_fp80 @__ada_ext_nudge(x86_fp80 %h, x86_fp80 %l, i80 %mask, i80 %half) alwaysinline nounwind willreturn memory(none) {\n" \
+    "  %hbits = bitcast x86_fp80 %h to i80\n"                                \
+    "  %low = and i80 %hbits, %mask\n"                                       \
+    "  %midway = icmp eq i80 %low, %half\n"                                  \
+    "  %lzero = fcmp oeq x86_fp80 %l, 0xK00000000000000000000\n"             \
+    "  %pushed = xor i1 %lzero, true\n"                                      \
+    "  %nudge = and i1 %midway, %pushed\n"                                   \
+    "  %hpos = fcmp ogt x86_fp80 %h, 0xK00000000000000000000\n"              \
+    "  %lpos = fcmp ogt x86_fp80 %l, 0xK00000000000000000000\n"              \
+    "  %outward = icmp eq i1 %hpos, %lpos\n"                                 \
+    "  %up = add i80 %hbits, 1\n"                                            \
+    "  %down = sub i80 %hbits, 1\n"                                          \
+    "  %moved = select i1 %outward, i80 %up, i80 %down\n"                    \
+    "  %final = select i1 %nudge, i80 %moved, i80 %hbits\n"                  \
+    "  %hf = bitcast i80 %final to x86_fp80\n"                               \
+    "  ret x86_fp80 %hf\n"                                                   \
+    "}\n"
+#else
+  #define REAL_POWER_TEXT ""
+#endif
+
+static const char Runtime_Real_Arithmetic_Text[] =
+  "; ---- rounding half away from zero, and a real raised to an integer\n"
+  ";      in the extended format, with no maths library behind either ----\n"
+  REAL_ROUNDING_FUNCTION ("float",  "f32", "8388608.0")
+  REAL_ROUNDING_FUNCTION ("double", "f64", "4503599627370496.0")
+  REAL_POWER_TEXT;
+
+static const char Runtime_Decimal_Text[] =
+  "; ---- reals read and written exactly, through a decimal of up to 800\n"
+  ";      digits: { i32 count, i32 point, i8 truncated, [800 x i8] } ----\n"
+  "@__ada_decimal_powers = linkonce_odr constant [9 x i8] c\"\\01\\03\\06\\09\\0D\\10\\13\\17\\1A\"\n"
+  "\n"
+  "define linkonce_odr void @__ada_decimal_trim(ptr %a) nounwind {\n"
+  "entry:\n"
+  "  %ndp = getelementptr i8, ptr %a, i64 0\n"
+  "  %nd0 = load i32, ptr %ndp\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %nd = phi i32 [ %nd0, %entry ], [ %less, %drop ]\n"
+  "  %empty = icmp sle i32 %nd, 0\n"
+  "  br i1 %empty, label %zero, label %look\n"
+  "look:\n"
+  "  %last = sub i32 %nd, 1\n"
+  "  %lastw = sext i32 %last to i64\n"
+  "  %at = add i64 %lastw, 16\n"
+  "  %dp_ = getelementptr i8, ptr %a, i64 %at\n"
+  "  %digit = load i8, ptr %dp_\n"
+  "  %nil = icmp eq i8 %digit, 0\n"
+  "  br i1 %nil, label %drop, label %keep\n"
+  "drop:\n"
+  "  %less = sub i32 %nd, 1\n"
+  "  br label %scan\n"
+  "keep:\n"
+  "  store i32 %nd, ptr %ndp\n"
+  "  ret void\n"
+  "zero:\n"
+  "  store i32 0, ptr %ndp\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  store i32 0, ptr %pp\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr void @__ada_decimal_assign(ptr %a, i64 %v) nounwind {\n"
+  "entry:\n"
+  "  %buf = alloca [24 x i8], align 1\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  store i8 0, ptr %tp\n"
+  "  br label %peel\n"
+  "peel:\n"
+  "  %n = phi i64 [ %v, %entry ], [ %q, %more ]\n"
+  "  %w = phi i64 [ 0, %entry ], [ %w1, %more ]\n"
+  "  %done = icmp eq i64 %n, 0\n"
+  "  br i1 %done, label %copy_start, label %more\n"
+  "more:\n"
+  "  %q = udiv i64 %n, 10\n"
+  "  %q10 = mul i64 %q, 10\n"
+  "  %r = sub i64 %n, %q10\n"
+  "  %r8 = trunc i64 %r to i8\n"
+  "  %bp = getelementptr i8, ptr %buf, i64 %w\n"
+  "  store i8 %r8, ptr %bp\n"
+  "  %w1 = add i64 %w, 1\n"
+  "  br label %peel\n"
+  "copy_start:\n"
+  "  br label %copy\n"
+  "copy:\n"
+  "  %i = phi i64 [ 0, %copy_start ], [ %i1, %copy_body ]\n"
+  "  %copied = icmp uge i64 %i, %w\n"
+  "  br i1 %copied, label %finish, label %copy_body\n"
+  "copy_body:\n"
+  "  %src_ix = sub i64 %w, 1\n"
+  "  %src_ix2 = sub i64 %src_ix, %i\n"
+  "  %sp = getelementptr i8, ptr %buf, i64 %src_ix2\n"
+  "  %c = load i8, ptr %sp\n"
+  "  %dst_ix = add i64 %i, 16\n"
+  "  %dpp = getelementptr i8, ptr %a, i64 %dst_ix\n"
+  "  store i8 %c, ptr %dpp\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %copy\n"
+  "finish:\n"
+  "  %w32 = trunc i64 %w to i32\n"
+  "  store i32 %w32, ptr %a\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  store i32 %w32, ptr %pp\n"
+  "  call void @__ada_decimal_trim(ptr %a)\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr void @__ada_decimal_right_shift(ptr %a, i64 %k) nounwind {\n"
+  "entry:\n"
+  "  %ndp = getelementptr i8, ptr %a, i64 0\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  %nd32 = load i32, ptr %ndp\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %one = shl i64 1, %k\n"
+  "  %mask = sub i64 %one, 1\n"
+  "  br label %gather\n"
+  "gather:\n"
+  "  %r = phi i64 [ 0, %entry ], [ %r1, %gather_take ]\n"
+  "  %n = phi i64 [ 0, %entry ], [ %n1, %gather_take ]\n"
+  "  %high = lshr i64 %n, %k\n"
+  "  %enough = icmp ne i64 %high, 0\n"
+  "  br i1 %enough, label %leading, label %gather_more\n"
+  "gather_more:\n"
+  "  %ran_out = icmp sge i64 %r, %nd\n"
+  "  br i1 %ran_out, label %exhausted, label %gather_take\n"
+  "gather_take:\n"
+  "  %gix = add i64 %r, 16\n"
+  "  %gp = getelementptr i8, ptr %a, i64 %gix\n"
+  "  %gc = load i8, ptr %gp\n"
+  "  %gcw = zext i8 %gc to i64\n"
+  "  %n10 = mul i64 %n, 10\n"
+  "  %n1 = add i64 %n10, %gcw\n"
+  "  %r1 = add i64 %r, 1\n"
+  "  br label %gather\n"
+  "exhausted:\n"
+  "  %is_zero = icmp eq i64 %n, 0\n"
+  "  br i1 %is_zero, label %vanish, label %pad\n"
+  "vanish:\n"
+  "  store i32 0, ptr %ndp\n"
+  "  ret void\n"
+  "pad:\n"
+  "  %pr = phi i64 [ %r, %exhausted ], [ %pr1, %pad_step ]\n"
+  "  %pn = phi i64 [ %n, %exhausted ], [ %pn1, %pad_step ]\n"
+  "  %phigh = lshr i64 %pn, %k\n"
+  "  %penough = icmp ne i64 %phigh, 0\n"
+  "  br i1 %penough, label %leading, label %pad_step\n"
+  "pad_step:\n"
+  "  %pn1 = mul i64 %pn, 10\n"
+  "  %pr1 = add i64 %pr, 1\n"
+  "  br label %pad\n"
+  "leading:\n"
+  "  %lr = phi i64 [ %r, %gather ], [ %pr, %pad ]\n"
+  "  %ln = phi i64 [ %n, %gather ], [ %pn, %pad ]\n"
+  "  %dp32 = load i32, ptr %pp\n"
+  "  %dp = sext i32 %dp32 to i64\n"
+  "  %moved = sub i64 %lr, 1\n"
+  "  %dp2 = sub i64 %dp, %moved\n"
+  "  %dp2_32 = trunc i64 %dp2 to i32\n"
+  "  store i32 %dp2_32, ptr %pp\n"
+  "  br label %body\n"
+  "body:\n"
+  "  %br = phi i64 [ %lr, %leading ], [ %br1, %body_step ]\n"
+  "  %bn = phi i64 [ %ln, %leading ], [ %bn1, %body_step ]\n"
+  "  %bw = phi i64 [ 0, %leading ], [ %bw1, %body_step ]\n"
+  "  %bdone = icmp sge i64 %br, %nd\n"
+  "  br i1 %bdone, label %tail, label %body_step\n"
+  "body_step:\n"
+  "  %bix = add i64 %br, 16\n"
+  "  %bp = getelementptr i8, ptr %a, i64 %bix\n"
+  "  %bc = load i8, ptr %bp\n"
+  "  %bcw = zext i8 %bc to i64\n"
+  "  %bdig = lshr i64 %bn, %k\n"
+  "  %bkeep = and i64 %bn, %mask\n"
+  "  %bdig8 = trunc i64 %bdig to i8\n"
+  "  %bwix = add i64 %bw, 16\n"
+  "  %bwp = getelementptr i8, ptr %a, i64 %bwix\n"
+  "  store i8 %bdig8, ptr %bwp\n"
+  "  %bw1 = add i64 %bw, 1\n"
+  "  %bk10 = mul i64 %bkeep, 10\n"
+  "  %bn1 = add i64 %bk10, %bcw\n"
+  "  %br1 = add i64 %br, 1\n"
+  "  br label %body\n"
+  "tail:\n"
+  "  %tn = phi i64 [ %bn, %body ], [ %tn1, %tail_next ]\n"
+  "  %tw = phi i64 [ %bw, %body ], [ %tw2, %tail_next ]\n"
+  "  %tleft = icmp ne i64 %tn, 0\n"
+  "  br i1 %tleft, label %tail_step, label %finish\n"
+  "tail_step:\n"
+  "  %tdig = lshr i64 %tn, %k\n"
+  "  %tkeep = and i64 %tn, %mask\n"
+  "  %room = icmp slt i64 %tw, 800\n"
+  "  br i1 %room, label %tail_store, label %tail_lost\n"
+  "tail_store:\n"
+  "  %tdig8 = trunc i64 %tdig to i8\n"
+  "  %twix = add i64 %tw, 16\n"
+  "  %twp = getelementptr i8, ptr %a, i64 %twix\n"
+  "  store i8 %tdig8, ptr %twp\n"
+  "  %tw1 = add i64 %tw, 1\n"
+  "  br label %tail_next\n"
+  "tail_lost:\n"
+  "  %lost = icmp ne i64 %tdig, 0\n"
+  "  br i1 %lost, label %tail_mark, label %tail_next\n"
+  "tail_mark:\n"
+  "  store i8 1, ptr %tp\n"
+  "  br label %tail_next\n"
+  "tail_next:\n"
+  "  %tw2 = phi i64 [ %tw1, %tail_store ], [ %tw, %tail_lost ], [ %tw, %tail_mark ]\n"
+  "  %tn1 = mul i64 %tkeep, 10\n"
+  "  br label %tail\n"
+  "finish:\n"
+  "  %fw32 = trunc i64 %tw to i32\n"
+  "  store i32 %fw32, ptr %ndp\n"
+  "  call void @__ada_decimal_trim(ptr %a)\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr void @__ada_decimal_left_shift(ptr %a, i64 %k) nounwind {\n"
+  "entry:\n"
+  "  %scratch = alloca [824 x i8], align 1\n"
+  "  %ndp = getelementptr i8, ptr %a, i64 0\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  %nd32 = load i32, ptr %ndp\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %top = add i64 %nd, 20\n"
+  "  br label %digits\n"
+  "digits:\n"
+  "  %r = phi i64 [ %nd, %entry ], [ %rprev, %digit_step ]\n"
+  "  %n = phi i64 [ 0, %entry ], [ %quo, %digit_step ]\n"
+  "  %w = phi i64 [ %top, %entry ], [ %wprev, %digit_step ]\n"
+  "  %rdone = icmp sle i64 %r, 0\n"
+  "  br i1 %rdone, label %carry, label %digit_step\n"
+  "digit_step:\n"
+  "  %rprev = sub i64 %r, 1\n"
+  "  %rix = add i64 %rprev, 16\n"
+  "  %rp = getelementptr i8, ptr %a, i64 %rix\n"
+  "  %c = load i8, ptr %rp\n"
+  "  %cw = zext i8 %c to i64\n"
+  "  %shifted = shl i64 %cw, %k\n"
+  "  %sum = add i64 %n, %shifted\n"
+  "  %quo = udiv i64 %sum, 10\n"
+  "  %q10 = mul i64 %quo, 10\n"
+  "  %rem = sub i64 %sum, %q10\n"
+  "  %wprev = sub i64 %w, 1\n"
+  "  %rem8 = trunc i64 %rem to i8\n"
+  "  %sp = getelementptr i8, ptr %scratch, i64 %wprev\n"
+  "  store i8 %rem8, ptr %sp\n"
+  "  br label %digits\n"
+  "carry:\n"
+  "  %cn = phi i64 [ %n, %digits ], [ %cquo, %carry_step ]\n"
+  "  %cw2 = phi i64 [ %w, %digits ], [ %cwprev, %carry_step ]\n"
+  "  %cleft = icmp ne i64 %cn, 0\n"
+  "  br i1 %cleft, label %carry_step, label %place\n"
+  "carry_step:\n"
+  "  %cquo = udiv i64 %cn, 10\n"
+  "  %cq10 = mul i64 %cquo, 10\n"
+  "  %crem = sub i64 %cn, %cq10\n"
+  "  %cwprev = sub i64 %cw2, 1\n"
+  "  %crem8 = trunc i64 %crem to i8\n"
+  "  %csp = getelementptr i8, ptr %scratch, i64 %cwprev\n"
+  "  store i8 %crem8, ptr %csp\n"
+  "  br label %carry\n"
+  "place:\n"
+  "  %count = sub i64 %top, %cw2\n"
+  "  %delta = sub i64 %count, %nd\n"
+  "  %over = icmp sgt i64 %count, 800\n"
+  "  %kept = select i1 %over, i64 800, i64 %count\n"
+  "  br label %copy\n"
+  "copy:\n"
+  "  %i = phi i64 [ 0, %place ], [ %i1, %copy_next ]\n"
+  "  %copied = icmp sge i64 %i, %count\n"
+  "  br i1 %copied, label %finish, label %copy_step\n"
+  "copy_step:\n"
+  "  %six = add i64 %cw2, %i\n"
+  "  %ssp = getelementptr i8, ptr %scratch, i64 %six\n"
+  "  %sc = load i8, ptr %ssp\n"
+  "  %fits = icmp slt i64 %i, 800\n"
+  "  br i1 %fits, label %copy_store, label %copy_lost\n"
+  "copy_store:\n"
+  "  %dix = add i64 %i, 16\n"
+  "  %dp_ = getelementptr i8, ptr %a, i64 %dix\n"
+  "  store i8 %sc, ptr %dp_\n"
+  "  br label %copy_next\n"
+  "copy_lost:\n"
+  "  %lost = icmp ne i8 %sc, 0\n"
+  "  br i1 %lost, label %copy_mark, label %copy_next\n"
+  "copy_mark:\n"
+  "  store i8 1, ptr %tp\n"
+  "  br label %copy_next\n"
+  "copy_next:\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %copy\n"
+  "finish:\n"
+  "  %kept32 = trunc i64 %kept to i32\n"
+  "  store i32 %kept32, ptr %ndp\n"
+  "  %dp32 = load i32, ptr %pp\n"
+  "  %delta32 = trunc i64 %delta to i32\n"
+  "  %dp2 = add i32 %dp32, %delta32\n"
+  "  store i32 %dp2, ptr %pp\n"
+  "  call void @__ada_decimal_trim(ptr %a)\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr void @__ada_decimal_shift(ptr %a, i64 %k) nounwind {\n"
+  "entry:\n"
+  "  %nd = load i32, ptr %a\n"
+  "  %empty = icmp eq i32 %nd, 0\n"
+  "  br i1 %empty, label %done, label %which\n"
+  "which:\n"
+  "  %up = icmp sgt i64 %k, 0\n"
+  "  br i1 %up, label %left, label %right\n"
+  "left:\n"
+  "  %lk = phi i64 [ %k, %which ], [ %lk1, %left_big ]\n"
+  "  %lbig = icmp sgt i64 %lk, 60\n"
+  "  br i1 %lbig, label %left_big, label %left_last\n"
+  "left_big:\n"
+  "  call void @__ada_decimal_left_shift(ptr %a, i64 60)\n"
+  "  %lk1 = sub i64 %lk, 60\n"
+  "  br label %left\n"
+  "left_last:\n"
+  "  call void @__ada_decimal_left_shift(ptr %a, i64 %lk)\n"
+  "  br label %done\n"
+  "right:\n"
+  "  %rk = phi i64 [ %k, %which ], [ %rk1, %right_big ]\n"
+  "  %rbig = icmp slt i64 %rk, -60\n"
+  "  br i1 %rbig, label %right_big, label %right_last\n"
+  "right_big:\n"
+  "  call void @__ada_decimal_right_shift(ptr %a, i64 60)\n"
+  "  %rk1 = add i64 %rk, 60\n"
+  "  br label %right\n"
+  "right_last:\n"
+  "  %rneg = sub i64 0, %rk\n"
+  "  %rnone = icmp eq i64 %rneg, 0\n"
+  "  br i1 %rnone, label %done, label %right_go\n"
+  "right_go:\n"
+  "  call void @__ada_decimal_right_shift(ptr %a, i64 %rneg)\n"
+  "  br label %done\n"
+  "done:\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr i1 @__ada_decimal_round_up_at(ptr %a, i64 %at) nounwind {\n"
+  "entry:\n"
+  "  %nd32 = load i32, ptr %a\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %below = icmp slt i64 %at, 0\n"
+  "  %beyond = icmp sge i64 %at, %nd\n"
+  "  %outside = or i1 %below, %beyond\n"
+  "  br i1 %outside, label %no, label %look\n"
+  "look:\n"
+  "  %ix = add i64 %at, 16\n"
+  "  %p = getelementptr i8, ptr %a, i64 %ix\n"
+  "  %d = load i8, ptr %p\n"
+  "  %five = icmp eq i8 %d, 5\n"
+  "  %next = add i64 %at, 1\n"
+  "  %last = icmp eq i64 %next, %nd\n"
+  "  %half = and i1 %five, %last\n"
+  "  br i1 %half, label %tie, label %plain\n"
+  "plain:\n"
+  "  %big = icmp uge i8 %d, 5\n"
+  "  ret i1 %big\n"
+  "tie:\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  %t = load i8, ptr %tp\n"
+  "  %cut = icmp ne i8 %t, 0\n"
+  "  br i1 %cut, label %yes, label %even\n"
+  "even:\n"
+  "  %first = icmp eq i64 %at, 0\n"
+  "  br i1 %first, label %no, label %odd\n"
+  "odd:\n"
+  "  %pix = add i64 %at, 15\n"
+  "  %pp = getelementptr i8, ptr %a, i64 %pix\n"
+  "  %pd = load i8, ptr %pp\n"
+  "  %pbit = and i8 %pd, 1\n"
+  "  %isodd = icmp ne i8 %pbit, 0\n"
+  "  ret i1 %isodd\n"
+  "yes:\n"
+  "  ret i1 true\n"
+  "no:\n"
+  "  ret i1 false\n"
+  "}\n"
+  "define linkonce_odr void @__ada_decimal_round(ptr %a, i64 %at) nounwind {\n"
+  "entry:\n"
+  "  %nd32 = load i32, ptr %a\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %below = icmp slt i64 %at, 0\n"
+  "  %beyond = icmp sge i64 %at, %nd\n"
+  "  %outside = or i1 %below, %beyond\n"
+  "  br i1 %outside, label %done, label %decide\n"
+  "decide:\n"
+  "  %up = call i1 @__ada_decimal_round_up_at(ptr %a, i64 %at)\n"
+  "  br i1 %up, label %carry, label %down\n"
+  "down:\n"
+  "  %at32 = trunc i64 %at to i32\n"
+  "  store i32 %at32, ptr %a\n"
+  "  call void @__ada_decimal_trim(ptr %a)\n"
+  "  br label %done\n"
+  "carry:\n"
+  "  %i = phi i64 [ %at, %decide ], [ %iprev, %nine ]\n"
+  "  %iprev = sub i64 %i, 1\n"
+  "  %gone = icmp slt i64 %iprev, 0\n"
+  "  br i1 %gone, label %overflow, label %probe\n"
+  "probe:\n"
+  "  %ix = add i64 %iprev, 16\n"
+  "  %p = getelementptr i8, ptr %a, i64 %ix\n"
+  "  %d = load i8, ptr %p\n"
+  "  %isnine = icmp eq i8 %d, 9\n"
+  "  br i1 %isnine, label %nine, label %bump\n"
+  "nine:\n"
+  "  br label %carry\n"
+  "bump:\n"
+  "  %d1 = add i8 %d, 1\n"
+  "  store i8 %d1, ptr %p\n"
+  "  %nd2 = trunc i64 %i to i32\n"
+  "  store i32 %nd2, ptr %a\n"
+  "  br label %done\n"
+  "overflow:\n"
+  "  %first = getelementptr i8, ptr %a, i64 16\n"
+  "  store i8 1, ptr %first\n"
+  "  store i32 1, ptr %a\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  %dp = load i32, ptr %pp\n"
+  "  %dp1 = add i32 %dp, 1\n"
+  "  store i32 %dp1, ptr %pp\n"
+  "  br label %done\n"
+  "done:\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr i64 @__ada_decimal_rounded_integer(ptr %a) nounwind {\n"
+  "entry:\n"
+  "  %nd32 = load i32, ptr %a\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  %dp32 = load i32, ptr %pp\n"
+  "  %dp = sext i32 %dp32 to i64\n"
+  "  %huge = icmp sgt i64 %dp, 20\n"
+  "  br i1 %huge, label %saturate, label %lead\n"
+  "saturate:\n"
+  "  ret i64 -1\n"
+  "lead:\n"
+  "  %i = phi i64 [ 0, %entry ], [ %i1, %lead_step ]\n"
+  "  %n = phi i64 [ 0, %entry ], [ %n1, %lead_step ]\n"
+  "  %in_dp = icmp slt i64 %i, %dp\n"
+  "  %in_nd = icmp slt i64 %i, %nd\n"
+  "  %both = and i1 %in_dp, %in_nd\n"
+  "  br i1 %both, label %lead_step, label %zeros\n"
+  "lead_step:\n"
+  "  %ix = add i64 %i, 16\n"
+  "  %p = getelementptr i8, ptr %a, i64 %ix\n"
+  "  %d = load i8, ptr %p\n"
+  "  %dw = zext i8 %d to i64\n"
+  "  %n10 = mul i64 %n, 10\n"
+  "  %n1 = add i64 %n10, %dw\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %lead\n"
+  "zeros:\n"
+  "  %zi = phi i64 [ %i, %lead ], [ %zi1, %zero_step ]\n"
+  "  %zn = phi i64 [ %n, %lead ], [ %zn1, %zero_step ]\n"
+  "  %zmore = icmp slt i64 %zi, %dp\n"
+  "  br i1 %zmore, label %zero_step, label %round\n"
+  "zero_step:\n"
+  "  %zn1 = mul i64 %zn, 10\n"
+  "  %zi1 = add i64 %zi, 1\n"
+  "  br label %zeros\n"
+  "round:\n"
+  "  %up = call i1 @__ada_decimal_round_up_at(ptr %a, i64 %dp)\n"
+  "  %bump = zext i1 %up to i64\n"
+  "  %result = add i64 %zn, %bump\n"
+  "  ret i64 %result\n"
+  "}\n"
+  "define linkonce_odr i64 @__ada_decimal_power_step(i64 %distance) nounwind {\n"
+  "entry:\n"
+  "  %far = icmp sge i64 %distance, 9\n"
+  "  br i1 %far, label %most, label %table\n"
+  "most:\n"
+  "  ret i64 27\n"
+  "table:\n"
+  "  %p = getelementptr [9 x i8], ptr @__ada_decimal_powers, i64 0, i64 %distance\n"
+  "  %v = load i8, ptr %p\n"
+  "  %vw = zext i8 %v to i64\n"
+  "  ret i64 %vw\n"
+  "}\n"
+  "define linkonce_odr double @__ada_decimal_to_double(ptr %a, i1 %negative) nounwind {\n"
+  "entry:\n"
+  "  %nd = load i32, ptr %a\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  %empty = icmp eq i32 %nd, 0\n"
+  "  br i1 %empty, label %zero, label %range\n"
+  "range:\n"
+  "  %dp0 = load i32, ptr %pp\n"
+  "  %toobig = icmp sgt i32 %dp0, 310\n"
+  "  br i1 %toobig, label %overflow, label %range2\n"
+  "range2:\n"
+  "  %toosmall = icmp slt i32 %dp0, -330\n"
+  "  br i1 %toosmall, label %zero, label %down\n"
+  "down:\n"
+  "  %e1 = phi i64 [ 0, %range2 ], [ %e1n, %down_step ]\n"
+  "  %dpd = load i32, ptr %pp\n"
+  "  %positive = icmp sgt i32 %dpd, 0\n"
+  "  br i1 %positive, label %down_step, label %up\n"
+  "down_step:\n"
+  "  %dpdw = sext i32 %dpd to i64\n"
+  "  %ns = call i64 @__ada_decimal_power_step(i64 %dpdw)\n"
+  "  %neg_ns = sub i64 0, %ns\n"
+  "  call void @__ada_decimal_shift(ptr %a, i64 %neg_ns)\n"
+  "  %e1n = add i64 %e1, %ns\n"
+  "  br label %down\n"
+  "up:\n"
+  "  %e2 = phi i64 [ %e1, %down ], [ %e2n, %up_step ]\n"
+  "  %dpu = load i32, ptr %pp\n"
+  "  %negdp = icmp slt i32 %dpu, 0\n"
+  "  br i1 %negdp, label %up_step, label %up_check\n"
+  "up_check:\n"
+  "  %dpzero = icmp eq i32 %dpu, 0\n"
+  "  br i1 %dpzero, label %up_first, label %scaled\n"
+  "up_first:\n"
+  "  %firstp = getelementptr i8, ptr %a, i64 16\n"
+  "  %first = load i8, ptr %firstp\n"
+  "  %small = icmp ult i8 %first, 5\n"
+  "  br i1 %small, label %up_step, label %scaled\n"
+  "up_step:\n"
+  "  %dpuw = sext i32 %dpu to i64\n"
+  "  %dist = sub i64 0, %dpuw\n"
+  "  %nu = call i64 @__ada_decimal_power_step(i64 %dist)\n"
+  "  call void @__ada_decimal_shift(ptr %a, i64 %nu)\n"
+  "  %e2n = sub i64 %e2, %nu\n"
+  "  br label %up\n"
+  "scaled:\n"
+  "  %e3 = sub i64 %e2, 1\n"
+  "  %tiny = icmp slt i64 %e3, -1022\n"
+  "  br i1 %tiny, label %denormal, label %normal\n"
+  "denormal:\n"
+  "  %dn = sub i64 -1022, %e3\n"
+  "  %ndn = sub i64 0, %dn\n"
+  "  call void @__ada_decimal_shift(ptr %a, i64 %ndn)\n"
+  "  %e4d = add i64 %e3, %dn\n"
+  "  br label %normal\n"
+  "normal:\n"
+  "  %e4 = phi i64 [ %e3, %scaled ], [ %e4d, %denormal ]\n"
+  "  %biased = add i64 %e4, 1023\n"
+  "  %over = icmp sge i64 %biased, 2047\n"
+  "  br i1 %over, label %overflow, label %extract\n"
+  "extract:\n"
+  "  call void @__ada_decimal_shift(ptr %a, i64 53)\n"
+  "  %mant = call i64 @__ada_decimal_rounded_integer(ptr %a)\n"
+  "  %carried = icmp eq i64 %mant, 9007199254740992\n"
+  "  br i1 %carried, label %renorm, label %assemble\n"
+  "renorm:\n"
+  "  %mant2 = lshr i64 %mant, 1\n"
+  "  %e5 = add i64 %e4, 1\n"
+  "  %biased5 = add i64 %e5, 1023\n"
+  "  %over5 = icmp sge i64 %biased5, 2047\n"
+  "  br i1 %over5, label %overflow, label %assemble\n"
+  "assemble:\n"
+  "  %m = phi i64 [ %mant, %extract ], [ %mant2, %renorm ]\n"
+  "  %e = phi i64 [ %e4, %extract ], [ %e5, %renorm ]\n"
+  "  %hidden = and i64 %m, 4503599627370496\n"
+  "  %subnormal = icmp eq i64 %hidden, 0\n"
+  "  %eb = add i64 %e, 1023\n"
+  "  %expfield = select i1 %subnormal, i64 0, i64 %eb\n"
+  "  %frac = and i64 %m, 4503599627370495\n"
+  "  %expbits = shl i64 %expfield, 52\n"
+  "  %bits = or i64 %frac, %expbits\n"
+  "  br label %signed\n"
+  "overflow:\n"
+  "  br label %signed\n"
+  "zero:\n"
+  "  br label %signed\n"
+  "signed:\n"
+  "  %magnitude = phi i64 [ %bits, %assemble ], [ 9218868437227405312, %overflow ], [ 0, %zero ]\n"
+  "  %signbit = select i1 %negative, i64 -9223372036854775808, i64 0\n"
+  "  %all = or i64 %magnitude, %signbit\n"
+  "  %result = bitcast i64 %all to double\n"
+  "  ret double %result\n"
+  "}\n"
+  "; parse the longest prefix of %text that strtod would read as a decimal\n"
+  "; number; the end of what was read goes to %end, which is %text itself\n"
+  "; when nothing was\n"
+  "define linkonce_odr double @__ada_decimal_parse(ptr %text, ptr %end) nounwind {\n"
+  "entry:\n"
+  "  %a = alloca [816 x i8], align 8\n"
+  "  store i32 0, ptr %a\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  store i32 0, ptr %pp\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  store i8 0, ptr %tp\n"
+  "  store ptr %text, ptr %end\n"
+  "  br label %blank\n"
+  "blank:\n"
+  "  %bp = phi ptr [ %text, %entry ], [ %bp1, %blank_skip ]\n"
+  "  %bc = load i8, ptr %bp\n"
+  "  %is_sp = icmp eq i8 %bc, 32\n"
+  "  %ctl_lo = icmp uge i8 %bc, 9\n"
+  "  %ctl_hi = icmp ule i8 %bc, 13\n"
+  "  %is_ctl = and i1 %ctl_lo, %ctl_hi\n"
+  "  %is_blank = or i1 %is_sp, %is_ctl\n"
+  "  br i1 %is_blank, label %blank_skip, label %sign\n"
+  "blank_skip:\n"
+  "  %bp1 = getelementptr i8, ptr %bp, i64 1\n"
+  "  br label %blank\n"
+  "sign:\n"
+  "  %is_minus = icmp eq i8 %bc, 45\n"
+  "  %is_plus = icmp eq i8 %bc, 43\n"
+  "  %signed = or i1 %is_minus, %is_plus\n"
+  "  %sp1 = getelementptr i8, ptr %bp, i64 1\n"
+  "  %start = select i1 %signed, ptr %sp1, ptr %bp\n"
+  "  br label %mantissa\n"
+  "mantissa:\n"
+  "  %mp = phi ptr [ %start, %sign ], [ %mp1, %mantissa_next ]\n"
+  "  %seen_dot = phi i1 [ false, %sign ], [ %seen_dot1, %mantissa_next ]\n"
+  "  %any = phi i1 [ false, %sign ], [ %any1, %mantissa_next ]\n"
+  "  %nd = phi i32 [ 0, %sign ], [ %nd1, %mantissa_next ]\n"
+  "  %dp = phi i32 [ 0, %sign ], [ %dp1, %mantissa_next ]\n"
+  "  %mc = load i8, ptr %mp\n"
+  "  %is_dot = icmp eq i8 %mc, 46\n"
+  "  %first_dot = xor i1 %seen_dot, true\n"
+  "  %take_dot = and i1 %is_dot, %first_dot\n"
+  "  br i1 %take_dot, label %dot, label %maybe_digit\n"
+  "dot:\n"
+  "  br label %mantissa_next\n"
+  "maybe_digit:\n"
+  "  %dv = sub i8 %mc, 48\n"
+  "  %is_digit = icmp ult i8 %dv, 10\n"
+  "  br i1 %is_digit, label %digit, label %mantissa_done\n"
+  "digit:\n"
+  "  %is_nought = icmp eq i8 %dv, 0\n"
+  "  %no_lead = icmp eq i32 %nd, 0\n"
+  "  %leading = and i1 %is_nought, %no_lead\n"
+  "  br i1 %leading, label %lead_zero, label %significant\n"
+  "lead_zero:\n"
+  "  %dp_lz = sub i32 %dp, 1\n"
+  "  %dp_lz2 = select i1 %seen_dot, i32 %dp_lz, i32 %dp\n"
+  "  br label %mantissa_next\n"
+  "significant:\n"
+  "  %room = icmp slt i32 %nd, 800\n"
+  "  br i1 %room, label %store_digit, label %drop_digit\n"
+  "store_digit:\n"
+  "  %ndw = sext i32 %nd to i64\n"
+  "  %dix = add i64 %ndw, 16\n"
+  "  %dptr = getelementptr i8, ptr %a, i64 %dix\n"
+  "  store i8 %dv, ptr %dptr\n"
+  "  %nd_s = add i32 %nd, 1\n"
+  "  br label %count_place\n"
+  "drop_digit:\n"
+  "  %nonzero = icmp ne i8 %dv, 0\n"
+  "  br i1 %nonzero, label %drop_mark, label %count_place\n"
+  "drop_mark:\n"
+  "  store i8 1, ptr %tp\n"
+  "  br label %count_place\n"
+  "count_place:\n"
+  "  %nd_c = phi i32 [ %nd_s, %store_digit ], [ %nd, %drop_digit ], [ %nd, %drop_mark ]\n"
+  "  %dp_inc = add i32 %dp, 1\n"
+  "  %dp_c = select i1 %seen_dot, i32 %dp, i32 %dp_inc\n"
+  "  br label %mantissa_next\n"
+  "mantissa_next:\n"
+  "  %seen_dot1 = phi i1 [ true, %dot ], [ %seen_dot, %lead_zero ], [ %seen_dot, %count_place ]\n"
+  "  %any1 = phi i1 [ %any, %dot ], [ true, %lead_zero ], [ true, %count_place ]\n"
+  "  %nd1 = phi i32 [ %nd, %dot ], [ %nd, %lead_zero ], [ %nd_c, %count_place ]\n"
+  "  %dp1 = phi i32 [ %dp, %dot ], [ %dp_lz2, %lead_zero ], [ %dp_c, %count_place ]\n"
+  "  %mp1 = getelementptr i8, ptr %mp, i64 1\n"
+  "  br label %mantissa\n"
+  "mantissa_done:\n"
+  "  br i1 %any, label %exponent, label %nothing\n"
+  "nothing:\n"
+  "  ret double 0.0\n"
+  "exponent:\n"
+  "  store i32 %nd, ptr %a\n"
+  "  store i32 %dp, ptr %pp\n"
+  "  %is_e = icmp eq i8 %mc, 101\n"
+  "  %is_E = icmp eq i8 %mc, 69\n"
+  "  %has_e = or i1 %is_e, %is_E\n"
+  "  br i1 %has_e, label %exp_sign, label %finish\n"
+  "exp_sign:\n"
+  "  %ep0 = getelementptr i8, ptr %mp, i64 1\n"
+  "  %esc = load i8, ptr %ep0\n"
+  "  %e_minus = icmp eq i8 %esc, 45\n"
+  "  %e_plus = icmp eq i8 %esc, 43\n"
+  "  %e_signed = or i1 %e_minus, %e_plus\n"
+  "  %ep1 = getelementptr i8, ptr %mp, i64 2\n"
+  "  %estart = select i1 %e_signed, ptr %ep1, ptr %ep0\n"
+  "  br label %exp_digits\n"
+  "exp_digits:\n"
+  "  %ep = phi ptr [ %estart, %exp_sign ], [ %ep_n, %exp_step ]\n"
+  "  %ev = phi i32 [ 0, %exp_sign ], [ %ev_n, %exp_step ]\n"
+  "  %ec = load i8, ptr %ep\n"
+  "  %edv = sub i8 %ec, 48\n"
+  "  %e_is_digit = icmp ult i8 %edv, 10\n"
+  "  br i1 %e_is_digit, label %exp_step, label %exp_done\n"
+  "exp_step:\n"
+  "  %edw = zext i8 %edv to i32\n"
+  "  %ev10 = mul i32 %ev, 10\n"
+  "  %ev_sum = add i32 %ev10, %edw\n"
+  "  %ev_big = icmp sgt i32 %ev, 100000\n"
+  "  %ev_n = select i1 %ev_big, i32 %ev, i32 %ev_sum\n"
+  "  %ep_n = getelementptr i8, ptr %ep, i64 1\n"
+  "  br label %exp_digits\n"
+  "exp_done:\n"
+  "  %e_none = icmp eq ptr %ep, %estart\n"
+  "  br i1 %e_none, label %finish, label %exp_apply\n"
+  "exp_apply:\n"
+  "  %ev_neg = sub i32 0, %ev\n"
+  "  %shift = select i1 %e_minus, i32 %ev_neg, i32 %ev\n"
+  "  %dp_e = add i32 %dp, %shift\n"
+  "  store i32 %dp_e, ptr %pp\n"
+  "  br label %finish\n"
+  "finish:\n"
+  "  %stop = phi ptr [ %mp, %exponent ], [ %mp, %exp_done ], [ %ep, %exp_apply ]\n"
+  "  store ptr %stop, ptr %end\n"
+  "  call void @__ada_decimal_trim(ptr %a)\n"
+  "  %v = call double @__ada_decimal_to_double(ptr %a, i1 %is_minus)\n"
+  "  ret double %v\n"
+  "}\n"
+  "; the exact decimal expansion of the magnitude of a finite double\n"
+  "define linkonce_odr void @__ada_decimal_of_double(ptr %a, double %x) nounwind {\n"
+  "entry:\n"
+  "  %tp = getelementptr i8, ptr %a, i64 8\n"
+  "  store i8 0, ptr %tp\n"
+  "  %bits = bitcast double %x to i64\n"
+  "  %field = lshr i64 %bits, 52\n"
+  "  %exp = and i64 %field, 2047\n"
+  "  %frac = and i64 %bits, 4503599627370495\n"
+  "  %sub = icmp eq i64 %exp, 0\n"
+  "  %withhidden = or i64 %frac, 4503599627370496\n"
+  "  %mant = select i1 %sub, i64 %frac, i64 %withhidden\n"
+  "  %e1 = select i1 %sub, i64 1, i64 %exp\n"
+  "  %e2 = sub i64 %e1, 1075\n"
+  "  call void @__ada_decimal_assign(ptr %a, i64 %mant)\n"
+  "  call void @__ada_decimal_shift(ptr %a, i64 %e2)\n"
+  "  ret void\n"
+  "}\n"
+  "; the digit at %index of the decimal, or 0 past either end\n"
+  "define linkonce_odr i8 @__ada_decimal_digit(ptr %a, i64 %index) nounwind {\n"
+  "entry:\n"
+  "  %nd32 = load i32, ptr %a\n"
+  "  %nd = sext i32 %nd32 to i64\n"
+  "  %neg = icmp slt i64 %index, 0\n"
+  "  %past = icmp sge i64 %index, %nd\n"
+  "  %outside = or i1 %neg, %past\n"
+  "  br i1 %outside, label %none, label %read\n"
+  "none:\n"
+  "  ret i8 0\n"
+  "read:\n"
+  "  %ix = add i64 %index, 16\n"
+  "  %p = getelementptr i8, ptr %a, i64 %ix\n"
+  "  %d = load i8, ptr %p\n"
+  "  ret i8 %d\n"
+  "}\n"
+  "; what C's \"% .*E\" (%exponent) or \"% .*f\" writes for %val with %aft\n"
+  "; digits after the point, written at %out; the result is its length\n"
+  "define linkonce_odr i64 @__ada_format_real(ptr %out, double %val, i32 %aft32, i1 %exponent) nounwind {\n"
+  "entry:\n"
+  "  %a = alloca [816 x i8], align 8\n"
+  "  %aft = sext i32 %aft32 to i64\n"
+  "  %bits = bitcast double %val to i64\n"
+  "  %negative = icmp slt i64 %bits, 0\n"
+  "  %sign = select i1 %negative, i8 45, i8 32\n"
+  "  store i8 %sign, ptr %out\n"
+  "  %field = lshr i64 %bits, 52\n"
+  "  %expf = and i64 %field, 2047\n"
+  "  %special = icmp eq i64 %expf, 2047\n"
+  "  br i1 %special, label %nonfinite, label %finite\n"
+  "nonfinite:\n"
+  "  %frac = and i64 %bits, 4503599627370495\n"
+  "  %isnan = icmp ne i64 %frac, 0\n"
+  "  %case = select i1 %exponent, i8 32, i8 0\n"
+  "  %l0 = select i1 %isnan, i8 110, i8 105\n"
+  "  %l1 = select i1 %isnan, i8 97, i8 110\n"
+  "  %l2 = select i1 %isnan, i8 110, i8 102\n"
+  "  %c0 = sub i8 %l0, %case\n"
+  "  %c1 = sub i8 %l1, %case\n"
+  "  %c2 = sub i8 %l2, %case\n"
+  "  %o1 = getelementptr i8, ptr %out, i64 1\n"
+  "  store i8 %c0, ptr %o1\n"
+  "  %o2 = getelementptr i8, ptr %out, i64 2\n"
+  "  store i8 %c1, ptr %o2\n"
+  "  %o3 = getelementptr i8, ptr %out, i64 3\n"
+  "  store i8 %c2, ptr %o3\n"
+  "  ret i64 4\n"
+  "finite:\n"
+  "  %mag = call double @llvm.fabs.f64(double %val)\n"
+  "  call void @__ada_decimal_of_double(ptr %a, double %mag)\n"
+  "  %pp = getelementptr i8, ptr %a, i64 4\n"
+  "  br i1 %exponent, label %scientific, label %positional\n"
+  "scientific:\n"
+  "  %digits = add i64 %aft, 1\n"
+  "  call void @__ada_decimal_round(ptr %a, i64 %digits)\n"
+  "  %nd32 = load i32, ptr %a\n"
+  "  %zero = icmp eq i32 %nd32, 0\n"
+  "  %dp32 = load i32, ptr %pp\n"
+  "  %dpw = sext i32 %dp32 to i64\n"
+  "  %e_raw = sub i64 %dpw, 1\n"
+  "  %e = select i1 %zero, i64 0, i64 %e_raw\n"
+  "  %d0 = call i8 @__ada_decimal_digit(ptr %a, i64 0)\n"
+  "  %d0c = add i8 %d0, 48\n"
+  "  %s1 = getelementptr i8, ptr %out, i64 1\n"
+  "  store i8 %d0c, ptr %s1\n"
+  "  %has_point = icmp sgt i64 %aft, 0\n"
+  "  br i1 %has_point, label %sci_point, label %sci_exp\n"
+  "sci_point:\n"
+  "  %s2 = getelementptr i8, ptr %out, i64 2\n"
+  "  store i8 46, ptr %s2\n"
+  "  br label %sci_frac\n"
+  "sci_frac:\n"
+  "  %j = phi i64 [ 0, %sci_point ], [ %j1, %sci_frac_step ]\n"
+  "  %jdone = icmp sge i64 %j, %aft\n"
+  "  br i1 %jdone, label %sci_frac_end, label %sci_frac_step\n"
+  "sci_frac_step:\n"
+  "  %j1 = add i64 %j, 1\n"
+  "  %dj = call i8 @__ada_decimal_digit(ptr %a, i64 %j1)\n"
+  "  %djc = add i8 %dj, 48\n"
+  "  %jo = add i64 %j, 3\n"
+  "  %jp = getelementptr i8, ptr %out, i64 %jo\n"
+  "  store i8 %djc, ptr %jp\n"
+  "  br label %sci_frac\n"
+  "sci_frac_end:\n"
+  "  %after_frac = add i64 %aft, 3\n"
+  "  br label %sci_exp\n"
+  "sci_exp:\n"
+  "  %epos = phi i64 [ 2, %scientific ], [ %after_frac, %sci_frac_end ]\n"
+  "  %ep = getelementptr i8, ptr %out, i64 %epos\n"
+  "  store i8 69, ptr %ep\n"
+  "  %eneg = icmp slt i64 %e, 0\n"
+  "  %esign = select i1 %eneg, i8 45, i8 43\n"
+  "  %epos1 = add i64 %epos, 1\n"
+  "  %esp = getelementptr i8, ptr %out, i64 %epos1\n"
+  "  store i8 %esign, ptr %esp\n"
+  "  %eflip = sub i64 0, %e\n"
+  "  %emag = select i1 %eneg, i64 %eflip, i64 %e\n"
+  "  %epos2 = add i64 %epos, 2\n"
+  "  %elen = call i64 @__ada_format_exponent(ptr %out, i64 %epos2, i64 %emag)\n"
+  "  %total = add i64 %epos2, %elen\n"
+  "  ret i64 %total\n"
+  "positional:\n"
+  "  %dpb32 = load i32, ptr %pp\n"
+  "  %dpb = sext i32 %dpb32 to i64\n"
+  "  %cut = add i64 %dpb, %aft\n"
+  "  call void @__ada_decimal_round(ptr %a, i64 %cut)\n"
+  "  %ndp32 = load i32, ptr %a\n"
+  "  %pzero = icmp eq i32 %ndp32, 0\n"
+  "  %dpa32 = load i32, ptr %pp\n"
+  "  %dpa_raw = sext i32 %dpa32 to i64\n"
+  "  %dpa = select i1 %pzero, i64 0, i64 %dpa_raw\n"
+  "  %whole = icmp sgt i64 %dpa, 0\n"
+  "  br i1 %whole, label %int_digits, label %int_zero\n"
+  "int_zero:\n"
+  "  %z1 = getelementptr i8, ptr %out, i64 1\n"
+  "  store i8 48, ptr %z1\n"
+  "  br label %fraction\n"
+  "int_digits:\n"
+  "  %i = phi i64 [ 0, %positional ], [ %i1, %int_step ]\n"
+  "  %idone = icmp sge i64 %i, %dpa\n"
+  "  br i1 %idone, label %int_end, label %int_step\n"
+  "int_step:\n"
+  "  %di = call i8 @__ada_decimal_digit(ptr %a, i64 %i)\n"
+  "  %dic = add i8 %di, 48\n"
+  "  %io = add i64 %i, 1\n"
+  "  %ip = getelementptr i8, ptr %out, i64 %io\n"
+  "  store i8 %dic, ptr %ip\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %int_digits\n"
+  "int_end:\n"
+  "  %io_end = add i64 %dpa, 1\n"
+  "  br label %fraction\n"
+  "fraction:\n"
+  "  %flen = phi i64 [ 2, %int_zero ], [ %io_end, %int_end ]\n"
+  "  %fpoint = icmp sgt i64 %aft, 0\n"
+  "  br i1 %fpoint, label %frac_point, label %frac_none\n"
+  "frac_none:\n"
+  "  ret i64 %flen\n"
+  "frac_point:\n"
+  "  %fp = getelementptr i8, ptr %out, i64 %flen\n"
+  "  store i8 46, ptr %fp\n"
+  "  br label %frac_loop\n"
+  "frac_loop:\n"
+  "  %k = phi i64 [ 0, %frac_point ], [ %k1, %frac_step ]\n"
+  "  %kdone = icmp sge i64 %k, %aft\n"
+  "  br i1 %kdone, label %frac_end, label %frac_step\n"
+  "frac_step:\n"
+  "  %kix = add i64 %dpa, %k\n"
+  "  %dk = call i8 @__ada_decimal_digit(ptr %a, i64 %kix)\n"
+  "  %dkc = add i8 %dk, 48\n"
+  "  %ko0 = add i64 %flen, 1\n"
+  "  %ko = add i64 %ko0, %k\n"
+  "  %kp = getelementptr i8, ptr %out, i64 %ko\n"
+  "  store i8 %dkc, ptr %kp\n"
+  "  %k1 = add i64 %k, 1\n"
+  "  br label %frac_loop\n"
+  "frac_end:\n"
+  "  %flen1 = add i64 %flen, 1\n"
+  "  %ftotal = add i64 %flen1, %aft\n"
+  "  ret i64 %ftotal\n"
+  "}\n"
+  "; at least two decimal digits of %value at %out + %at; the result is how\n"
+  "; many were written\n"
+  "define linkonce_odr i64 @__ada_format_exponent(ptr %out, i64 %at, i64 %value) nounwind {\n"
+  "entry:\n"
+  "  %buf = alloca [24 x i8], align 1\n"
+  "  br label %peel\n"
+  "peel:\n"
+  "  %n = phi i64 [ %value, %entry ], [ %q, %peel ]\n"
+  "  %w = phi i64 [ 0, %entry ], [ %w1, %peel ]\n"
+  "  %q = udiv i64 %n, 10\n"
+  "  %q10 = mul i64 %q, 10\n"
+  "  %r = sub i64 %n, %q10\n"
+  "  %r8 = trunc i64 %r to i8\n"
+  "  %rc = add i8 %r8, 48\n"
+  "  %bp = getelementptr i8, ptr %buf, i64 %w\n"
+  "  store i8 %rc, ptr %bp\n"
+  "  %w1 = add i64 %w, 1\n"
+  "  %more = icmp ne i64 %q, 0\n"
+  "  %short = icmp ult i64 %w1, 2\n"
+  "  %go = or i1 %more, %short\n"
+  "  br i1 %go, label %peel, label %emit\n"
+  "emit:\n"
+  "  br label %copy\n"
+  "copy:\n"
+  "  %i = phi i64 [ 0, %emit ], [ %i1, %copy_step ]\n"
+  "  %done = icmp sge i64 %i, %w1\n"
+  "  br i1 %done, label %out_ret, label %copy_step\n"
+  "copy_step:\n"
+  "  %src0 = sub i64 %w1, 1\n"
+  "  %src = sub i64 %src0, %i\n"
+  "  %sp = getelementptr i8, ptr %buf, i64 %src\n"
+  "  %c = load i8, ptr %sp\n"
+  "  %dst = add i64 %at, %i\n"
+  "  %dp_ = getelementptr i8, ptr %out, i64 %dst\n"
+  "  store i8 %c, ptr %dp_\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %copy\n"
+  "out_ret:\n"
+  "  ret i64 %w1\n"
+  "}\n";
 
 
 
@@ -17515,6 +20332,7 @@ typedef struct {
   const char                 *link_driver;
   bool                        emit_object_only;
   bool                        shared_library;
+  bool                        hosted_link;
 } Native_Backend_Options;
 
 enum { LLVM_TLS_GENERAL_DYNAMIC = 1, LLVM_TLS_LOCAL_EXEC = 4 };
@@ -17575,6 +20393,26 @@ bool Llvm_C_Api_Load          (Llvm_C_Api *api, char *err, size_t err_size);
 int  Native_Backend_Compile   (const char *ir_path, const char *const *extra_ir,
                                int extra_count, const char *exe_path,
                                const Native_Backend_Options *options);
+#if defined(SIMD_X86_64) and \
+    (defined(__linux__) or (defined(_WIN32) and not defined(ADA_WINDOWS_NATIVE)))
+  #define PURE_PLATFORM_AVAILABLE 1
+#endif
+#ifdef PURE_PLATFORM_AVAILABLE
+  bool  Pure_Link_Wanted         (const Native_Backend_Options *options,
+                                  bool *demanded);
+  bool  Pure_Platform_Join       (void *context, void *module, bool demanded);
+  bool  Pure_Link_Uses_Elsewhere (void *function, Name_Index *replaced);
+  bool  Pure_Link_Replaceable    (void *global);
+  Slice Pure_Link_Name           (void *value);
+  int   Pure_Link_Run            (const char *object, const char *output);
+#endif
+#if defined(PURE_PLATFORM_AVAILABLE) and defined(_WIN32)
+  bool  Pure_Import_Library_Write (const char *path);
+  Slice Pure_Import_Name          (const char *declaration);
+  void  Pure_Import_Header        (FILE *file, const char *name, size_t size);
+  void  Pure_Import_Big_Endian    (FILE *file, u32 value);
+  void  Pure_Import_Little_Endian (FILE *file, u32 value, u32 width);
+#endif
 void Copy_Bundled_Library     (const char *line, const char *end,
                                const char *directory);
 void Copy_Bundled_Libraries   (const char *exe_path, const char *ir_path,
@@ -17789,6 +20627,22 @@ struct Llvm_C_Api {
   void       *(*Next_Global)                (void *global);
   int         (*Thread_Local_Mode)          (void *global);
   void        (*Set_Thread_Local_Mode)      (void *global, int mode);
+
+  void       *(*Buffer_From_Text)           (const char *text, size_t length,
+                                             const char *name);
+  void       *(*First_Function)             (void *module);
+  void       *(*Next_Function)              (void *function);
+  Llvm_Bool   (*Is_Declaration)             (void *global);
+  const char *(*Value_Name)                 (void *value, size_t *length);
+  void       *(*First_Use)                  (void *value);
+  void       *(*Next_Use)                   (void *use);
+  void       *(*Use_User)                   (void *use);
+  void       *(*Is_Instruction)             (void *value);
+  void       *(*Instruction_Block)          (void *instruction);
+  void       *(*Block_Function)             (void *block);
+  int         (*Linkage)                    (void *global);
+  void       *(*Named_Function)             (void *module, const char *name);
+  void        (*Delete_Function)            (void *function);
 };
 
 
@@ -17857,6 +20711,72 @@ static const struct {
                        "(set CC, or install cc/clang/gcc)"
 #endif
 };
+
+#define PURE_LINK_FEATURE "linking a program without the C library"
+
+#if defined(PURE_PLATFORM_AVAILABLE) and defined(__linux__)
+  #define PURE_EXECUTABLE_SUFFIX ""
+  #define PURE_LINKER_ADVICE     "no linker found to link without the C " \
+                                 "library (install ld.lld or ld)"
+
+#define PURE_LINKER_LIST(_)                                                    \
+  _ ("ld.lld", "-static -nostdlib --eh-frame-hdr -z noexecstack -e _start",    \
+     "-o", "")                                                                 \
+  _ ("ld",     "-static -nostdlib --eh-frame-hdr -z noexecstack -e _start",    \
+     "-o", "")                                                                 \
+  _ ("cc",     "-static -nostdlib -Wl,--eh-frame-hdr -Wl,-z,noexecstack"       \
+               " -Wl,-e,_start", "-o", "")
+#elif defined(PURE_PLATFORM_AVAILABLE)
+  #define PURE_EXECUTABLE_SUFFIX     ".exe"
+  #define PURE_LINKER_ADVICE         "no linker found to link without the C " \
+                                     "library (install lld-link or ld.lld)"
+  #define PURE_IMPORT_LIBRARY        "kernel32.dll"
+  #define PURE_IMPORT_PREFIX         "__imp_"
+  #define PURE_ARCHIVE_MAGIC_BYTES   8
+  #define PURE_ARCHIVE_HEADER_BYTES  60
+  #define PURE_IMPORT_OBJECT_BYTES   20
+  #define PURE_IMPORT_SIGNATURE      0xFFFF
+  #define PURE_IMPORT_MACHINE        0x8664
+  #define PURE_IMPORT_CODE_BY_NAME   4
+  _Static_assert (PURE_IMPORT_OBJECT_BYTES == sizeof (IMPORT_OBJECT_HEADER) and
+                  PURE_ARCHIVE_HEADER_BYTES == IMAGE_SIZEOF_ARCHIVE_MEMBER_HDR and
+                  PURE_IMPORT_MACHINE == IMAGE_FILE_MACHINE_AMD64 and
+                  PURE_IMPORT_CODE_BY_NAME ==
+                    (IMPORT_OBJECT_CODE | IMPORT_OBJECT_NAME << 2),
+                  "the import library written for a pure link and <winnt.h>"
+                  " disagree about a short import object");
+
+#define PURE_LINKER_LIST(_)                                                    \
+  _ ("lld-link", "/nologo -lldmingw /nodefaultlib /entry:mainCRTStartup"       \
+                 " /subsystem:console /stack:" TEXT_OF (LINK_STACK_BYTES),     \
+     "", "/out:")                                                              \
+  _ ("ld.lld",   "-m i386pep --entry mainCRTStartup --subsystem console"       \
+                 " --stack " TEXT_OF (LINK_STACK_BYTES), "-o", "")              \
+  _ ("clang",    "--target=x86_64-w64-windows-gnu -fuse-ld=lld -nostdlib"      \
+                 " -Wl,--entry,mainCRTStartup -Wl,--subsystem,console"          \
+                 " -Wl,--stack," TEXT_OF (LINK_STACK_BYTES), "-o", "")          \
+  _ ("zig lld-link", "/nologo -lldmingw /nodefaultlib /entry:mainCRTStartup"   \
+                 " /subsystem:console /stack:" TEXT_OF (LINK_STACK_BYTES),     \
+     "", "/out:")
+#endif
+
+#ifdef PURE_PLATFORM_AVAILABLE
+static const char *const Pure_Tasking_Functions[] = {
+  "__ada_rt_thread_spawn", "__ada_rt_thread_join"
+};
+
+static const struct {
+  const char *driver;
+  const char *options;
+  const char *output_flag;
+  const char *output_prefix;
+} Pure_Linkers[] = {
+#define PURE_LINKER_ROW(driver, options, flag, prefix)                         \
+  { driver, options, flag, prefix },
+  PURE_LINKER_LIST (PURE_LINKER_ROW)
+#undef PURE_LINKER_ROW
+};
+#endif
 
 static const char *const Linker_Drivers[] = {
 #if defined(_WIN32) and defined(ADA_WINDOWS_NATIVE)
@@ -18602,6 +21522,7 @@ void                   Dap_Decoded_Exception            (const char *raw, char *
 bool                   Dap_Decode_Name_Members          (const Json *items);
 Json                  *Dap_Body_Member                  (const Json *message, const char *key);
 const char            *Dap_Result_Text                  (const Json *response);
+const char            *Dap_Error_Text                   (const Json *response);
 bool                   Dap_Result_Unsigned              (const Json *response, u64 *value);
 bool                   Dap_Result_Quoted                (const Json *response, char *out,
                                                          size_t size);
@@ -21393,6 +24314,19 @@ _Static_assert (ADA_SPIN_BUDGET_UNIT * ADA_SPIN_BUDGET_SPAN ==
   "  %cores = call i32 @GetActiveProcessorCount(i16 -1)"                  \
     "  ; ALL_PROCESSOR_GROUPS\n"                                          \
   ADA_SPIN_CORE_RECORD
+#elif defined(LINUX_SYSTEM_CALL_ASM)
+#define ADA_SPIN_CORE_QUERY                                               \
+  "  %mask = alloca [16 x i64], align 8\n"                                 \
+  "  store <16 x i64> zeroinitializer, ptr %mask, align 8\n"              \
+  "  %maski = ptrtoint ptr %mask to i64\n"                                \
+  "  %_aff = " LINUX_SYSTEM_CALL (sched_getaffinity, "0",                 \
+                                  TEXT_OF (LINUX_AFFINITY_BYTES), "%maski", \
+                                  "0", "0", "0") "\n"                     \
+  "  %words = load <16 x i64>, ptr %mask, align 8\n"                       \
+  "  %bits = call <16 x i64> @llvm.ctpop.v16i64(<16 x i64> %words)\n"    \
+  "  %wide = call i64 @llvm.vector.reduce.add.v16i64(<16 x i64> %bits)\n" \
+  "  %cores = trunc i64 %wide to i32\n"                                   \
+  ADA_SPIN_CORE_RECORD
 #elif defined(_SC_NPROCESSORS_ONLN)
 #ifdef __APPLE__
 #define SPIN_PROCESSORS_ONLINE_SELECTOR 58
@@ -21415,10 +24349,22 @@ _Static_assert (SPIN_PROCESSORS_ONLINE_SELECTOR == _SC_NPROCESSORS_ONLN,
   #define ADA_LOCK_ATTEMPT(suffix)                                        \
     "  %rc" suffix " = call i8 @TryAcquireSRWLockExclusive(ptr @__rv_mutex)\n" \
     "  %got" suffix " = icmp ne i8 %rc" suffix ", 0\n"
+#elif defined(LINUX_SYSTEM_CALL_ASM)
+  #define ADA_LOCK_ATTEMPT(suffix)                                        \
+    "  %rc" suffix " = cmpxchg ptr @__rv_mutex, i32 0, i32 1 acquire"     \
+      " monotonic\n"                                                      \
+    "  %got" suffix " = extractvalue { i32, i1 } %rc" suffix ", 1\n"
 #else
   #define ADA_LOCK_ATTEMPT(suffix)                                        \
     "  %rc" suffix " = call i32 @pthread_mutex_trylock(ptr @__rv_mutex)\n" \
     "  %got" suffix " = icmp eq i32 %rc" suffix ", 0\n"
+#endif
+
+#if defined(_WIN32) or defined(LINUX_SYSTEM_CALL_ASM)
+  #define ADA_RV_MUTEX_INIT ""
+#else
+  #define ADA_RV_MUTEX_INIT                                               \
+    "  %_m = call i32 @pthread_mutex_init(ptr @__rv_mutex, ptr null)\n"
 #endif
 
 #define RUNTIME_SPINNING_LOCK(block_body)                       \
@@ -21458,9 +24404,6 @@ _Static_assert (SPIN_PROCESSORS_ONLINE_SELECTOR == _SC_NPROCESSORS_ONLN,
   "  store ptr @.detail." detail ", ptr @__pending_detail\n"    \
   RAISE_RUNTIME_EXCEPTION ("refused", "constraint_error")
 #define RUNTIME_OCCURRENCE_TEXT_LIST(_)                         \
-  _ (".occurrence.bare",      "%s%s\n")                         \
-  _ (".occurrence.inline",    "%s%s : %.*s\n")                  \
-  _ (".occurrence.block",     "%s%s\n%.*s")                     \
   _ (".occurrence.unhandled", "Unhandled exception: ")          \
   _ (".occurrence.raised",    "raised ")                        \
   _ (".detail.raise_null_id",                                   \
@@ -22276,6 +25219,9 @@ static const char Module_Header_Text[] =
   #define EXTERNAL_ON_LINUX(text) text
 #endif
 #define EXTERNAL_ON_POSIX(text) EXTERNAL_ON_APPLE (text) EXTERNAL_ON_LINUX (text)
+#define EXTERNAL_ON_UCRT(text)  EXTERNAL_ON_WIN32 (text)
+#define EXTERNAL_ON_PURE(text)
+#define EXTERNAL_ON_PURE_WIN32(text)
 #if defined(ADA_EH_WINDOWS)
   #define EXTERNAL_ON_EH_WINDOWS(text) text
   #define EXTERNAL_ON_EH_SEH(text)
@@ -22309,21 +25255,30 @@ static const char Module_Header_Text[] =
   _ (ANY,       "declare ptr @malloc (i64)")                                   \
   _ (ANY,       "declare ptr @calloc (i64, i64)")                              \
   _ (ANY,       "declare void @free (ptr)")                                    \
-  _ (WIN32,     "declare ptr @_aligned_malloc (i64, i64)")                     \
-  _ (WIN32,     "declare i32 @_setmode (i32, i32)")                            \
+  _ (UCRT,      "declare ptr @_aligned_malloc (i64, i64)")                     \
+  _ (UCRT,      "declare i32 @_setmode (i32, i32)")                            \
   _ (WIN32,     "declare ptr @GetCurrentProcess ()")                           \
   _ (WIN32,     "declare i32 @K32GetProcessMemoryInfo (ptr, ptr, i32)")        \
-  _ (WIN32,     "declare i32 @_heapmin ()")                                    \
-  _ (POSIX,     "declare ptr @fopen (ptr, ptr)")                               \
-  _ (POSIX,     "declare i64 @fread (ptr, i64, i64, ptr)")                     \
-  _ (POSIX,     "declare i32 @fclose (ptr)")                                   \
+  _ (UCRT,      "declare i32 @_heapmin ()")                                    \
   _ (POSIX,     "declare ptr @aligned_alloc (i64, i64)")                       \
-  _ (ANY,       "declare i32 @printf (ptr, ...)")                              \
-  _ (ANY,       "declare i32 @" ADA_SNPRINTF " (ptr noalias nocapture"        \
-                " writeonly, i64, ptr nocapture readonly, ...)")               \
+  _ (ANY,       "declare i64 @fopen (i64, i64)")                               \
+  _ (ANY,       "declare i32 @fclose (i64)")                                   \
+  _ (ANY,       "declare i32 @fputc (i32, i64)")                               \
+  _ (ANY,       "declare i32 @fgetc (i64)")                                    \
+  _ (ANY,       "declare i32 @ungetc (i32, i64)")                              \
+  _ (ANY,       "declare i64 @fwrite (i64, i64, i64, i64)")                    \
+  _ (ANY,       "declare i64 @fread (i64, i64, i64, i64)")                     \
+  _ (ANY,       "declare i32 @fflush (i64)")                                   \
+  _ (UCRT,      "declare i64 @_ftelli64 (i64)")                                \
+  _ (UCRT,      "declare i32 @_fseeki64 (i64, i64, i32)")                      \
+  _ (POSIX,     "declare i64 @ftell (i64)")                                    \
+  _ (POSIX,     "declare i32 @fseek (i64, i64, i32)")                          \
+  _ (ANY,       "declare i64 @fgets (i64, i32, i64)")                          \
+  _ (ANY,       "declare i64 @tmpfile ()")                                     \
+  _ (ANY,       "declare i32 @remove (i64)")                                   \
+  _ (ANY,       "declare ptr @memchr (ptr, i32, i64)")                         \
   _ (ANY,       "declare i64 @strlen (ptr nocapture)")                         \
-  _ (ANY,       "declare double @strtod (ptr readonly, ptr nocapture)")        \
-  _ (WIN32,     "declare ptr @__acrt_iob_func (i32)")                          \
+  _ (UCRT,      "declare ptr @__acrt_iob_func (i32)")                          \
   _ (APPLE,     "@__stdinp = external global ptr")                             \
   _ (APPLE,     "@__stdoutp = external global ptr")                            \
   _ (APPLE,     "@__stderrp = external global ptr")                            \
@@ -22364,16 +25319,45 @@ static const char Module_Header_Text[] =
   _ (WIN32,     "declare ptr @GetProcAddress (ptr, ptr)")                      \
   _ (WIN32,     "declare ptr @LoadLibraryA (ptr)")                             \
   _ (WIN32,     "declare i32 @GetModuleFileNameA (ptr, ptr, i32)")             \
+  _ (WIN32,     "declare i32 @ReadFile (ptr, ptr, i32, ptr, ptr)")             \
+  _ (WIN32,     "declare i32 @WriteFile (ptr, ptr, i32, ptr, ptr)")            \
+  _ (WIN32,     "declare i32 @SetFilePointerEx (ptr, i64, ptr, i32)")          \
+  _ (WIN32,     "declare i32 @GetFileType (ptr)")                              \
+  _ (WIN32,     "declare i32 @GetConsoleMode (ptr, ptr)")                      \
+  _ (WIN32,     "declare ptr @CreateFileW (ptr, i32, i32, ptr, i32, i32, ptr)")\
+  _ (WIN32,     "declare i32 @DeleteFileW (ptr)")                              \
+  _ (WIN32,     "declare i32 @RemoveDirectoryW (ptr)")                         \
+  _ (WIN32,     "declare i32 @MultiByteToWideChar (i32, i32, ptr, i32, ptr, i32)")\
+  _ (WIN32,     "declare i32 @GetTempPathW (i32, ptr)")                        \
+  _ (WIN32,     "declare i32 @GetTempFileNameW (ptr, ptr, i32, ptr)")          \
+  _ (WIN32,     "declare ptr @GetStdHandle (i32)")                             \
+  _ (WIN32,     "declare i32 @GetLastError ()")                                \
+  _ (WIN32,     "declare i32 @QueryPerformanceCounter (ptr)")                  \
+  _ (WIN32,     "declare ptr @GetCommandLineW ()")                             \
+  _ (WIN32,     "declare i32 @WideCharToMultiByte (i32, i32, ptr, i32, ptr, i32, ptr, ptr)") \
+  _ (WIN32,     "declare ptr @VirtualAlloc (ptr, i64, i32, i32)")              \
+  _ (WIN32,     "declare i32 @VirtualFree (ptr, i64, i32)")                    \
+  _ (WIN32,     "declare void @ExitProcess (i32)")                             \
   _ (POSIX,     "declare ptr @dlopen (ptr, i32)")                              \
   _ (POSIX,     "declare ptr @dlsym (ptr, ptr)")                               \
   _ (LINUX,     "declare i64 @readlink (ptr, ptr, i64)")                       \
   _ (APPLE,     "declare i32 @_NSGetExecutablePath (ptr, ptr)")                \
+  _ (APPLE,     "declare i64 @read (i32, ptr, i64)")                           \
+  _ (APPLE,     "declare i64 @write (i32, ptr, i64)")                          \
+  _ (APPLE,     "declare i32 @close (i32)")                                    \
+  _ (APPLE,     "declare i64 @lseek (i32, i64, i32)")                          \
+  _ (APPLE,     "declare i32 @open (ptr, i32, ...)")                           \
+  _ (APPLE,     "declare i32 @unlink (ptr)")                                   \
+  _ (APPLE,     "declare i32 @rmdir (ptr)")                                    \
+  _ (APPLE,     "declare i32 @isatty (i32)")                                   \
+  _ (APPLE,     "declare ptr @__error ()")                                     \
   _ (APPLE,     "declare ptr @pthread_self ()")                                \
   _ (APPLE,     "declare i64 @pthread_get_stacksize_np (ptr)")                 \
   _ (APPLE,     "declare i32 @pthread_setname_np (ptr)")                       \
   _ (LINUX,     "declare i64 @pthread_self ()")                                \
   _ (LINUX,     "declare i32 @pthread_setname_np (i64, ptr)")                  \
-  _ (LINUX,     "declare i64 @syscall (i64, ...)")                             \
+  _ (LINUX,     "declare <16 x i64> @llvm.ctpop.v16i64 (<16 x i64>)")         \
+  _ (LINUX,     "declare i64 @llvm.vector.reduce.add.v16i64 (<16 x i64>)")    \
   _ (POSIX,     "declare i64 @sysconf (i32)")                                  \
   _ (POSIX,     "declare i32 @getrlimit (i32, ptr)")                           \
   _ (POSIX,     "declare i32 @nanosleep (ptr, ptr)")                           \
@@ -22395,6 +25379,15 @@ static const char Module_Header_Text[] =
   _ (ANY,       "declare i32 @__ada_os_thread_spawn (ptr, ptr, ptr, i64)")     \
   _ (ANY,       "declare void @__ada_os_thread_join (ptr)")                    \
   _ (ANY,       "declare i64 @__ada_os_now_us ()")                             \
+  _ (PURE,      "@__ehdr_start = external hidden global i8")                   \
+  _ (PURE,      "@__init_array_start = external hidden global ptr")            \
+  _ (PURE,      "@__init_array_end = external hidden global ptr")              \
+  _ (PURE,      "@__fini_array_start = external hidden global ptr")            \
+  _ (PURE,      "@__fini_array_end = external hidden global ptr")              \
+  _ (PURE,      "declare i32 @main (i32, ptr)")                                \
+  _ (PURE_WIN32, "@__CTOR_LIST__ = external global ptr")                     \
+  _ (PURE_WIN32, "@__DTOR_LIST__ = external global ptr")                     \
+  _ (PURE,      "declare extern_weak ptr @__ada_task_wrapper (ptr)")           \
   _ (ANY,       "declare ptr @llvm.returnaddress (i32)")                       \
   _ (ANY,       "declare ptr @llvm.addressofreturnaddress.p0 ()")              \
   _ (ANY,       "declare ptr @llvm.stacksave.p0 ()")                           \
@@ -22407,8 +25400,8 @@ static const char Module_Header_Text[] =
   _ (ANY,       "declare double @llvm.pow.f64 (double, double)")               \
   _ (ANY,       "declare float @llvm.fabs.f32 (float)")                        \
   _ (ANY,       "declare double @llvm.fabs.f64 (double)")                      \
-  _ (ANY,       "declare float @llvm.round.f32 (float)")                       \
-  _ (ANY,       "declare double @llvm.round.f64 (double)")                     \
+  _ (ANY,       "declare float @llvm.copysign.f32 (float, float)")            \
+  _ (ANY,       "declare double @llvm.copysign.f64 (double, double)")         \
   _ (ANY,       "declare void @llvm.dbg.declare (metadata, metadata, metadata)")\
   EXTERNAL_WIDTH_ROWS (_, "8")   EXTERNAL_WIDTH_ROWS (_, "16")                 \
   EXTERNAL_WIDTH_ROWS (_, "32")  EXTERNAL_WIDTH_ROWS (_, "64")                 \
@@ -22419,6 +25412,2233 @@ static const char External_Declarations_Text[] =
   EXTERNAL_DECLARATION_LIST (EXTERNAL_DECLARATION_ROW)
 #undef EXTERNAL_DECLARATION_ROW
   ;
+
+#ifdef PURE_PLATFORM_AVAILABLE
+#define PURE_PLATFORM_ROW_PURE(text)       text
+#define PURE_PLATFORM_ROW_ANY(text)
+#ifdef PURE_IMPORT_LIBRARY
+  #define PURE_PLATFORM_ROW_WIN32(text)      text
+  #define PURE_PLATFORM_ROW_EH_WINDOWS(text) text
+  #define PURE_PLATFORM_ROW_PURE_WIN32(text) text
+#else
+  #define PURE_PLATFORM_ROW_WIN32(text)
+  #define PURE_PLATFORM_ROW_EH_WINDOWS(text)
+  #define PURE_PLATFORM_ROW_PURE_WIN32(text)
+#endif
+#define PURE_PLATFORM_ROW_UCRT(text)
+#define PURE_PLATFORM_ROW_APPLE(text)
+#define PURE_PLATFORM_ROW_LINUX(text)
+#define PURE_PLATFORM_ROW_POSIX(text)
+#define PURE_PLATFORM_ROW_EH_SEH(text)
+#define PURE_PLATFORM_ROW_EH_LSDA(text)
+#define PURE_PLATFORM_ROW_EH_UNWIND(text)
+#define PURE_PLATFORM_DECLARATION(platform, text)                              \
+  PURE_PLATFORM_ROW_ ## platform (text "\n")
+
+static const char Pure_Heap_Text[] =
+  "; ---- the heap: blocks of 16 bytes and up in size classes, each carved\n"
+  ";      from large mappings and kept on its own free list once freed;\n"
+  ";      anything bigger than the largest class is a mapping of its own.\n"
+  ";      Every block has a header of two words before it: its class, or\n"
+  ";      -1 and its mapping's size, or -2 and the block it was cut from ----\n"
+  "@__ada_heap_lock = internal global i32 0, align 4\n"
+  "@__ada_heap_lists = internal global [64 x ptr] zeroinitializer, align 8\n"
+  "@__ada_heap_cursor = internal global i64 0, align 8\n"
+  "@__ada_heap_limit = internal global i64 0, align 8\n"
+  "\n"
+  "; the class of a request: multiples of 16 to 256, then four steps to each\n"
+  "; doubling up to 64 KiB; -1 beyond\n"
+  "define internal i64 @__ada_heap_class(i64 %n) nounwind willreturn memory(none) {\n"
+  "entry:\n"
+  "  %small = icmp ule i64 %n, 256\n"
+  "  br i1 %small, label %sixteenths, label %larger\n"
+  "sixteenths:\n"
+  "  %n15 = add i64 %n, 15\n"
+  "  %c = lshr i64 %n15, 4\n"
+  "  %zero = icmp eq i64 %c, 0\n"
+  "  %c1 = select i1 %zero, i64 1, i64 %c\n"
+  "  %c0 = sub i64 %c1, 1\n"
+  "  ret i64 %c0\n"
+  "larger:\n"
+  "  %big = icmp ugt i64 %n, 65536\n"
+  "  br i1 %big, label %none, label %stepped\n"
+  "none:\n"
+  "  ret i64 -1\n"
+  "stepped:\n"
+  "  %m = sub i64 %n, 1\n"
+  "  br label %count\n"
+  "count:\n"
+  "  %bits = phi i64 [ 0, %stepped ], [ %bits1, %count ]\n"
+  "  %rest = phi i64 [ %m, %stepped ], [ %rest1, %count ]\n"
+  "  %rest1 = lshr i64 %rest, 1\n"
+  "  %bits1 = add i64 %bits, 1\n"
+  "  %left = icmp ne i64 %rest1, 0\n"
+  "  br i1 %left, label %count, label %counted\n"
+  "counted:\n"
+  "  %bits_done = add i64 %bits, 1\n"
+  "  %shift = sub i64 %bits_done, 3\n"
+  "  %quarter = lshr i64 %m, %shift\n"
+  "  %step = and i64 %quarter, 3\n"
+  "  %octave = sub i64 %bits_done, 9\n"
+  "  %o4 = shl i64 %octave, 2\n"
+  "  %k = add i64 %o4, %step\n"
+  "  %k16 = add i64 %k, 16\n"
+  "  ret i64 %k16\n"
+  "}\n"
+  "\n"
+  "define internal i64 @__ada_heap_class_size(i64 %c) nounwind willreturn memory(none) {\n"
+  "entry:\n"
+  "  %small = icmp ult i64 %c, 16\n"
+  "  br i1 %small, label %sixteenths, label %stepped\n"
+  "sixteenths:\n"
+  "  %c1 = add i64 %c, 1\n"
+  "  %s = shl i64 %c1, 4\n"
+  "  ret i64 %s\n"
+  "stepped:\n"
+  "  %k = sub i64 %c, 16\n"
+  "  %octave = lshr i64 %k, 2\n"
+  "  %step = and i64 %k, 3\n"
+  "  %e = add i64 %octave, 8\n"
+  "  %base = shl i64 1, %e\n"
+  "  %qshift = sub i64 %e, 2\n"
+  "  %quarter = shl i64 1, %qshift\n"
+  "  %s1 = add i64 %step, 1\n"
+  "  %extra = mul i64 %s1, %quarter\n"
+  "  %size = add i64 %base, %extra\n"
+  "  ret i64 %size\n"
+  "}\n"
+  "\n"
+  "define noalias ptr @malloc(i64 %n) nounwind {\n"
+  "entry:\n"
+  "  %class = call i64 @__ada_heap_class(i64 %n)\n"
+  "  %huge = icmp slt i64 %class, 0\n"
+  "  br i1 %huge, label %mapped, label %pooled\n"
+  "mapped:\n"
+  "  %t0 = add i64 %n, 4111\n"
+  "  %total = and i64 %t0, -4096\n"
+  "  %m = call ptr @__ada_map(i64 %total)\n"
+  "  %mfail = icmp eq ptr %m, null\n"
+  "  br i1 %mfail, label %none, label %mapped_ok\n"
+  "mapped_ok:\n"
+  "  store i64 -1, ptr %m\n"
+  "  %msz = getelementptr i8, ptr %m, i64 8\n"
+  "  store i64 %total, ptr %msz\n"
+  "  %mblock = getelementptr i8, ptr %m, i64 16\n"
+  "  ret ptr %mblock\n"
+  "pooled:\n"
+  "  call void @__ada_word_lock(ptr @__ada_heap_lock)\n"
+  "  %slot = getelementptr [64 x ptr], ptr @__ada_heap_lists, i64 0, i64 %class\n"
+  "  %head = load ptr, ptr %slot\n"
+  "  %empty = icmp eq ptr %head, null\n"
+  "  br i1 %empty, label %carve, label %reuse\n"
+  "reuse:\n"
+  "  %next = load ptr, ptr %head\n"
+  "  store ptr %next, ptr %slot\n"
+  "  call void @__ada_word_unlock(ptr @__ada_heap_lock)\n"
+  "  ret ptr %head\n"
+  "carve:\n"
+  "  %size = call i64 @__ada_heap_class_size(i64 %class)\n"
+  "  %whole = add i64 %size, 16\n"
+  "  %cur = load i64, ptr @__ada_heap_cursor\n"
+  "  %lim = load i64, ptr @__ada_heap_limit\n"
+  "  %after = add i64 %cur, %whole\n"
+  "  %fits = icmp ule i64 %after, %lim\n"
+  "  %started = icmp ne i64 %cur, 0\n"
+  "  %ok = and i1 %fits, %started\n"
+  "  br i1 %ok, label %cut, label %grow\n"
+  "grow:\n"
+  "  %chunk = call ptr @__ada_map(i64 4194304)\n"
+  "  %gfail = icmp eq ptr %chunk, null\n"
+  "  br i1 %gfail, label %gnone, label %grown\n"
+  "gnone:\n"
+  "  call void @__ada_word_unlock(ptr @__ada_heap_lock)\n"
+  "  br label %none\n"
+  "grown:\n"
+  "  %ci = ptrtoint ptr %chunk to i64\n"
+  "  %cl = add i64 %ci, 4194304\n"
+  "  store i64 %cl, ptr @__ada_heap_limit\n"
+  "  br label %cut\n"
+  "cut:\n"
+  "  %base = phi i64 [ %cur, %carve ], [ %ci, %grown ]\n"
+  "  %end = add i64 %base, %whole\n"
+  "  store i64 %end, ptr @__ada_heap_cursor\n"
+  "  call void @__ada_word_unlock(ptr @__ada_heap_lock)\n"
+  "  %hp = inttoptr i64 %base to ptr\n"
+  "  store i64 %class, ptr %hp\n"
+  "  %block = getelementptr i8, ptr %hp, i64 16\n"
+  "  ret ptr %block\n"
+  "none:\n"
+  "  ret ptr null\n"
+  "}\n"
+  "\n"
+  "define void @free(ptr %block) nounwind {\n"
+  "entry:\n"
+  "  %null = icmp eq ptr %block, null\n"
+  "  br i1 %null, label %out, label %look\n"
+  "look:\n"
+  "  %hp = getelementptr i8, ptr %block, i64 -16\n"
+  "  %tag = load i64, ptr %hp\n"
+  "  %cut = icmp eq i64 %tag, -2\n"
+  "  br i1 %cut, label %original, label %kind\n"
+  "original:\n"
+  "  %op = getelementptr i8, ptr %block, i64 -8\n"
+  "  %orig = load ptr, ptr %op\n"
+  "  call void @free(ptr %orig)\n"
+  "  br label %out\n"
+  "kind:\n"
+  "  %mapped = icmp eq i64 %tag, -1\n"
+  "  br i1 %mapped, label %unmap, label %pool\n"
+  "unmap:\n"
+  "  %szp = getelementptr i8, ptr %block, i64 -8\n"
+  "  %total = load i64, ptr %szp\n"
+  "  call void @__ada_unmap(ptr %hp, i64 %total)\n"
+  "  br label %out\n"
+  "pool:\n"
+  "  call void @__ada_word_lock(ptr @__ada_heap_lock)\n"
+  "  %slot = getelementptr [64 x ptr], ptr @__ada_heap_lists, i64 0, i64 %tag\n"
+  "  %head = load ptr, ptr %slot\n"
+  "  store ptr %head, ptr %block\n"
+  "  store ptr %block, ptr %slot\n"
+  "  call void @__ada_word_unlock(ptr @__ada_heap_lock)\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define noalias ptr @calloc(i64 %count, i64 %size) nounwind {\n"
+  "entry:\n"
+  "  %wide_count = zext i64 %count to i128\n"
+  "  %wide_size = zext i64 %size to i128\n"
+  "  %wide = mul i128 %wide_count, %wide_size\n"
+  "  %n = trunc i128 %wide to i64\n"
+  "  %high = lshr i128 %wide, 64\n"
+  "  %over = icmp ne i128 %high, 0\n"
+  "  br i1 %over, label %none, label %take\n"
+  "take:\n"
+  "  %p = call ptr @malloc(i64 %n)\n"
+  "  %failed = icmp eq ptr %p, null\n"
+  "  br i1 %failed, label %none, label %clear\n"
+  "clear:\n"
+  "  call ptr @memset(ptr %p, i32 0, i64 %n)\n"
+  "  ret ptr %p\n"
+  "none:\n"
+  "  ret ptr null\n"
+  "}\n"
+  "\n"
+  "define noalias ptr @aligned_alloc(i64 %align, i64 %n) nounwind {\n"
+  "entry:\n"
+  "  %plain = icmp ule i64 %align, 16\n"
+  "  br i1 %plain, label %direct, label %over\n"
+  "direct:\n"
+  "  %d = call ptr @malloc(i64 %n)\n"
+  "  ret ptr %d\n"
+  "over:\n"
+  "  %room0 = add i64 %n, %align\n"
+  "  %room = add i64 %room0, 16\n"
+  "  %raw = call ptr @malloc(i64 %room)\n"
+  "  %failed = icmp eq ptr %raw, null\n"
+  "  br i1 %failed, label %none, label %place\n"
+  "place:\n"
+  "  %ri = ptrtoint ptr %raw to i64\n"
+  "  %first = add i64 %ri, 16\n"
+  "  %mask = sub i64 %align, 1\n"
+  "  %up = add i64 %first, %mask\n"
+  "  %notmask = xor i64 %mask, -1\n"
+  "  %ai = and i64 %up, %notmask\n"
+  "  %block = inttoptr i64 %ai to ptr\n"
+  "  %hp = getelementptr i8, ptr %block, i64 -16\n"
+  "  store i64 -2, ptr %hp\n"
+  "  %op = getelementptr i8, ptr %block, i64 -8\n"
+  "  store ptr %raw, ptr %op\n"
+  "  ret ptr %block\n"
+  "none:\n"
+  "  ret ptr null\n"
+  "}\n"
+  "\n"
+  "; ---- the memory leaves; \"no-builtins\" keeps the optimiser from turning\n"
+  ";      their loops back into calls of themselves ----\n"
+  "; the shapes every size class of copy takes: up to sixteen bytes as two\n"
+  "; overlapping words of the size that fits, then two overlapping\n"
+  "; sixteen-byte pieces, then sixteen-byte steps, and past 256 bytes the\n"
+  "; processor's own string copy\n"
+  "define ptr @memcpy(ptr %d, ptr %s, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %small = icmp ule i64 %n, 32\n"
+  "  br i1 %small, label %short, label %long\n"
+  "short:\n"
+  "  call void @__ada_copy_short(ptr %d, ptr %s, i64 %n)\n"
+  "  ret ptr %d\n"
+  "long:\n"
+  "  %huge = icmp ugt i64 %n, 256\n"
+  "  br i1 %huge, label %string, label %steps\n"
+  "string:\n"
+  "  %_r = call { ptr, ptr, i64 } asm sideeffect \"rep movsb\", \"={rdi},={rsi},={rcx},0,1,2,~{memory}\"(ptr %d, ptr %s, i64 %n)\n"
+  "  ret ptr %d\n"
+  "steps:\n"
+  "  %last = sub i64 %n, 16\n"
+  "  br label %step\n"
+  "step:\n"
+  "  %i = phi i64 [ 0, %steps ], [ %i1, %step ]\n"
+  "  %sp = getelementptr i8, ptr %s, i64 %i\n"
+  "  %v = load i128, ptr %sp, align 1\n"
+  "  %dp = getelementptr i8, ptr %d, i64 %i\n"
+  "  store i128 %v, ptr %dp, align 1\n"
+  "  %i1 = add i64 %i, 16\n"
+  "  %more = icmp ult i64 %i1, %last\n"
+  "  br i1 %more, label %step, label %tail\n"
+  "tail:\n"
+  "  %ts = getelementptr i8, ptr %s, i64 %last\n"
+  "  %tv = load i128, ptr %ts, align 1\n"
+  "  %td = getelementptr i8, ptr %d, i64 %last\n"
+  "  store i128 %tv, ptr %td, align 1\n"
+  "  ret ptr %d\n"
+  "}\n"
+  "\n"
+  "; up to 32 bytes, every load before any store, so the regions may overlap\n"
+  "define internal void @__ada_copy_short(ptr %d, ptr %s, i64 %n) alwaysinline nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %wide = icmp ugt i64 %n, 16\n"
+  "  br i1 %wide, label %w16, label %le16\n"
+  "w16:\n"
+  "  %a16 = load i128, ptr %s, align 1\n"
+  "  %o16 = sub i64 %n, 16\n"
+  "  %s16 = getelementptr i8, ptr %s, i64 %o16\n"
+  "  %b16 = load i128, ptr %s16, align 1\n"
+  "  store i128 %a16, ptr %d, align 1\n"
+  "  %d16 = getelementptr i8, ptr %d, i64 %o16\n"
+  "  store i128 %b16, ptr %d16, align 1\n"
+  "  ret void\n"
+  "le16:\n"
+  "  %ge8 = icmp uge i64 %n, 8\n"
+  "  br i1 %ge8, label %w8, label %le8\n"
+  "w8:\n"
+  "  %a8 = load i64, ptr %s, align 1\n"
+  "  %o8 = sub i64 %n, 8\n"
+  "  %s8 = getelementptr i8, ptr %s, i64 %o8\n"
+  "  %b8 = load i64, ptr %s8, align 1\n"
+  "  store i64 %a8, ptr %d, align 1\n"
+  "  %d8 = getelementptr i8, ptr %d, i64 %o8\n"
+  "  store i64 %b8, ptr %d8, align 1\n"
+  "  ret void\n"
+  "le8:\n"
+  "  %ge4 = icmp uge i64 %n, 4\n"
+  "  br i1 %ge4, label %w4, label %le4\n"
+  "w4:\n"
+  "  %a4 = load i32, ptr %s, align 1\n"
+  "  %o4 = sub i64 %n, 4\n"
+  "  %s4 = getelementptr i8, ptr %s, i64 %o4\n"
+  "  %b4 = load i32, ptr %s4, align 1\n"
+  "  store i32 %a4, ptr %d, align 1\n"
+  "  %d4 = getelementptr i8, ptr %d, i64 %o4\n"
+  "  store i32 %b4, ptr %d4, align 1\n"
+  "  ret void\n"
+  "le4:\n"
+  "  %ge2 = icmp uge i64 %n, 2\n"
+  "  br i1 %ge2, label %w2, label %le2\n"
+  "w2:\n"
+  "  %a2 = load i16, ptr %s, align 1\n"
+  "  %o2 = sub i64 %n, 2\n"
+  "  %s2 = getelementptr i8, ptr %s, i64 %o2\n"
+  "  %b2 = load i16, ptr %s2, align 1\n"
+  "  store i16 %a2, ptr %d, align 1\n"
+  "  %d2 = getelementptr i8, ptr %d, i64 %o2\n"
+  "  store i16 %b2, ptr %d2, align 1\n"
+  "  ret void\n"
+  "le2:\n"
+  "  %one = icmp eq i64 %n, 1\n"
+  "  br i1 %one, label %w1, label %none\n"
+  "w1:\n"
+  "  %a1 = load i8, ptr %s, align 1\n"
+  "  store i8 %a1, ptr %d, align 1\n"
+  "  ret void\n"
+  "none:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define ptr @memmove(ptr %d, ptr %s, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %small = icmp ule i64 %n, 32\n"
+  "  br i1 %small, label %short, label %long\n"
+  "short:\n"
+  "  call void @__ada_copy_short(ptr %d, ptr %s, i64 %n)\n"
+  "  ret ptr %d\n"
+  "long:\n"
+  "  %di = ptrtoint ptr %d to i64\n"
+  "  %si = ptrtoint ptr %s to i64\n"
+  "  %gap = sub i64 %di, %si\n"
+  "  %overlap = icmp ult i64 %gap, %n\n"
+  "  br i1 %overlap, label %backward, label %forward\n"
+  "forward:\n"
+  "  %_f = call { ptr, ptr, i64 } asm sideeffect \"rep movsb\", \"={rdi},={rsi},={rcx},0,1,2,~{memory}\"(ptr %d, ptr %s, i64 %n)\n"
+  "  ret ptr %d\n"
+  "backward:\n"
+  "  %last = sub i64 %n, 1\n"
+  "  %dl = getelementptr i8, ptr %d, i64 %last\n"
+  "  %sl = getelementptr i8, ptr %s, i64 %last\n"
+  "  %_b = call { ptr, ptr, i64 } asm sideeffect \"std\\0A\\09rep movsb\\0A\\09cld\", \"={rdi},={rsi},={rcx},0,1,2,~{memory},~{dirflag},~{flags}\"(ptr %dl, ptr %sl, i64 %n)\n"
+  "  ret ptr %d\n"
+  "}\n"
+  "\n"
+  "define ptr @memset(ptr %d, i32 %c, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %byte = trunc i32 %c to i8\n"
+  "  %small = icmp ule i64 %n, 32\n"
+  "  br i1 %small, label %short, label %long\n"
+  "long:\n"
+  "  %_r = call { ptr, i64 } asm sideeffect \"rep stosb\", \"={rdi},={rcx},0,{al},1,~{memory}\"(ptr %d, i8 %byte, i64 %n)\n"
+  "  ret ptr %d\n"
+  "short:\n"
+  "  %b64 = zext i8 %byte to i64\n"
+  "  %w64 = mul i64 %b64, 72340172838076673\n"
+  "  %ge16 = icmp uge i64 %n, 16\n"
+  "  br i1 %ge16, label %s16, label %lt16\n"
+  "s16:\n"
+  "  %w128a = zext i64 %w64 to i128\n"
+  "  %w128b = shl i128 %w128a, 64\n"
+  "  %w128 = or i128 %w128b, %w128a\n"
+  "  store i128 %w128, ptr %d, align 1\n"
+  "  %o16 = sub i64 %n, 16\n"
+  "  %d16 = getelementptr i8, ptr %d, i64 %o16\n"
+  "  store i128 %w128, ptr %d16, align 1\n"
+  "  ret ptr %d\n"
+  "lt16:\n"
+  "  %ge8 = icmp uge i64 %n, 8\n"
+  "  br i1 %ge8, label %s8, label %lt8\n"
+  "s8:\n"
+  "  store i64 %w64, ptr %d, align 1\n"
+  "  %o8 = sub i64 %n, 8\n"
+  "  %d8 = getelementptr i8, ptr %d, i64 %o8\n"
+  "  store i64 %w64, ptr %d8, align 1\n"
+  "  ret ptr %d\n"
+  "lt8:\n"
+  "  %ge4 = icmp uge i64 %n, 4\n"
+  "  br i1 %ge4, label %s4, label %lt4\n"
+  "s4:\n"
+  "  %w32 = trunc i64 %w64 to i32\n"
+  "  store i32 %w32, ptr %d, align 1\n"
+  "  %o4 = sub i64 %n, 4\n"
+  "  %d4 = getelementptr i8, ptr %d, i64 %o4\n"
+  "  store i32 %w32, ptr %d4, align 1\n"
+  "  ret ptr %d\n"
+  "lt4:\n"
+  "  br label %bytes\n"
+  "bytes:\n"
+  "  %i = phi i64 [ 0, %lt4 ], [ %i1, %byte_step ]\n"
+  "  %done = icmp uge i64 %i, %n\n"
+  "  br i1 %done, label %out, label %byte_step\n"
+  "byte_step:\n"
+  "  %p = getelementptr i8, ptr %d, i64 %i\n"
+  "  store i8 %byte, ptr %p, align 1\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %bytes\n"
+  "out:\n"
+  "  ret ptr %d\n"
+  "}\n"
+  "\n"
+  "; equality alone: sixteen bytes at a time, the last piece overlapping\n"
+  "define i32 @bcmp(ptr %a, ptr %b, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %ge16 = icmp uge i64 %n, 16\n"
+  "  br i1 %ge16, label %blocks, label %small\n"
+  "blocks:\n"
+  "  %last = sub i64 %n, 16\n"
+  "  br label %block\n"
+  "block:\n"
+  "  %i = phi i64 [ 0, %blocks ], [ %i1, %same ]\n"
+  "  %before_last = icmp ult i64 %i, %last\n"
+  "  %at = select i1 %before_last, i64 %i, i64 %last\n"
+  "  %pa = getelementptr i8, ptr %a, i64 %at\n"
+  "  %pb = getelementptr i8, ptr %b, i64 %at\n"
+  "  %va = load i128, ptr %pa, align 1\n"
+  "  %vb = load i128, ptr %pb, align 1\n"
+  "  %eq = icmp eq i128 %va, %vb\n"
+  "  br i1 %eq, label %same, label %differ\n"
+  "same:\n"
+  "  %i1 = add i64 %i, 16\n"
+  "  %more = icmp ult i64 %i, %last\n"
+  "  br i1 %more, label %block, label %equal\n"
+  "small:\n"
+  "  %r = call i32 @memcmp(ptr %a, ptr %b, i64 %n)\n"
+  "  ret i32 %r\n"
+  "differ:\n"
+  "  ret i32 1\n"
+  "equal:\n"
+  "  ret i32 0\n"
+  "}\n"
+  "\n"
+  "define i32 @memcmp(ptr %a, ptr %b, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  br label %blocks\n"
+  "blocks:\n"
+  "  %i = phi i64 [ 0, %entry ], [ %i16, %same_block ]\n"
+  "  %i16 = add i64 %i, 16\n"
+  "  %fits = icmp ule i64 %i16, %n\n"
+  "  br i1 %fits, label %block, label %bytes\n"
+  "block:\n"
+  "  %pa = getelementptr i8, ptr %a, i64 %i\n"
+  "  %pb = getelementptr i8, ptr %b, i64 %i\n"
+  "  %wa = load i128, ptr %pa, align 1\n"
+  "  %wb = load i128, ptr %pb, align 1\n"
+  "  %eq = icmp eq i128 %wa, %wb\n"
+  "  br i1 %eq, label %same_block, label %bytes\n"
+  "same_block:\n"
+  "  br label %blocks\n"
+  "bytes:\n"
+  "  %j = phi i64 [ %i, %blocks ], [ %i, %block ], [ %j1, %same_byte ]\n"
+  "  %end = icmp uge i64 %j, %n\n"
+  "  br i1 %end, label %equal, label %byte\n"
+  "byte:\n"
+  "  %qa = getelementptr i8, ptr %a, i64 %j\n"
+  "  %qb = getelementptr i8, ptr %b, i64 %j\n"
+  "  %ca = load i8, ptr %qa\n"
+  "  %cb = load i8, ptr %qb\n"
+  "  %ceq = icmp eq i8 %ca, %cb\n"
+  "  br i1 %ceq, label %same_byte, label %byte_differ\n"
+  "same_byte:\n"
+  "  %j1 = add i64 %j, 1\n"
+  "  br label %bytes\n"
+  "byte_differ:\n"
+  "  %za = zext i8 %ca to i32\n"
+  "  %zb = zext i8 %cb to i32\n"
+  "  %dd = sub i32 %za, %zb\n"
+  "  ret i32 %dd\n"
+  "equal:\n"
+  "  ret i32 0\n"
+  "}\n"
+  "\n"
+  "define ptr @memchr(ptr %s, i32 %c, i64 %n) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  %b = trunc i32 %c to i8\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %i = phi i64 [ 0, %entry ], [ %i1, %next ]\n"
+  "  %end = icmp uge i64 %i, %n\n"
+  "  br i1 %end, label %none, label %look\n"
+  "look:\n"
+  "  %p = getelementptr i8, ptr %s, i64 %i\n"
+  "  %v = load i8, ptr %p\n"
+  "  %hit = icmp eq i8 %v, %b\n"
+  "  br i1 %hit, label %found, label %next\n"
+  "next:\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %scan\n"
+  "found:\n"
+  "  ret ptr %p\n"
+  "none:\n"
+  "  ret ptr null\n"
+  "}\n"
+  "\n"
+  "define i64 @strlen(ptr %s) nounwind \"no-builtins\" {\n"
+  "entry:\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %i = phi i64 [ 0, %entry ], [ %i1, %scan ]\n"
+  "  %p = getelementptr i8, ptr %s, i64 %i\n"
+  "  %v = load i8, ptr %p\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  %more = icmp ne i8 %v, 0\n"
+  "  br i1 %more, label %scan, label %done\n"
+  "done:\n"
+  "  ret i64 %i\n"
+  "}\n"
+  "\n";
+
+#ifdef __linux__
+static const char Pure_Platform_Text[] =
+  EXTERNAL_DECLARATION_LIST (PURE_PLATFORM_DECLARATION)
+  LINUX_SYSTEM_CALL_LIST (LINUX_SYSTEM_CALL_WRAPPER)
+  "; ---- the platform of a program that links no C library: the process\n"
+  ";      entry, thread-local storage, threads, the heap, the memory leaves\n"
+  ";      and exit, over the kernel's system calls alone ----\n"
+  "\n"
+  "; the thread-local image the program's PT_TLS describes: where its\n"
+  "; initialised part is, its sizes, and how far below the thread pointer\n"
+  "; the block begins\n"
+  "@__ada_tls_image = internal global ptr null, align 8\n"
+  "@__ada_tls_file_size = internal global i64 0, align 8\n"
+  "@__ada_tls_memory_size = internal global i64 0, align 8\n"
+  "@__ada_tls_align = internal global i64 16, align 8\n"
+  "@__ada_tls_offset = internal global i64 0, align 8\n"
+  "@__ada_frame_table = internal global ptr null, align 8\n"
+  "@__ada_default_stack = internal global i64 0, align 8\n"
+  "\n"
+  "@llvm.used = appending global [1 x ptr] [ptr @__ada_start], section \"llvm.metadata\"\n"
+  "\n"
+  "define void @_start() naked noinline noreturn nounwind {\n"
+  "  call void asm sideeffect \"xorl %ebp, %ebp\\0A\\09movq %rsp, %rdi\\0A\\09andq $$-16, %rsp\\0A\\09callq __ada_start\\0A\\09hlt\", \"~{memory}\"()\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "define void @__ada_start(ptr %sp) noreturn nounwind {\n"
+  "entry:\n"
+  "  %argc64 = load i64, ptr %sp\n"
+  "  %argc = trunc i64 %argc64 to i32\n"
+  "  %argv = getelementptr i8, ptr %sp, i64 8\n"
+  "  call void @__ada_read_program_headers()\n"
+  "  %tp = call ptr @__ada_tls_block(ptr null)\n"
+  "  %tpi = ptrtoint ptr %tp to i64\n"
+  "  %_fs = call i64 @__ada_sys_arch_prctl(i64 4098, i64 %tpi, i64 0, i64 0, i64 0, i64 0)\n"
+  "  call void @__ada_run_array(ptr @__init_array_start, ptr @__init_array_end, i1 false)\n"
+  "  %code = call i32 @main(i32 %argc, ptr %argv)\n"
+  "  call void @exit(i32 %code)\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "; the functions an init or fini array lists, in order or backwards\n"
+  "define internal void @__ada_run_array(ptr %first, ptr %last, i1 %backwards) nounwind {\n"
+  "entry:\n"
+  "  %fi = ptrtoint ptr %first to i64\n"
+  "  %li = ptrtoint ptr %last to i64\n"
+  "  br i1 %backwards, label %down, label %up\n"
+  "up:\n"
+  "  %u = phi i64 [ %fi, %entry ], [ %u1, %up_call ]\n"
+  "  %udone = icmp uge i64 %u, %li\n"
+  "  br i1 %udone, label %out, label %up_call\n"
+  "up_call:\n"
+  "  %up_p = inttoptr i64 %u to ptr\n"
+  "  %uf = load ptr, ptr %up_p\n"
+  "  call void %uf()\n"
+  "  %u1 = add i64 %u, 8\n"
+  "  br label %up\n"
+  "down:\n"
+  "  %d = phi i64 [ %li, %entry ], [ %d1, %down_call ]\n"
+  "  %ddone = icmp ule i64 %d, %fi\n"
+  "  br i1 %ddone, label %out, label %down_call\n"
+  "down_call:\n"
+  "  %d1 = sub i64 %d, 8\n"
+  "  %dp = inttoptr i64 %d1 to ptr\n"
+  "  %df = load ptr, ptr %dp\n"
+  "  call void %df()\n"
+  "  br label %down\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define void @exit(i32 %code) noreturn nounwind {\n"
+  "  call void @__ada_run_array(ptr @__fini_array_start, ptr @__fini_array_end, i1 true)\n"
+  "  %c = sext i32 %code to i64\n"
+  "  %_x = call i64 @__ada_sys_exit_group(i64 %c, i64 0, i64 0, i64 0, i64 0, i64 0)\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "; the program's own headers, found through the ELF header the linker\n"
+  "; places at the start of the image: PT_TLS for thread-local storage and\n"
+  "; PT_GNU_EH_FRAME for the frame table the unwinder searches\n"
+  "define internal void @__ada_read_program_headers() nounwind {\n"
+  "entry:\n"
+  "  %phoff_p = getelementptr i8, ptr @__ehdr_start, i64 32\n"
+  "  %phoff = load i64, ptr %phoff_p\n"
+  "  %phnum_p = getelementptr i8, ptr @__ehdr_start, i64 56\n"
+  "  %phnum16 = load i16, ptr %phnum_p\n"
+  "  %phnum = zext i16 %phnum16 to i64\n"
+  "  %table = getelementptr i8, ptr @__ehdr_start, i64 %phoff\n"
+  "  %base = ptrtoint ptr @__ehdr_start to i64\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %i = phi i64 [ 0, %entry ], [ %i1, %next ]\n"
+  "  %done = icmp uge i64 %i, %phnum\n"
+  "  br i1 %done, label %settle, label %look\n"
+  "look:\n"
+  "  %row = mul i64 %i, 56\n"
+  "  %ph = getelementptr i8, ptr %table, i64 %row\n"
+  "  %type = load i32, ptr %ph\n"
+  "  %vaddr_p = getelementptr i8, ptr %ph, i64 16\n"
+  "  %vaddr = load i64, ptr %vaddr_p\n"
+  "  %is_tls = icmp eq i32 %type, 7\n"
+  "  br i1 %is_tls, label %tls, label %frames_check\n"
+  "tls:\n"
+  "  %fsz_p = getelementptr i8, ptr %ph, i64 32\n"
+  "  %fsz = load i64, ptr %fsz_p\n"
+  "  %msz_p = getelementptr i8, ptr %ph, i64 40\n"
+  "  %msz = load i64, ptr %msz_p\n"
+  "  %al_p = getelementptr i8, ptr %ph, i64 48\n"
+  "  %al = load i64, ptr %al_p\n"
+  "  %image = call ptr @__ada_program_address(i64 %vaddr)\n"
+  "  store ptr %image, ptr @__ada_tls_image\n"
+  "  store i64 %fsz, ptr @__ada_tls_file_size\n"
+  "  store i64 %msz, ptr @__ada_tls_memory_size\n"
+  "  %small = icmp ult i64 %al, 16\n"
+  "  %align = select i1 %small, i64 16, i64 %al\n"
+  "  store i64 %align, ptr @__ada_tls_align\n"
+  "  %image_i = ptrtoint ptr %image to i64\n"
+  "  %neg = sub i64 0, %image_i\n"
+  "  %neg2 = sub i64 %neg, %msz\n"
+  "  %mask = sub i64 %align, 1\n"
+  "  %pad = and i64 %neg2, %mask\n"
+  "  %offset = add i64 %msz, %pad\n"
+  "  store i64 %offset, ptr @__ada_tls_offset\n"
+  "  br label %next\n"
+  "frames_check:\n"
+  "  %is_frames = icmp eq i32 %type, 1685382480\n"
+  "  br i1 %is_frames, label %frames, label %next\n"
+  "frames:\n"
+  "  %hdr = call ptr @__ada_program_address(i64 %vaddr)\n"
+  "  store ptr %hdr, ptr @__ada_frame_table\n"
+  "  br label %next\n"
+  "next:\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %scan\n"
+  "settle:\n"
+  "  %rl = alloca [2 x i64], align 8\n"
+  "  %rli = ptrtoint ptr %rl to i64\n"
+  "  %rc = call i64 @__ada_sys_prlimit64(i64 0, i64 3, i64 0, i64 %rli, i64 0, i64 0)\n"
+  "  %cur = load i64, ptr %rl\n"
+  "  %ok = icmp eq i64 %rc, 0\n"
+  "  %finite = icmp ne i64 %cur, -1\n"
+  "  %usable = and i1 %ok, %finite\n"
+  "  %floor = icmp ugt i64 %cur, 65536\n"
+  "  %sane = and i1 %usable, %floor\n"
+  "  %chosen = select i1 %sane, i64 %cur, i64 8388608\n"
+  "  store i64 %chosen, ptr @__ada_default_stack\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; a static program is not moved, but one linked to be position\n"
+  "; independent is: the ELF header's own address against its link address\n"
+  "; (zero, for the first byte of the image) gives the displacement\n"
+  "define internal ptr @__ada_program_address(i64 %vaddr) nounwind {\n"
+  "  %base = ptrtoint ptr @__ehdr_start to i64\n"
+  "  %phoff_p = getelementptr i8, ptr @__ehdr_start, i64 32\n"
+  "  %phoff = load i64, ptr %phoff_p\n"
+  "  %phnum_p = getelementptr i8, ptr @__ehdr_start, i64 56\n"
+  "  %phnum16 = load i16, ptr %phnum_p\n"
+  "  %phnum = zext i16 %phnum16 to i64\n"
+  "  %table = getelementptr i8, ptr @__ehdr_start, i64 %phoff\n"
+  "  br label %scan\n"
+  "scan:\n"
+  "  %i = phi i64 [ 0, %0 ], [ %i1, %next ]\n"
+  "  %done = icmp uge i64 %i, %phnum\n"
+  "  br i1 %done, label %unmoved, label %look\n"
+  "look:\n"
+  "  %row = mul i64 %i, 56\n"
+  "  %ph = getelementptr i8, ptr %table, i64 %row\n"
+  "  %type = load i32, ptr %ph\n"
+  "  %off_p = getelementptr i8, ptr %ph, i64 8\n"
+  "  %off = load i64, ptr %off_p\n"
+  "  %is_load = icmp eq i32 %type, 1\n"
+  "  %at_zero = icmp eq i64 %off, 0\n"
+  "  %first = and i1 %is_load, %at_zero\n"
+  "  br i1 %first, label %moved, label %next\n"
+  "next:\n"
+  "  %i1 = add i64 %i, 1\n"
+  "  br label %scan\n"
+  "moved:\n"
+  "  %lv_p = getelementptr i8, ptr %ph, i64 16\n"
+  "  %lv = load i64, ptr %lv_p\n"
+  "  %bias = sub i64 %base, %lv\n"
+  "  %a = add i64 %vaddr, %bias\n"
+  "  %ap = inttoptr i64 %a to ptr\n"
+  "  ret ptr %ap\n"
+  "unmoved:\n"
+  "  %u = inttoptr i64 %vaddr to ptr\n"
+  "  ret ptr %u\n"
+  "}\n"
+  "\n"
+  "; a thread's block of thread-local storage, its image copied in and the\n"
+  "; rest zero, with the thread control block above it whose first word\n"
+  "; points at itself; %room is where to build it, or null for fresh memory\n"
+  "define internal ptr @__ada_tls_block(ptr %room) nounwind {\n"
+  "entry:\n"
+  "  %offset = load i64, ptr @__ada_tls_offset\n"
+  "  %align = load i64, ptr @__ada_tls_align\n"
+  "  %need0 = add i64 %offset, %align\n"
+  "  %need = add i64 %need0, 64\n"
+  "  %fresh = icmp eq ptr %room, null\n"
+  "  br i1 %fresh, label %map, label %place\n"
+  "map:\n"
+  "  %m = call ptr @__ada_map(i64 %need)\n"
+  "  br label %place\n"
+  "place:\n"
+  "  %mem = phi ptr [ %room, %entry ], [ %m, %map ]\n"
+  "  %mi = ptrtoint ptr %mem to i64\n"
+  "  %raw_tp = add i64 %mi, %offset\n"
+  "  %mask = sub i64 %align, 1\n"
+  "  %up = add i64 %raw_tp, %mask\n"
+  "  %notmask = xor i64 %mask, -1\n"
+  "  %tpi = and i64 %up, %notmask\n"
+  "  %tp = inttoptr i64 %tpi to ptr\n"
+  "  %start_i = sub i64 %tpi, %offset\n"
+  "  %start = inttoptr i64 %start_i to ptr\n"
+  "  %image = load ptr, ptr @__ada_tls_image\n"
+  "  %fsz = load i64, ptr @__ada_tls_file_size\n"
+  "  %has_image = icmp ne ptr %image, null\n"
+  "  br i1 %has_image, label %copy, label %self\n"
+  "copy:\n"
+  "  call ptr @memcpy(ptr %start, ptr %image, i64 %fsz)\n"
+  "  br label %self\n"
+  "self:\n"
+  "  store ptr %tp, ptr %tp\n"
+  "  ret ptr %tp\n"
+  "}\n"
+  "\n"
+  "; anonymous private memory from the kernel, or null\n"
+  "define internal ptr @__ada_map(i64 %bytes) nounwind {\n"
+  "  %r = call i64 @__ada_sys_mmap(i64 0, i64 %bytes, i64 3, i64 34, i64 -1, i64 0)\n"
+  "  %bad = icmp ugt i64 %r, -4096\n"
+  "  %ri = select i1 %bad, i64 0, i64 %r\n"
+  "  %p = inttoptr i64 %ri to ptr\n"
+  "  ret ptr %p\n"
+  "}\n"
+  "\n"
+  "define internal void @__ada_unmap(ptr %p, i64 %bytes) nounwind {\n"
+  "  %pi = ptrtoint ptr %p to i64\n"
+  "  %_u = call i64 @__ada_sys_munmap(i64 %pi, i64 %bytes, i64 0, i64 0, i64 0, i64 0)\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; ---- tasks are threads the program makes itself: one mapping holds a\n"
+  ";      guard page, the stack, the thread-local block with its control\n"
+  ";      block, and the record the parent joins on ----\n"
+  "; record: { i32 thread id, cleared by the kernel when the thread ends,\n"
+  ";   i32 pad, ptr mapping, i64 mapping size }\n"
+  "define i32 @__ada_rt_thread_spawn(ptr %slot, ptr %arg, i64 %stack) nounwind {\n"
+  "entry:\n"
+  "  %default = load i64, ptr @__ada_default_stack\n"
+  "  %given = icmp ne i64 %stack, 0\n"
+  "  %want = select i1 %given, i64 %stack, i64 %default\n"
+  "  %w1 = add i64 %want, 4095\n"
+  "  %size = and i64 %w1, -4096\n"
+  "  %offset = load i64, ptr @__ada_tls_offset\n"
+  "  %align = load i64, ptr @__ada_tls_align\n"
+  "  %tls0 = add i64 %offset, %align\n"
+  "  %tls = add i64 %tls0, 128\n"
+  "  %t0 = add i64 %size, 4096\n"
+  "  %t1 = add i64 %t0, %tls\n"
+  "  %t2 = add i64 %t1, 4095\n"
+  "  %total = and i64 %t2, -4096\n"
+  "  %mem = call ptr @__ada_map(i64 %total)\n"
+  "  %failed = icmp eq ptr %mem, null\n"
+  "  br i1 %failed, label %refuse, label %guard\n"
+  "guard:\n"
+  "  %mi = ptrtoint ptr %mem to i64\n"
+  "  %_g = call i64 @__ada_sys_mprotect(i64 %mi, i64 4096, i64 0, i64 0, i64 0, i64 0)\n"
+  "  %top_i = add i64 %mi, %t0\n"
+  "  %top = inttoptr i64 %top_i to ptr\n"
+  "  %tp = call ptr @__ada_tls_block(ptr %top)\n"
+  "  %record = getelementptr i8, ptr %tp, i64 64\n"
+  "  %mapp = getelementptr i8, ptr %record, i64 8\n"
+  "  store ptr %mem, ptr %mapp\n"
+  "  %sizep = getelementptr i8, ptr %record, i64 16\n"
+  "  store i64 %total, ptr %sizep\n"
+  "  %sp_i = sub i64 %top_i, 16\n"
+  "  %sp = inttoptr i64 %sp_i to ptr\n"
+  "  store ptr @__ada_task_wrapper, ptr %sp\n"
+  "  %argp = getelementptr i8, ptr %sp, i64 8\n"
+  "  store ptr %arg, ptr %argp\n"
+  "  %rc = call i64 @__ada_clone(i64 4001536, ptr %sp, ptr %record, ptr %record, ptr %tp)\n"
+  "  %bad = icmp slt i64 %rc, 0\n"
+  "  br i1 %bad, label %unmap, label %started\n"
+  "unmap:\n"
+  "  %_u = call i64 @__ada_sys_munmap(i64 %mi, i64 %total, i64 0, i64 0, i64 0, i64 0)\n"
+  "  br label %refuse\n"
+  "started:\n"
+  "  store ptr %record, ptr %slot\n"
+  "  ret i32 0\n"
+  "refuse:\n"
+  "  ret i32 1\n"
+  "}\n"
+  "\n"
+  "; the child starts on its own stack with the body and its argument on\n"
+  "; top, runs the body, and ends without touching the stack again\n"
+  "define internal i64 @__ada_clone(i64 %flags, ptr %stack, ptr %parent_tid, ptr %child_tid, ptr %tls) naked noinline nounwind uwtable {\n"
+  "  call void asm sideeffect \"movq %rcx, %r10\\0A\\09movl $$56, %eax\\0A\\09syscall\\0A\\09testq %rax, %rax\\0A\\09.cfi_remember_state\\0A\\09jnz 1f\\0A\\09.cfi_undefined %rip\\0A\\09xorl %ebp, %ebp\\0A\\09popq %rax\\0A\\09popq %rdi\\0A\\09callq *%rax\\0A\\09xorl %edi, %edi\\0A\\09movl $$60, %eax\\0A\\09syscall\\0A\\09hlt\\0A1:\\0A\\09.cfi_restore_state\\0A\\09retq\", \"~{memory}\"()\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "define void @__ada_rt_thread_join(ptr %record) nounwind {\n"
+  "entry:\n"
+  "  %ri = ptrtoint ptr %record to i64\n"
+  "  br label %wait\n"
+  "wait:\n"
+  "  %t = load atomic i32, ptr %record acquire, align 4\n"
+  "  %ended = icmp eq i32 %t, 0\n"
+  "  br i1 %ended, label %reclaim, label %sleep\n"
+  "sleep:\n"
+  "  %tw = sext i32 %t to i64\n"
+  "  %_w = call i64 @__ada_sys_futex(i64 %ri, i64 0, i64 %tw, i64 0, i64 0, i64 0)\n"
+  "  br label %wait\n"
+  "reclaim:\n"
+  "  %mapp = getelementptr i8, ptr %record, i64 8\n"
+  "  %mem = load ptr, ptr %mapp\n"
+  "  %sizep = getelementptr i8, ptr %record, i64 16\n"
+  "  %total = load i64, ptr %sizep\n"
+  "  %mi = ptrtoint ptr %mem to i64\n"
+  "  %_u = call i64 @__ada_sys_munmap(i64 %mi, i64 %total, i64 0, i64 0, i64 0, i64 0)\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; ---- the unwinder: the frame table the linker builds (.eh_frame_hdr)\n"
+  ";      is searched for each frame's description, whose call frame\n"
+  ";      instructions say where its caller's registers were saved.\n"
+  ";      A context is 24 words: the sixteen registers and the return\n"
+  ";      address column in DWARF's numbering, then the canonical frame\n"
+  ";      address, the instruction pointer, the frame's language data,\n"
+  ";      the start of its function and its personality ----\n"
+  "\n"
+  "; a value in one of DWARF's pointer encodings at *%cursor, which it\n"
+  "; advances; %base serves the data-relative form\n"
+  "define internal i64 @__ada_unwind_read(ptr %cursor, i64 %encoding, i64 %base) nounwind {\n"
+  "entry:\n"
+  "  %p = load ptr, ptr %cursor\n"
+  "  %pi = ptrtoint ptr %p to i64\n"
+  "  %omit = icmp eq i64 %encoding, 255\n"
+  "  br i1 %omit, label %nothing, label %form\n"
+  "nothing:\n"
+  "  ret i64 0\n"
+  "form:\n"
+  "  %low = and i64 %encoding, 15\n"
+  "  switch i64 %low, label %w8 [\n"
+  "    i64 1, label %uleb\n"
+  "    i64 9, label %sleb\n"
+  "    i64 2, label %u2\n"
+  "    i64 10, label %s2\n"
+  "    i64 3, label %u4\n"
+  "    i64 11, label %s4\n"
+  "  ]\n"
+  "uleb:\n"
+  "  %ul = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %applied\n"
+  "sleb:\n"
+  "  %sl = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  br label %applied\n"
+  "u2:\n"
+  "  %v2 = load i16, ptr %p, align 1\n"
+  "  %z2 = zext i16 %v2 to i64\n"
+  "  br label %fixed2\n"
+  "s2:\n"
+  "  %w2 = load i16, ptr %p, align 1\n"
+  "  %x2 = sext i16 %w2 to i64\n"
+  "  br label %fixed2\n"
+  "fixed2:\n"
+  "  %f2 = phi i64 [ %z2, %u2 ], [ %x2, %s2 ]\n"
+  "  %p2 = getelementptr i8, ptr %p, i64 2\n"
+  "  store ptr %p2, ptr %cursor\n"
+  "  br label %applied\n"
+  "u4:\n"
+  "  %v4 = load i32, ptr %p, align 1\n"
+  "  %z4 = zext i32 %v4 to i64\n"
+  "  br label %fixed4\n"
+  "s4:\n"
+  "  %w4 = load i32, ptr %p, align 1\n"
+  "  %x4 = sext i32 %w4 to i64\n"
+  "  br label %fixed4\n"
+  "fixed4:\n"
+  "  %f4 = phi i64 [ %z4, %u4 ], [ %x4, %s4 ]\n"
+  "  %p4 = getelementptr i8, ptr %p, i64 4\n"
+  "  store ptr %p4, ptr %cursor\n"
+  "  br label %applied\n"
+  "w8:\n"
+  "  %v8 = load i64, ptr %p, align 1\n"
+  "  %p8 = getelementptr i8, ptr %p, i64 8\n"
+  "  store ptr %p8, ptr %cursor\n"
+  "  br label %applied\n"
+  "applied:\n"
+  "  %raw = phi i64 [ %ul, %uleb ], [ %sl, %sleb ], [ %f2, %fixed2 ], [ %f4, %fixed4 ], [ %v8, %w8 ]\n"
+  "  %zero = icmp eq i64 %raw, 0\n"
+  "  br i1 %zero, label %done_zero, label %apply\n"
+  "done_zero:\n"
+  "  ret i64 0\n"
+  "apply:\n"
+  "  %app = and i64 %encoding, 112\n"
+  "  %is_pc = icmp eq i64 %app, 16\n"
+  "  %is_data = icmp eq i64 %app, 48\n"
+  "  %b0 = select i1 %is_pc, i64 %pi, i64 0\n"
+  "  %b1 = select i1 %is_data, i64 %base, i64 %b0\n"
+  "  %value = add i64 %raw, %b1\n"
+  "  %indirectb = and i64 %encoding, 128\n"
+  "  %indirect = icmp ne i64 %indirectb, 0\n"
+  "  br i1 %indirect, label %deref, label %direct\n"
+  "deref:\n"
+  "  %vp = inttoptr i64 %value to ptr\n"
+  "  %dv = load i64, ptr %vp\n"
+  "  ret i64 %dv\n"
+  "direct:\n"
+  "  ret i64 %value\n"
+  "}\n"
+  "\n"
+  "define internal i64 @__ada_unwind_uleb(ptr %cursor) nounwind {\n"
+  "entry:\n"
+  "  %p0 = load ptr, ptr %cursor\n"
+  "  br label %byte\n"
+  "byte:\n"
+  "  %p = phi ptr [ %p0, %entry ], [ %pn, %byte ]\n"
+  "  %v = phi i64 [ 0, %entry ], [ %v1, %byte ]\n"
+  "  %s = phi i64 [ 0, %entry ], [ %s1, %byte ]\n"
+  "  %b = load i8, ptr %p\n"
+  "  %pn = getelementptr i8, ptr %p, i64 1\n"
+  "  %bw = zext i8 %b to i64\n"
+  "  %low = and i64 %bw, 127\n"
+  "  %fits = icmp ult i64 %s, 64\n"
+  "  %sh = select i1 %fits, i64 %s, i64 0\n"
+  "  %part0 = shl i64 %low, %sh\n"
+  "  %part = select i1 %fits, i64 %part0, i64 0\n"
+  "  %v1 = or i64 %v, %part\n"
+  "  %s1 = add i64 %s, 7\n"
+  "  %more = icmp ugt i64 %bw, 127\n"
+  "  br i1 %more, label %byte, label %done\n"
+  "done:\n"
+  "  store ptr %pn, ptr %cursor\n"
+  "  ret i64 %v1\n"
+  "}\n"
+  "\n"
+  "define internal i64 @__ada_unwind_sleb(ptr %cursor) nounwind {\n"
+  "entry:\n"
+  "  %p0 = load ptr, ptr %cursor\n"
+  "  br label %byte\n"
+  "byte:\n"
+  "  %p = phi ptr [ %p0, %entry ], [ %pn, %byte ]\n"
+  "  %v = phi i64 [ 0, %entry ], [ %v1, %byte ]\n"
+  "  %s = phi i64 [ 0, %entry ], [ %s1, %byte ]\n"
+  "  %b = load i8, ptr %p\n"
+  "  %pn = getelementptr i8, ptr %p, i64 1\n"
+  "  %bw = zext i8 %b to i64\n"
+  "  %low = and i64 %bw, 127\n"
+  "  %fits = icmp ult i64 %s, 64\n"
+  "  %sh = select i1 %fits, i64 %s, i64 0\n"
+  "  %part0 = shl i64 %low, %sh\n"
+  "  %part = select i1 %fits, i64 %part0, i64 0\n"
+  "  %v1 = or i64 %v, %part\n"
+  "  %s1 = add i64 %s, 7\n"
+  "  %more = icmp ugt i64 %bw, 127\n"
+  "  br i1 %more, label %byte, label %done\n"
+  "done:\n"
+  "  store ptr %pn, ptr %cursor\n"
+  "  %room = icmp ult i64 %s1, 64\n"
+  "  %signb = and i64 %bw, 64\n"
+  "  %negative = icmp ne i64 %signb, 0\n"
+  "  %extend = and i1 %room, %negative\n"
+  "  %sh2 = select i1 %room, i64 %s1, i64 0\n"
+  "  %ones = shl i64 -1, %sh2\n"
+  "  %ext = or i64 %v1, %ones\n"
+  "  %r = select i1 %extend, i64 %ext, i64 %v1\n"
+  "  ret i64 %r\n"
+  "}\n"
+  "\n"
+  "; the frame description covering %pc from the linker's sorted table, or\n"
+  "; null; %bases receives { text base, data base, function start }\n"
+  "define ptr @_Unwind_Find_FDE(ptr %pc, ptr %bases) nounwind {\n"
+  "entry:\n"
+  "  %hdr = load ptr, ptr @__ada_frame_table\n"
+  "  %none = icmp eq ptr %hdr, null\n"
+  "  br i1 %none, label %missing, label %header\n"
+  "header:\n"
+  "  %hi = ptrtoint ptr %hdr to i64\n"
+  "  %encs = load i32, ptr %hdr, align 1\n"
+  "  %count_enc_p = getelementptr i8, ptr %hdr, i64 2\n"
+  "  %count_enc = load i8, ptr %count_enc_p\n"
+  "  %table_enc_p = getelementptr i8, ptr %hdr, i64 3\n"
+  "  %table_enc = load i8, ptr %table_enc_p\n"
+  "  %usual_count = icmp eq i8 %count_enc, 3\n"
+  "  %usual_table = icmp eq i8 %table_enc, 59\n"
+  "  %usual = and i1 %usual_count, %usual_table\n"
+  "  br i1 %usual, label %read, label %missing\n"
+  "read:\n"
+  "  %cursor = alloca ptr, align 8\n"
+  "  %after = getelementptr i8, ptr %hdr, i64 4\n"
+  "  store ptr %after, ptr %cursor\n"
+  "  %ptr_enc_p = getelementptr i8, ptr %hdr, i64 1\n"
+  "  %ptr_enc8 = load i8, ptr %ptr_enc_p\n"
+  "  %ptr_enc = zext i8 %ptr_enc8 to i64\n"
+  "  %_frames = call i64 @__ada_unwind_read(ptr %cursor, i64 %ptr_enc, i64 %hi)\n"
+  "  %cp = load ptr, ptr %cursor\n"
+  "  %count32 = load i32, ptr %cp, align 1\n"
+  "  %count = zext i32 %count32 to i64\n"
+  "  %table = getelementptr i8, ptr %cp, i64 4\n"
+  "  %target = ptrtoint ptr %pc to i64\n"
+  "  %empty = icmp eq i64 %count, 0\n"
+  "  br i1 %empty, label %missing, label %search\n"
+  "search:\n"
+  "  %lo = phi i64 [ 0, %read ], [ %lo1, %narrow ]\n"
+  "  %hi_ix = phi i64 [ %count, %read ], [ %hi1, %narrow ]\n"
+  "  %span = sub i64 %hi_ix, %lo\n"
+  "  %one = icmp ule i64 %span, 1\n"
+  "  br i1 %one, label %found, label %probe\n"
+  "probe:\n"
+  "  %half = lshr i64 %span, 1\n"
+  "  %mid = add i64 %lo, %half\n"
+  "  %mo = mul i64 %mid, 8\n"
+  "  %mp = getelementptr i8, ptr %table, i64 %mo\n"
+  "  %ml32 = load i32, ptr %mp, align 1\n"
+  "  %ml = sext i32 %ml32 to i64\n"
+  "  %mloc = add i64 %hi, %ml\n"
+  "  %below = icmp ule i64 %mloc, %target\n"
+  "  %lo1 = select i1 %below, i64 %mid, i64 %lo\n"
+  "  %hi1 = select i1 %below, i64 %hi_ix, i64 %mid\n"
+  "  br label %narrow\n"
+  "narrow:\n"
+  "  br label %search\n"
+  "found:\n"
+  "  %fo = mul i64 %lo, 8\n"
+  "  %fp = getelementptr i8, ptr %table, i64 %fo\n"
+  "  %fl32 = load i32, ptr %fp, align 1\n"
+  "  %fl = sext i32 %fl32 to i64\n"
+  "  %floc = add i64 %hi, %fl\n"
+  "  %before = icmp ugt i64 %floc, %target\n"
+  "  br i1 %before, label %missing, label %describe\n"
+  "describe:\n"
+  "  %fdp = getelementptr i8, ptr %fp, i64 4\n"
+  "  %fd32 = load i32, ptr %fdp, align 1\n"
+  "  %fd = sext i32 %fd32 to i64\n"
+  "  %fde_i = add i64 %hi, %fd\n"
+  "  %fde = inttoptr i64 %fde_i to ptr\n"
+  "  %frame = alloca [12 x i64], align 8\n"
+  "  %ok = call i1 @__ada_unwind_describe(ptr %fde, ptr %frame)\n"
+  "  br i1 %ok, label %range, label %missing\n"
+  "range:\n"
+  "  %begin_p = getelementptr [12 x i64], ptr %frame, i64 0, i64 0\n"
+  "  %begin = load i64, ptr %begin_p\n"
+  "  %len_p = getelementptr [12 x i64], ptr %frame, i64 0, i64 1\n"
+  "  %len = load i64, ptr %len_p\n"
+  "  %rel = sub i64 %target, %begin\n"
+  "  %inside = icmp ult i64 %rel, %len\n"
+  "  br i1 %inside, label %hit, label %missing\n"
+  "hit:\n"
+  "  store i64 0, ptr %bases\n"
+  "  %b1 = getelementptr i64, ptr %bases, i64 1\n"
+  "  store i64 0, ptr %b1\n"
+  "  %b2 = getelementptr i64, ptr %bases, i64 2\n"
+  "  store i64 %begin, ptr %b2\n"
+  "  ret ptr %fde\n"
+  "missing:\n"
+  "  ret ptr null\n"
+  "}\n"
+  "\n"
+  "; a frame description, parsed with its common information entry into\n"
+  "; [12 x i64]: 0 function start, 1 length, 2 code alignment, 3 data\n"
+  "; alignment, 4 return address column, 5 personality, 6 language data,\n"
+  "; 7 CIE instructions, 8 CIE end, 9 FDE instructions, 10 FDE end\n"
+  "define internal i1 @__ada_unwind_describe(ptr %fde, ptr %out) nounwind {\n"
+  "entry:\n"
+  "  %cursor = alloca ptr, align 8\n"
+  "  %flen32 = load i32, ptr %fde, align 1\n"
+  "  %long_form = icmp eq i32 %flen32, -1\n"
+  "  br i1 %long_form, label %refuse, label %fde_len\n"
+  "fde_len:\n"
+  "  %flen = zext i32 %flen32 to i64\n"
+  "  %fde_i = ptrtoint ptr %fde to i64\n"
+  "  %fbody = add i64 %fde_i, 4\n"
+  "  %fend = add i64 %fbody, %flen\n"
+  "  %idp = getelementptr i8, ptr %fde, i64 4\n"
+  "  %delta32 = load i32, ptr %idp, align 1\n"
+  "  %is_cie = icmp eq i32 %delta32, 0\n"
+  "  br i1 %is_cie, label %refuse, label %common\n"
+  "common:\n"
+  "  %delta = zext i32 %delta32 to i64\n"
+  "  %cie_i = sub i64 %fbody, %delta\n"
+  "  %cie = inttoptr i64 %cie_i to ptr\n"
+  "  %clen32 = load i32, ptr %cie, align 1\n"
+  "  %clen = zext i32 %clen32 to i64\n"
+  "  %cend = add i64 %cie_i, 4\n"
+  "  %cend2 = add i64 %cend, %clen\n"
+  "  %augp = getelementptr i8, ptr %cie, i64 9\n"
+  "  br label %aug_end\n"
+  "aug_end:\n"
+  "  %ap = phi ptr [ %augp, %common ], [ %apn, %aug_more ]\n"
+  "  %ac = load i8, ptr %ap\n"
+  "  %at_nul = icmp eq i8 %ac, 0\n"
+  "  br i1 %at_nul, label %cie_fields, label %aug_more\n"
+  "aug_more:\n"
+  "  %apn = getelementptr i8, ptr %ap, i64 1\n"
+  "  br label %aug_end\n"
+  "cie_fields:\n"
+  "  %after = getelementptr i8, ptr %ap, i64 1\n"
+  "  store ptr %after, ptr %cursor\n"
+  "  %code = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %data = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  %ra = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %o2 = getelementptr [12 x i64], ptr %out, i64 0, i64 2\n"
+  "  store i64 %code, ptr %o2\n"
+  "  %o3 = getelementptr [12 x i64], ptr %out, i64 0, i64 3\n"
+  "  store i64 %data, ptr %o3\n"
+  "  %o4 = getelementptr [12 x i64], ptr %out, i64 0, i64 4\n"
+  "  store i64 %ra, ptr %o4\n"
+  "  %o5 = getelementptr [12 x i64], ptr %out, i64 0, i64 5\n"
+  "  store i64 0, ptr %o5\n"
+  "  %o6 = getelementptr [12 x i64], ptr %out, i64 0, i64 6\n"
+  "  store i64 0, ptr %o6\n"
+  "  %o8 = getelementptr [12 x i64], ptr %out, i64 0, i64 8\n"
+  "  store i64 %cend2, ptr %o8\n"
+  "  %first_aug = load i8, ptr %augp\n"
+  "  %has_z = icmp eq i8 %first_aug, 122\n"
+  "  br i1 %has_z, label %z, label %plain\n"
+  "plain:\n"
+  "  %ins_plain = load ptr, ptr %cursor\n"
+  "  %ipi = ptrtoint ptr %ins_plain to i64\n"
+  "  br label %cie_done\n"
+  "z:\n"
+  "  %alen = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %adata = load ptr, ptr %cursor\n"
+  "  %adi = ptrtoint ptr %adata to i64\n"
+  "  %ins_z = add i64 %adi, %alen\n"
+  "  %aug1 = getelementptr i8, ptr %augp, i64 1\n"
+  "  br label %letters\n"
+  "letters:\n"
+  "  %lp = phi ptr [ %aug1, %z ], [ %lpn, %letter_next ]\n"
+  "  %fenc = phi i64 [ 0, %z ], [ %fenc_n, %letter_next ]\n"
+  "  %lenc = phi i64 [ 255, %z ], [ %lenc_n, %letter_next ]\n"
+  "  %lc = load i8, ptr %lp\n"
+  "  switch i8 %lc, label %letters_done [\n"
+  "    i8 80, label %pers\n"
+  "    i8 76, label %lsda\n"
+  "    i8 82, label %renc\n"
+  "    i8 83, label %sig\n"
+  "    i8 66, label %sig\n"
+  "  ]\n"
+  "pers:\n"
+  "  %pp = load ptr, ptr %cursor\n"
+  "  %pe8 = load i8, ptr %pp\n"
+  "  %pe = zext i8 %pe8 to i64\n"
+  "  %ppn = getelementptr i8, ptr %pp, i64 1\n"
+  "  store ptr %ppn, ptr %cursor\n"
+  "  %pv = call i64 @__ada_unwind_read(ptr %cursor, i64 %pe, i64 0)\n"
+  "  store i64 %pv, ptr %o5\n"
+  "  br label %letter_next\n"
+  "lsda:\n"
+  "  %lpp = load ptr, ptr %cursor\n"
+  "  %le8 = load i8, ptr %lpp\n"
+  "  %le = zext i8 %le8 to i64\n"
+  "  %lppn = getelementptr i8, ptr %lpp, i64 1\n"
+  "  store ptr %lppn, ptr %cursor\n"
+  "  br label %letter_next\n"
+  "renc:\n"
+  "  %rp = load ptr, ptr %cursor\n"
+  "  %re8 = load i8, ptr %rp\n"
+  "  %re = zext i8 %re8 to i64\n"
+  "  %rpn = getelementptr i8, ptr %rp, i64 1\n"
+  "  store ptr %rpn, ptr %cursor\n"
+  "  br label %letter_next\n"
+  "sig:\n"
+  "  br label %letter_next\n"
+  "letter_next:\n"
+  "  %fenc_n = phi i64 [ %fenc, %pers ], [ %fenc, %lsda ], [ %re, %renc ], [ %fenc, %sig ]\n"
+  "  %lenc_n = phi i64 [ %lenc, %pers ], [ %le, %lsda ], [ %lenc, %renc ], [ %lenc, %sig ]\n"
+  "  %lpn = getelementptr i8, ptr %lp, i64 1\n"
+  "  br label %letters\n"
+  "letters_done:\n"
+  "  br label %cie_done\n"
+  "cie_done:\n"
+  "  %ins = phi i64 [ %ipi, %plain ], [ %ins_z, %letters_done ]\n"
+  "  %enc = phi i64 [ 0, %plain ], [ %fenc, %letters_done ]\n"
+  "  %lsda_enc = phi i64 [ 255, %plain ], [ %lenc, %letters_done ]\n"
+  "  %augmented = phi i1 [ false, %plain ], [ true, %letters_done ]\n"
+  "  %o7 = getelementptr [12 x i64], ptr %out, i64 0, i64 7\n"
+  "  store i64 %ins, ptr %o7\n"
+  "  %fields = getelementptr i8, ptr %fde, i64 8\n"
+  "  store ptr %fields, ptr %cursor\n"
+  "  %begin = call i64 @__ada_unwind_read(ptr %cursor, i64 %enc, i64 0)\n"
+  "  %range_enc = and i64 %enc, 15\n"
+  "  %length = call i64 @__ada_unwind_read(ptr %cursor, i64 %range_enc, i64 0)\n"
+  "  %o0 = getelementptr [12 x i64], ptr %out, i64 0, i64 0\n"
+  "  store i64 %begin, ptr %o0\n"
+  "  %o1 = getelementptr [12 x i64], ptr %out, i64 0, i64 1\n"
+  "  store i64 %length, ptr %o1\n"
+  "  br i1 %augmented, label %fde_aug, label %fde_ins\n"
+  "fde_aug:\n"
+  "  %falen = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %fadata = load ptr, ptr %cursor\n"
+  "  %fadi = ptrtoint ptr %fadata to i64\n"
+  "  %fins_a = add i64 %fadi, %falen\n"
+  "  %has_lsda = icmp ne i64 %lsda_enc, 255\n"
+  "  br i1 %has_lsda, label %read_lsda, label %fde_aug_done\n"
+  "read_lsda:\n"
+  "  %lv = call i64 @__ada_unwind_read(ptr %cursor, i64 %lsda_enc, i64 0)\n"
+  "  store i64 %lv, ptr %o6\n"
+  "  br label %fde_aug_done\n"
+  "fde_aug_done:\n"
+  "  br label %fde_out\n"
+  "fde_ins:\n"
+  "  %fpl = load ptr, ptr %cursor\n"
+  "  %fins_p = ptrtoint ptr %fpl to i64\n"
+  "  br label %fde_out\n"
+  "fde_out:\n"
+  "  %fins = phi i64 [ %fins_a, %fde_aug_done ], [ %fins_p, %fde_ins ]\n"
+  "  %o9 = getelementptr [12 x i64], ptr %out, i64 0, i64 9\n"
+  "  store i64 %fins, ptr %o9\n"
+  "  %o10 = getelementptr [12 x i64], ptr %out, i64 0, i64 10\n"
+  "  store i64 %fend, ptr %o10\n"
+  "  ret i1 true\n"
+  "refuse:\n"
+  "  ret i1 false\n"
+  "}\n"
+  "\n"
+  "; the rules in force at %target: the CIE's instructions, then the\n"
+  "; FDE's up to the first location past %target, into %state:\n"
+  "; 0 CFA register, 1 CFA offset, 2+r rule of register r (0 unchanged,\n"
+  "; 1 saved at CFA+n, 2 is CFA+n, 3 in register n, 4 undefined), 19+r its\n"
+  "; n; false for an instruction this unwinder does not follow\n"
+  "define internal i1 @__ada_unwind_rules(ptr %frame, i64 %target, ptr %state) nounwind {\n"
+  "entry:\n"
+  "  %cursor = alloca ptr, align 8\n"
+  "  %initial = alloca [36 x i64], align 8\n"
+  "  %saved = alloca [288 x i64], align 8\n"
+  "  %depth = alloca i64, align 8\n"
+  "  %loc = alloca i64, align 8\n"
+  "  %fde_phase = alloca i1, align 1\n"
+  "  call ptr @memset(ptr %state, i32 0, i64 288)\n"
+  "  store i64 0, ptr %depth\n"
+  "  %f0 = getelementptr [12 x i64], ptr %frame, i64 0, i64 0\n"
+  "  %begin = load i64, ptr %f0\n"
+  "  store i64 %begin, ptr %loc\n"
+  "  %f2 = getelementptr [12 x i64], ptr %frame, i64 0, i64 2\n"
+  "  %code_align = load i64, ptr %f2\n"
+  "  %f3 = getelementptr [12 x i64], ptr %frame, i64 0, i64 3\n"
+  "  %data_align = load i64, ptr %f3\n"
+  "  %f7 = getelementptr [12 x i64], ptr %frame, i64 0, i64 7\n"
+  "  %cie_ins = load i64, ptr %f7\n"
+  "  %f8 = getelementptr [12 x i64], ptr %frame, i64 0, i64 8\n"
+  "  %cie_end = load i64, ptr %f8\n"
+  "  %f9 = getelementptr [12 x i64], ptr %frame, i64 0, i64 9\n"
+  "  %fde_ins = load i64, ptr %f9\n"
+  "  %f10 = getelementptr [12 x i64], ptr %frame, i64 0, i64 10\n"
+  "  %fde_end = load i64, ptr %f10\n"
+  "  %cie_p = inttoptr i64 %cie_ins to ptr\n"
+  "  store ptr %cie_p, ptr %cursor\n"
+  "  store i1 false, ptr %fde_phase\n"
+  "  br label %step\n"
+  "step:\n"
+  "  %p = load ptr, ptr %cursor\n"
+  "  %pi = ptrtoint ptr %p to i64\n"
+  "  %in_fde = load i1, ptr %fde_phase\n"
+  "  %end = select i1 %in_fde, i64 %fde_end, i64 %cie_end\n"
+  "  %more = icmp ult i64 %pi, %end\n"
+  "  br i1 %more, label %fetch, label %phase_end\n"
+  "phase_end:\n"
+  "  br i1 %in_fde, label %done, label %to_fde\n"
+  "to_fde:\n"
+  "  call ptr @memcpy(ptr %initial, ptr %state, i64 288)\n"
+  "  %fde_p = inttoptr i64 %fde_ins to ptr\n"
+  "  store ptr %fde_p, ptr %cursor\n"
+  "  store i1 true, ptr %fde_phase\n"
+  "  br label %step\n"
+  "fetch:\n"
+  "  %op8 = load i8, ptr %p\n"
+  "  %pn = getelementptr i8, ptr %p, i64 1\n"
+  "  store ptr %pn, ptr %cursor\n"
+  "  %op = zext i8 %op8 to i64\n"
+  "  %high = lshr i64 %op, 6\n"
+  "  %low = and i64 %op, 63\n"
+  "  switch i64 %high, label %extended [\n"
+  "    i64 1, label %advance_small\n"
+  "    i64 2, label %offset_small\n"
+  "    i64 3, label %restore_small\n"
+  "  ]\n"
+  "advance_small:\n"
+  "  br label %advance\n"
+  "advance1:\n"
+  "  %a1p = load ptr, ptr %cursor\n"
+  "  %a1 = load i8, ptr %a1p\n"
+  "  %a1n = getelementptr i8, ptr %a1p, i64 1\n"
+  "  store ptr %a1n, ptr %cursor\n"
+  "  %a1w = zext i8 %a1 to i64\n"
+  "  br label %advance\n"
+  "advance2:\n"
+  "  %a2p = load ptr, ptr %cursor\n"
+  "  %a2 = load i16, ptr %a2p, align 1\n"
+  "  %a2n = getelementptr i8, ptr %a2p, i64 2\n"
+  "  store ptr %a2n, ptr %cursor\n"
+  "  %a2w = zext i16 %a2 to i64\n"
+  "  br label %advance\n"
+  "advance4:\n"
+  "  %a4p = load ptr, ptr %cursor\n"
+  "  %a4 = load i32, ptr %a4p, align 1\n"
+  "  %a4n = getelementptr i8, ptr %a4p, i64 4\n"
+  "  store ptr %a4n, ptr %cursor\n"
+  "  %a4w = zext i32 %a4 to i64\n"
+  "  br label %advance\n"
+  "advance:\n"
+  "  %delta = phi i64 [ %low, %advance_small ], [ %a1w, %advance1 ], [ %a2w, %advance2 ], [ %a4w, %advance4 ]\n"
+  "  %scaled = mul i64 %delta, %code_align\n"
+  "  %l0 = load i64, ptr %loc\n"
+  "  %l1 = add i64 %l0, %scaled\n"
+  "  store i64 %l1, ptr %loc\n"
+  "  %past = icmp ugt i64 %l1, %target\n"
+  "  %stop = and i1 %past, %in_fde\n"
+  "  br i1 %stop, label %done, label %step\n"
+  "offset_small:\n"
+  "  %os = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %osv = mul i64 %os, %data_align\n"
+  "  br label %set_rule\n"
+  "offset_extended:\n"
+  "  %oer = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %oe = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %oev = mul i64 %oe, %data_align\n"
+  "  br label %set_rule\n"
+  "offset_sf:\n"
+  "  %osr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %osf = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  %osfv = mul i64 %osf, %data_align\n"
+  "  br label %set_rule\n"
+  "val_offset:\n"
+  "  %vor = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %vo = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %vov = mul i64 %vo, %data_align\n"
+  "  br label %set_rule\n"
+  "val_offset_sf:\n"
+  "  %vsr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %vsf = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  %vsfv = mul i64 %vsf, %data_align\n"
+  "  br label %set_rule\n"
+  "register_op:\n"
+  "  %rgr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %rgv = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %set_rule\n"
+  "undefined_op:\n"
+  "  %ur = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %set_rule\n"
+  "same_op:\n"
+  "  %sr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %set_rule\n"
+  "set_rule:\n"
+  "  %reg = phi i64 [ %low, %offset_small ], [ %oer, %offset_extended ], [ %osr, %offset_sf ], [ %vor, %val_offset ], [ %vsr, %val_offset_sf ], [ %rgr, %register_op ], [ %ur, %undefined_op ], [ %sr, %same_op ]\n"
+  "  %kind = phi i64 [ 1, %offset_small ], [ 1, %offset_extended ], [ 1, %offset_sf ], [ 2, %val_offset ], [ 2, %val_offset_sf ], [ 3, %register_op ], [ 4, %undefined_op ], [ 0, %same_op ]\n"
+  "  %value = phi i64 [ %osv, %offset_small ], [ %oev, %offset_extended ], [ %osfv, %offset_sf ], [ %vov, %val_offset ], [ %vsfv, %val_offset_sf ], [ %rgv, %register_op ], [ 0, %undefined_op ], [ 0, %same_op ]\n"
+  "  %tracked = icmp ult i64 %reg, 17\n"
+  "  br i1 %tracked, label %store_rule, label %step\n"
+  "store_rule:\n"
+  "  %kix = add i64 %reg, 2\n"
+  "  %kp = getelementptr i64, ptr %state, i64 %kix\n"
+  "  store i64 %kind, ptr %kp\n"
+  "  %vix = add i64 %reg, 19\n"
+  "  %vp = getelementptr i64, ptr %state, i64 %vix\n"
+  "  store i64 %value, ptr %vp\n"
+  "  br label %step\n"
+  "restore_small:\n"
+  "  br label %restore\n"
+  "restore_extended:\n"
+  "  %rer = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %restore\n"
+  "restore:\n"
+  "  %rreg = phi i64 [ %low, %restore_small ], [ %rer, %restore_extended ]\n"
+  "  %rtracked = icmp ult i64 %rreg, 17\n"
+  "  br i1 %rtracked, label %restore_copy, label %step\n"
+  "restore_copy:\n"
+  "  %rk = add i64 %rreg, 2\n"
+  "  %rks = getelementptr i64, ptr %initial, i64 %rk\n"
+  "  %rkv = load i64, ptr %rks\n"
+  "  %rkd = getelementptr i64, ptr %state, i64 %rk\n"
+  "  store i64 %rkv, ptr %rkd\n"
+  "  %rv = add i64 %rreg, 19\n"
+  "  %rvs = getelementptr i64, ptr %initial, i64 %rv\n"
+  "  %rvv = load i64, ptr %rvs\n"
+  "  %rvd = getelementptr i64, ptr %state, i64 %rv\n"
+  "  store i64 %rvv, ptr %rvd\n"
+  "  br label %step\n"
+  "remember:\n"
+  "  %d = load i64, ptr %depth\n"
+  "  %full = icmp uge i64 %d, 8\n"
+  "  br i1 %full, label %refuse, label %push\n"
+  "push:\n"
+  "  %slot = mul i64 %d, 36\n"
+  "  %sp_ = getelementptr i64, ptr %saved, i64 %slot\n"
+  "  call ptr @memcpy(ptr %sp_, ptr %state, i64 288)\n"
+  "  %d1 = add i64 %d, 1\n"
+  "  store i64 %d1, ptr %depth\n"
+  "  br label %step\n"
+  "recall:\n"
+  "  %e = load i64, ptr %depth\n"
+  "  %empty = icmp eq i64 %e, 0\n"
+  "  br i1 %empty, label %refuse, label %pop\n"
+  "pop:\n"
+  "  %e1 = sub i64 %e, 1\n"
+  "  store i64 %e1, ptr %depth\n"
+  "  %pslot = mul i64 %e1, 36\n"
+  "  %pp = getelementptr i64, ptr %saved, i64 %pslot\n"
+  "  call ptr @memcpy(ptr %state, ptr %pp, i64 288)\n"
+  "  br label %step\n"
+  "def_cfa:\n"
+  "  %dcr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %dco = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %set_cfa\n"
+  "def_cfa_sf:\n"
+  "  %dsr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %dso = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  %dsov = mul i64 %dso, %data_align\n"
+  "  br label %set_cfa\n"
+  "set_cfa:\n"
+  "  %creg = phi i64 [ %dcr, %def_cfa ], [ %dsr, %def_cfa_sf ]\n"
+  "  %coff = phi i64 [ %dco, %def_cfa ], [ %dsov, %def_cfa_sf ]\n"
+  "  store i64 %creg, ptr %state\n"
+  "  %co_p = getelementptr i64, ptr %state, i64 1\n"
+  "  store i64 %coff, ptr %co_p\n"
+  "  br label %step\n"
+  "def_cfa_register:\n"
+  "  %drr = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  store i64 %drr, ptr %state\n"
+  "  br label %step\n"
+  "def_cfa_offset:\n"
+  "  %doo = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %set_offset\n"
+  "def_cfa_offset_sf:\n"
+  "  %dos = call i64 @__ada_unwind_sleb(ptr %cursor)\n"
+  "  %dosv = mul i64 %dos, %data_align\n"
+  "  br label %set_offset\n"
+  "set_offset:\n"
+  "  %noff = phi i64 [ %doo, %def_cfa_offset ], [ %dosv, %def_cfa_offset_sf ]\n"
+  "  %no_p = getelementptr i64, ptr %state, i64 1\n"
+  "  store i64 %noff, ptr %no_p\n"
+  "  br label %step\n"
+  "args_size:\n"
+  "  %_as = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %step\n"
+  "negative_offset:\n"
+  "  %nor = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %no = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %nov0 = mul i64 %no, %data_align\n"
+  "  %nov = sub i64 0, %nov0\n"
+  "  %ntracked = icmp ult i64 %nor, 17\n"
+  "  br i1 %ntracked, label %negative_store, label %step\n"
+  "negative_store:\n"
+  "  %nk = add i64 %nor, 2\n"
+  "  %nkp = getelementptr i64, ptr %state, i64 %nk\n"
+  "  store i64 1, ptr %nkp\n"
+  "  %nv = add i64 %nor, 19\n"
+  "  %nvp = getelementptr i64, ptr %state, i64 %nv\n"
+  "  store i64 %nov, ptr %nvp\n"
+  "  br label %step\n"
+  "extended:\n"
+  "  switch i64 %op, label %refuse [\n"
+  "    i64 0, label %step\n"
+  "    i64 2, label %advance1\n"
+  "    i64 3, label %advance2\n"
+  "    i64 4, label %advance4\n"
+  "    i64 5, label %offset_extended\n"
+  "    i64 6, label %restore_extended\n"
+  "    i64 7, label %undefined_op\n"
+  "    i64 8, label %same_op\n"
+  "    i64 9, label %register_op\n"
+  "    i64 10, label %remember\n"
+  "    i64 11, label %recall\n"
+  "    i64 12, label %def_cfa\n"
+  "    i64 13, label %def_cfa_register\n"
+  "    i64 14, label %def_cfa_offset\n"
+  "    i64 17, label %offset_sf\n"
+  "    i64 18, label %def_cfa_sf\n"
+  "    i64 19, label %def_cfa_offset_sf\n"
+  "    i64 20, label %val_offset\n"
+  "    i64 21, label %val_offset_sf\n"
+  "    i64 46, label %args_size\n"
+  "    i64 47, label %negative_offset\n"
+  "  ]\n"
+  "done:\n"
+  "  ret i1 true\n"
+  "refuse:\n"
+  "  ret i1 false\n"
+  "}\n"
+  "\n"
+  "; the frame %context describes, located and characterised: its function\n"
+  "; start, language data and personality go into the context and its rules\n"
+  "; into %state; 0, 1 when no frame covers the address (the stack has\n"
+  "; ended), 2 when its rules cannot be followed\n"
+  "define internal i32 @__ada_unwind_locate(ptr %context, ptr %state) nounwind {\n"
+  "entry:\n"
+  "  %bases = alloca [3 x i64], align 8\n"
+  "  %frame = alloca [12 x i64], align 8\n"
+  "  %ipp = getelementptr i64, ptr %context, i64 18\n"
+  "  %ip = load i64, ptr %ipp\n"
+  "  %site = sub i64 %ip, 1\n"
+  "  %site_p = inttoptr i64 %site to ptr\n"
+  "  %fde = call ptr @_Unwind_Find_FDE(ptr %site_p, ptr %bases)\n"
+  "  %none = icmp eq ptr %fde, null\n"
+  "  br i1 %none, label %ended, label %describe\n"
+  "ended:\n"
+  "  ret i32 1\n"
+  "describe:\n"
+  "  %ok = call i1 @__ada_unwind_describe(ptr %fde, ptr %frame)\n"
+  "  br i1 %ok, label %rules, label %broken\n"
+  "rules:\n"
+  "  %ra_p = getelementptr [12 x i64], ptr %frame, i64 0, i64 4\n"
+  "  %ra = load i64, ptr %ra_p\n"
+  "  %ra_ok = icmp eq i64 %ra, 16\n"
+  "  br i1 %ra_ok, label %fill, label %broken\n"
+  "fill:\n"
+  "  %f0 = getelementptr [12 x i64], ptr %frame, i64 0, i64 0\n"
+  "  %begin = load i64, ptr %f0\n"
+  "  %f5 = getelementptr [12 x i64], ptr %frame, i64 0, i64 5\n"
+  "  %pers = load i64, ptr %f5\n"
+  "  %f6 = getelementptr [12 x i64], ptr %frame, i64 0, i64 6\n"
+  "  %lsda = load i64, ptr %f6\n"
+  "  %c19 = getelementptr i64, ptr %context, i64 19\n"
+  "  store i64 %lsda, ptr %c19\n"
+  "  %c20 = getelementptr i64, ptr %context, i64 20\n"
+  "  store i64 %begin, ptr %c20\n"
+  "  %c21 = getelementptr i64, ptr %context, i64 21\n"
+  "  store i64 %pers, ptr %c21\n"
+  "  %followed = call i1 @__ada_unwind_rules(ptr %frame, i64 %site, ptr %state)\n"
+  "  br i1 %followed, label %found, label %broken\n"
+  "found:\n"
+  "  ret i32 0\n"
+  "broken:\n"
+  "  ret i32 2\n"
+  "}\n"
+  "\n"
+  "; the context moved from a frame to its caller by the rules in %state;\n"
+  "; false when the frame has no caller (its return address is undefined)\n"
+  "define internal i1 @__ada_unwind_apply(ptr %context, ptr %state) nounwind {\n"
+  "entry:\n"
+  "  %next = alloca [17 x i64], align 8\n"
+  "  %creg = load i64, ptr %state\n"
+  "  %coff_p = getelementptr i64, ptr %state, i64 1\n"
+  "  %coff = load i64, ptr %coff_p\n"
+  "  %creg_ok = icmp ult i64 %creg, 17\n"
+  "  br i1 %creg_ok, label %cfa, label %stop\n"
+  "cfa:\n"
+  "  %cbp = getelementptr i64, ptr %context, i64 %creg\n"
+  "  %cbase = load i64, ptr %cbp\n"
+  "  %cfa_v = add i64 %cbase, %coff\n"
+  "  call ptr @memcpy(ptr %next, ptr %context, i64 136)\n"
+  "  br label %each\n"
+  "each:\n"
+  "  %r = phi i64 [ 0, %cfa ], [ %r1, %each_next ]\n"
+  "  %rdone = icmp uge i64 %r, 17\n"
+  "  br i1 %rdone, label %commit, label %rule\n"
+  "rule:\n"
+  "  %kix = add i64 %r, 2\n"
+  "  %kp = getelementptr i64, ptr %state, i64 %kix\n"
+  "  %kind = load i64, ptr %kp\n"
+  "  %vix = add i64 %r, 19\n"
+  "  %vp = getelementptr i64, ptr %state, i64 %vix\n"
+  "  %v = load i64, ptr %vp\n"
+  "  %np = getelementptr [17 x i64], ptr %next, i64 0, i64 %r\n"
+  "  switch i64 %kind, label %each_next [\n"
+  "    i64 1, label %saved\n"
+  "    i64 2, label %value\n"
+  "    i64 3, label %register\n"
+  "    i64 4, label %undefined\n"
+  "  ]\n"
+  "saved:\n"
+  "  %sa = add i64 %cfa_v, %v\n"
+  "  %sap = inttoptr i64 %sa to ptr\n"
+  "  %sv = load i64, ptr %sap\n"
+  "  store i64 %sv, ptr %np\n"
+  "  br label %each_next\n"
+  "value:\n"
+  "  %va = add i64 %cfa_v, %v\n"
+  "  store i64 %va, ptr %np\n"
+  "  br label %each_next\n"
+  "register:\n"
+  "  %rok = icmp ult i64 %v, 17\n"
+  "  br i1 %rok, label %register_copy, label %each_next\n"
+  "register_copy:\n"
+  "  %rp = getelementptr i64, ptr %context, i64 %v\n"
+  "  %rv = load i64, ptr %rp\n"
+  "  store i64 %rv, ptr %np\n"
+  "  br label %each_next\n"
+  "undefined:\n"
+  "  %is_ra = icmp eq i64 %r, 16\n"
+  "  br i1 %is_ra, label %stop, label %each_next\n"
+  "each_next:\n"
+  "  %r1 = add i64 %r, 1\n"
+  "  br label %each\n"
+  "commit:\n"
+  "  call ptr @memcpy(ptr %context, ptr %next, i64 136)\n"
+  "  %rsp = getelementptr i64, ptr %context, i64 7\n"
+  "  store i64 %cfa_v, ptr %rsp\n"
+  "  %cfa_p = getelementptr i64, ptr %context, i64 17\n"
+  "  store i64 %cfa_v, ptr %cfa_p\n"
+  "  %ra_p = getelementptr i64, ptr %context, i64 16\n"
+  "  %ra = load i64, ptr %ra_p\n"
+  "  %ip_p = getelementptr i64, ptr %context, i64 18\n"
+  "  store i64 %ra, ptr %ip_p\n"
+  "  %live = icmp ne i64 %ra, 0\n"
+  "  ret i1 %live\n"
+  "stop:\n"
+  "  ret i1 false\n"
+  "}\n"
+  "\n"
+  "define internal void @__ada_unwind_capture(ptr %context) naked noinline nounwind {\n"
+  "  call void asm sideeffect \"movq %rbx, 24(%rdi)\\0A\\09movq %rbp, 48(%rdi)\\0A\\09movq %r12, 96(%rdi)\\0A\\09movq %r13, 104(%rdi)\\0A\\09movq %r14, 112(%rdi)\\0A\\09movq %r15, 120(%rdi)\\0A\\09leaq 8(%rsp), %rax\\0A\\09movq %rax, 56(%rdi)\\0A\\09movq (%rsp), %rax\\0A\\09movq %rax, 144(%rdi)\\0A\\09retq\", \"~{memory}\"()\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "define internal void @__ada_unwind_install(ptr %context) naked noinline noreturn nounwind {\n"
+  "  call void asm sideeffect \"movq 24(%rdi), %rbx\\0A\\09movq 48(%rdi), %rbp\\0A\\09movq 96(%rdi), %r12\\0A\\09movq 104(%rdi), %r13\\0A\\09movq 112(%rdi), %r14\\0A\\09movq 120(%rdi), %r15\\0A\\09movq 0(%rdi), %rax\\0A\\09movq 8(%rdi), %rdx\\0A\\09movq 144(%rdi), %rcx\\0A\\09movq 56(%rdi), %rsp\\0A\\09jmpq *%rcx\", \"~{memory}\"()\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "; Itanium's forced unwind, in its second phase only: from the caller of\n"
+  "; this function outwards, each frame is shown to %stop and then to its\n"
+  "; personality, until one installs a landing pad or the stack ends\n"
+  "define i32 @_Unwind_ForcedUnwind(ptr %exception, ptr %stop, ptr %argument) noinline uwtable {\n"
+  "entry:\n"
+  "  %context = alloca [24 x i64], align 16\n"
+  "  %state = alloca [36 x i64], align 8\n"
+  "  call ptr @memset(ptr %context, i32 0, i64 192)\n"
+  "  call void @__ada_unwind_capture(ptr %context)\n"
+  "  %own = call i32 @__ada_unwind_locate(ptr %context, ptr %state)\n"
+  "  %own_ok = icmp eq i32 %own, 0\n"
+  "  br i1 %own_ok, label %leave_own, label %fatal\n"
+  "leave_own:\n"
+  "  %out = call i1 @__ada_unwind_apply(ptr %context, ptr %state)\n"
+  "  br i1 %out, label %frame, label %fatal\n"
+  "frame:\n"
+  "  %where = call i32 @__ada_unwind_locate(ptr %context, ptr %state)\n"
+  "  %broken = icmp eq i32 %where, 2\n"
+  "  br i1 %broken, label %fatal, label %show\n"
+  "show:\n"
+  "  %ended = icmp eq i32 %where, 1\n"
+  "  %end_bit = select i1 %ended, i32 16, i32 0\n"
+  "  %actions = or i32 10, %end_bit\n"
+  "  %class = load i64, ptr %exception\n"
+  "  %sr = call i32 %stop(i32 1, i32 %actions, i64 %class, ptr %exception, ptr %context, ptr %argument)\n"
+  "  %stopped = icmp ne i32 %sr, 0\n"
+  "  br i1 %stopped, label %fatal, label %continue\n"
+  "continue:\n"
+  "  br i1 %ended, label %end_of_stack, label %personality\n"
+  "personality:\n"
+  "  %pp = getelementptr i64, ptr %context, i64 21\n"
+  "  %pers_i = load i64, ptr %pp\n"
+  "  %has = icmp ne i64 %pers_i, 0\n"
+  "  br i1 %has, label %ask, label %step\n"
+  "ask:\n"
+  "  %pers = inttoptr i64 %pers_i to ptr\n"
+  "  %pr = call i32 %pers(i32 1, i32 %actions, i64 %class, ptr %exception, ptr %context)\n"
+  "  %install = icmp eq i32 %pr, 7\n"
+  "  br i1 %install, label %jump, label %ask_more\n"
+  "ask_more:\n"
+  "  %pass = icmp eq i32 %pr, 8\n"
+  "  br i1 %pass, label %step, label %fatal\n"
+  "jump:\n"
+  "  call void @__ada_unwind_install(ptr %context)\n"
+  "  unreachable\n"
+  "step:\n"
+  "  %up = call i1 @__ada_unwind_apply(ptr %context, ptr %state)\n"
+  "  br i1 %up, label %frame, label %end_frame\n"
+  "end_frame:\n"
+  "  %c_end = call i32 %stop(i32 1, i32 26, i64 %class, ptr %exception, ptr %context, ptr %argument)\n"
+  "  br label %end_of_stack\n"
+  "end_of_stack:\n"
+  "  ret i32 5\n"
+  "fatal:\n"
+  "  ret i32 2\n"
+  "}\n"
+  "\n"
+  "define i64 @_Unwind_GetIP(ptr %context) nounwind {\n"
+  "  %p = getelementptr i64, ptr %context, i64 18\n"
+  "  %v = load i64, ptr %p\n"
+  "  ret i64 %v\n"
+  "}\n"
+  "\n"
+  "define i64 @_Unwind_GetIPInfo(ptr %context, ptr %before) nounwind {\n"
+  "  store i32 0, ptr %before\n"
+  "  %p = getelementptr i64, ptr %context, i64 18\n"
+  "  %v = load i64, ptr %p\n"
+  "  ret i64 %v\n"
+  "}\n"
+  "\n"
+  "define void @_Unwind_SetIP(ptr %context, i64 %value) nounwind {\n"
+  "  %p = getelementptr i64, ptr %context, i64 18\n"
+  "  store i64 %value, ptr %p\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define void @_Unwind_SetGR(ptr %context, i32 %index, i64 %value) nounwind {\n"
+  "  %i = zext i32 %index to i64\n"
+  "  %ok = icmp ult i64 %i, 17\n"
+  "  br i1 %ok, label %set, label %out\n"
+  "set:\n"
+  "  %p = getelementptr i64, ptr %context, i64 %i\n"
+  "  store i64 %value, ptr %p\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; C's cleanup personality: a frame whose call site has a landing pad gets\n"
+  "; the exception in the first register and is resumed there\n"
+  "define i32 @__gcc_personality_v0(i32 %version, i32 %actions, i64 %class, ptr %exception, ptr %context) nounwind {\n"
+  "entry:\n"
+  "  %cursor = alloca ptr, align 8\n"
+  "  %searching = and i32 %actions, 1\n"
+  "  %search = icmp ne i32 %searching, 0\n"
+  "  br i1 %search, label %pass, label %look\n"
+  "look:\n"
+  "  %lsda_p = getelementptr i64, ptr %context, i64 19\n"
+  "  %lsda = load i64, ptr %lsda_p\n"
+  "  %none = icmp eq i64 %lsda, 0\n"
+  "  br i1 %none, label %pass, label %header\n"
+  "header:\n"
+  "  %func_p = getelementptr i64, ptr %context, i64 20\n"
+  "  %func = load i64, ptr %func_p\n"
+  "  %ip_p = getelementptr i64, ptr %context, i64 18\n"
+  "  %ip0 = load i64, ptr %ip_p\n"
+  "  %ip = sub i64 %ip0, 1\n"
+  "  %lp0 = inttoptr i64 %lsda to ptr\n"
+  "  %start_enc8 = load i8, ptr %lp0\n"
+  "  %start_enc = zext i8 %start_enc8 to i64\n"
+  "  %lp1 = getelementptr i8, ptr %lp0, i64 1\n"
+  "  store ptr %lp1, ptr %cursor\n"
+  "  %has_start = icmp ne i64 %start_enc, 255\n"
+  "  %read_start = call i64 @__ada_unwind_read(ptr %cursor, i64 %start_enc, i64 0)\n"
+  "  %landing_base = select i1 %has_start, i64 %read_start, i64 %func\n"
+  "  %tp = load ptr, ptr %cursor\n"
+  "  %ttype_enc = load i8, ptr %tp\n"
+  "  %tpn = getelementptr i8, ptr %tp, i64 1\n"
+  "  store ptr %tpn, ptr %cursor\n"
+  "  %has_ttype = icmp ne i8 %ttype_enc, -1\n"
+  "  br i1 %has_ttype, label %skip_ttype, label %sites\n"
+  "skip_ttype:\n"
+  "  %_tt = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  br label %sites\n"
+  "sites:\n"
+  "  %cp = load ptr, ptr %cursor\n"
+  "  %cs_enc8 = load i8, ptr %cp\n"
+  "  %cs_enc = zext i8 %cs_enc8 to i64\n"
+  "  %cpn = getelementptr i8, ptr %cp, i64 1\n"
+  "  store ptr %cpn, ptr %cursor\n"
+  "  %cs_len = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %table = load ptr, ptr %cursor\n"
+  "  %ti = ptrtoint ptr %table to i64\n"
+  "  %table_end = add i64 %ti, %cs_len\n"
+  "  br label %site\n"
+  "site:\n"
+  "  %at = load ptr, ptr %cursor\n"
+  "  %ati = ptrtoint ptr %at to i64\n"
+  "  %more = icmp ult i64 %ati, %table_end\n"
+  "  br i1 %more, label %entry_read, label %pass\n"
+  "entry_read:\n"
+  "  %start = call i64 @__ada_unwind_read(ptr %cursor, i64 %cs_enc, i64 0)\n"
+  "  %length = call i64 @__ada_unwind_read(ptr %cursor, i64 %cs_enc, i64 0)\n"
+  "  %pad = call i64 @__ada_unwind_read(ptr %cursor, i64 %cs_enc, i64 0)\n"
+  "  %_action = call i64 @__ada_unwind_uleb(ptr %cursor)\n"
+  "  %from = add i64 %func, %start\n"
+  "  %early = icmp ult i64 %ip, %from\n"
+  "  br i1 %early, label %pass, label %within\n"
+  "within:\n"
+  "  %to = add i64 %from, %length\n"
+  "  %inside = icmp ult i64 %ip, %to\n"
+  "  br i1 %inside, label %covered, label %site\n"
+  "covered:\n"
+  "  %no_pad = icmp eq i64 %pad, 0\n"
+  "  br i1 %no_pad, label %pass, label %land\n"
+  "land:\n"
+  "  %target = add i64 %landing_base, %pad\n"
+  "  %ex = ptrtoint ptr %exception to i64\n"
+  "  call void @_Unwind_SetGR(ptr %context, i32 0, i64 %ex)\n"
+  "  call void @_Unwind_SetGR(ptr %context, i32 1, i64 0)\n"
+  "  call void @_Unwind_SetIP(ptr %context, i64 %target)\n"
+  "  ret i32 7\n"
+  "pass:\n"
+  "  ret i32 8\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr i64 @__ada_sys_arch_prctl(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f) alwaysinline nounwind {\n"
+  "  %r = call i64 asm sideeffect \"syscall\", \"={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}\"(i64 158, i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f)\n"
+  "  ret i64 %r\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr void @__ada_word_lock(ptr %w) nounwind {\n"
+  "entry:\n"
+  "  %fast = cmpxchg ptr %w, i32 0, i32 1 acquire monotonic\n"
+  "  %got = extractvalue { i32, i1 } %fast, 1\n"
+  "  br i1 %got, label %out, label %contend\n"
+  "contend:\n"
+  "  %was = atomicrmw xchg ptr %w, i32 2 acquire\n"
+  "  %won = icmp eq i32 %was, 0\n"
+  "  br i1 %won, label %out, label %sleep\n"
+  "sleep:\n"
+  "  %wi = ptrtoint ptr %w to i64\n"
+  "  %_fw = call i64 @__ada_sys_futex(i64 %wi, i64 128, i64 2, i64 0, i64 0, i64 0)\n"
+  "  br label %contend\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "define linkonce_odr void @__ada_word_unlock(ptr %w) nounwind {\n"
+  "entry:\n"
+  "  %was = atomicrmw xchg ptr %w, i32 0 release\n"
+  "  %slept = icmp eq i32 %was, 2\n"
+  "  br i1 %slept, label %wake, label %out\n"
+  "wake:\n"
+  "  %wi = ptrtoint ptr %w to i64\n"
+  "  %_fk = call i64 @__ada_sys_futex(i64 %wi, i64 129, i64 1, i64 0, i64 0, i64 0)\n"
+  "  br label %out\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n";
+#else
+static const char Pure_Platform_Text[] =
+  EXTERNAL_DECLARATION_LIST (PURE_PLATFORM_DECLARATION)
+  "; ---- the platform of a program that links no C library on Windows: the\n"
+  ";      process entry and its arguments, the constructors and destructors\n"
+  ";      the linker lists, thread-local storage, the heap's memory, the\n"
+  ";      stack probe and exit, over kernel32 alone ----\n"
+  "@__ada_constructed = internal global i32 0, align 4\n"
+  "\n"
+  "; the thread-local image the loader copies for every thread: the linker\n"
+  "; puts .tls first, then each variable's .tls$, then .tls$ZZZ\n"
+  "@_tls_index = global i32 0, align 4\n"
+  "@__ada_tls_start = internal global i8 0, section \".tls\", align 1\n"
+  "@__ada_tls_end = internal global i8 0, section \".tls$ZZZ\", align 1\n"
+  "@__ada_tls_callbacks = internal constant [1 x ptr] zeroinitializer, align 8\n"
+  "@_tls_used = constant { ptr, ptr, ptr, ptr, i32, i32 } { ptr @__ada_tls_start, ptr @__ada_tls_end, ptr @_tls_index, ptr @__ada_tls_callbacks, i32 0, i32 0 }, section \".rdata$T\", align 8\n"
+  "\n"
+  "@llvm.used = appending global [3 x ptr] [ptr @mainCRTStartup, ptr @_tls_used, ptr @_tls_index], section \"llvm.metadata\"\n"
+  "\n"
+  "; a frame larger than a page touches each page below the stack pointer in\n"
+  "; turn, so the guard page moves down ahead of it; %rax holds the size\n"
+  "module asm \".text\"\n"
+  "module asm \".globl ___chkstk_ms\"\n"
+  "module asm \"___chkstk_ms:\"\n"
+  "module asm \"  pushq %rcx\"\n"
+  "module asm \"  pushq %rax\"\n"
+  "module asm \"  cmpq $0x1000, %rax\"\n"
+  "module asm \"  leaq 24(%rsp), %rcx\"\n"
+  "module asm \"  jb 1f\"\n"
+  "module asm \"2:\"\n"
+  "module asm \"  subq $0x1000, %rcx\"\n"
+  "module asm \"  orq $0, (%rcx)\"\n"
+  "module asm \"  subq $0x1000, %rax\"\n"
+  "module asm \"  cmpq $0x1000, %rax\"\n"
+  "module asm \"  ja 2b\"\n"
+  "module asm \"1:\"\n"
+  "module asm \"  subq %rax, %rcx\"\n"
+  "module asm \"  orq $0, (%rcx)\"\n"
+  "module asm \"  popq %rax\"\n"
+  "module asm \"  popq %rcx\"\n"
+  "module asm \"  ret\"\n"
+  "\n"
+  "define void @mainCRTStartup() noreturn nounwind {\n"
+  "entry:\n"
+  TASK_FLOAT_SETUP
+  "  %count = alloca i32, align 4\n"
+  "  %argv = call ptr @__ada_arguments(ptr %count)\n"
+  "  %argc = load i32, ptr %count\n"
+  "  %code = call i32 @main(i32 %argc, ptr %argv)\n"
+  "  call void @exit(i32 %code)\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "; the constructors, once, from the last listed to the first\n"
+  "define void @__main() nounwind {\n"
+  "entry:\n"
+  "  %was = atomicrmw xchg ptr @__ada_constructed, i32 1 acq_rel\n"
+  "  %again = icmp ne i32 %was, 0\n"
+  "  br i1 %again, label %out, label %count\n"
+  "count:\n"
+  "  %k = phi i64 [ 1, %entry ], [ %k1, %count ]\n"
+  "  %kp = getelementptr ptr, ptr @__CTOR_LIST__, i64 %k\n"
+  "  %kf = load ptr, ptr %kp\n"
+  "  %k1 = add i64 %k, 1\n"
+  "  %more = icmp ne ptr %kf, null\n"
+  "  br i1 %more, label %count, label %run\n"
+  "run:\n"
+  "  %n = sub i64 %k, 1\n"
+  "  br label %call\n"
+  "call:\n"
+  "  %i = phi i64 [ %n, %run ], [ %i1, %invoke ]\n"
+  "  %done = icmp eq i64 %i, 0\n"
+  "  br i1 %done, label %out, label %invoke\n"
+  "invoke:\n"
+  "  %ip = getelementptr ptr, ptr @__CTOR_LIST__, i64 %i\n"
+  "  %f = load ptr, ptr %ip\n"
+  "  call void %f()\n"
+  "  %i1 = sub i64 %i, 1\n"
+  "  br label %call\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; the destructors in their listed order, then the process ends\n"
+  "define void @exit(i32 %code) noreturn nounwind {\n"
+  "entry:\n"
+  "  br label %look\n"
+  "look:\n"
+  "  %k = phi i64 [ 1, %entry ], [ %k1, %invoke ]\n"
+  "  %kp = getelementptr ptr, ptr @__DTOR_LIST__, i64 %k\n"
+  "  %f = load ptr, ptr %kp\n"
+  "  %end = icmp eq ptr %f, null\n"
+  "  br i1 %end, label %leave, label %invoke\n"
+  "invoke:\n"
+  "  call void %f()\n"
+  "  %k1 = add i64 %k, 1\n"
+  "  br label %look\n"
+  "leave:\n"
+  "  call void @ExitProcess(i32 %code)\n"
+  "  unreachable\n"
+  "}\n"
+  "\n"
+  "define internal void @__ada_argument_put(ptr %out, ptr %o, i8 %c, i64 %times) alwaysinline nounwind {\n"
+  "entry:\n"
+  "  br label %loop\n"
+  "loop:\n"
+  "  %t = phi i64 [ %times, %entry ], [ %t1, %put ]\n"
+  "  %none = icmp eq i64 %t, 0\n"
+  "  br i1 %none, label %done, label %put\n"
+  "put:\n"
+  "  %at = load i64, ptr %o\n"
+  "  %p = getelementptr i8, ptr %out, i64 %at\n"
+  "  store i8 %c, ptr %p\n"
+  "  %at1 = add i64 %at, 1\n"
+  "  store i64 %at1, ptr %o\n"
+  "  %t1 = sub i64 %t, 1\n"
+  "  br label %loop\n"
+  "done:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "; the command line in UTF-8, split as the C runtime splits it: blanks\n"
+  "; part arguments outside quotes, 2n backslashes before a quote are n\n"
+  "; backslashes and the quote opens or closes, 2n+1 are n and a literal\n"
+  "; quote, two quotes inside quotes are one; the program's name runs to\n"
+  "; its closing quote or first blank\n"
+  "define internal ptr @__ada_arguments(ptr %count) nounwind {\n"
+  "entry:\n"
+  "  %i = alloca i64, align 8\n"
+  "  %o = alloca i64, align 8\n"
+  "  %n = alloca i64, align 8\n"
+  "  %quoted = alloca i1, align 1\n"
+  "  %wide = call ptr @GetCommandLineW()\n"
+  "  %bytes = call i32 @WideCharToMultiByte(i32 65001, i32 0, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)\n"
+  "  %b0 = sext i32 %bytes to i64\n"
+  "  %neg = icmp slt i64 %b0, 0\n"
+  "  %b64 = select i1 %neg, i64 0, i64 %b0\n"
+  "  %room = add i64 %b64, 1\n"
+  "  %line = call ptr @malloc(i64 %room)\n"
+  "  %out = call ptr @malloc(i64 %room)\n"
+  "  %half = lshr i64 %b64, 1\n"
+  "  %slots = add i64 %half, 2\n"
+  "  %vbytes = shl i64 %slots, 3\n"
+  "  %vec = call ptr @malloc(i64 %vbytes)\n"
+  "  %_c = call i32 @WideCharToMultiByte(i32 65001, i32 0, ptr %wide, i32 -1, ptr %line, i32 %bytes, ptr null, ptr null)\n"
+  "  %lend = getelementptr i8, ptr %line, i64 %b64\n"
+  "  store i8 0, ptr %lend\n"
+  "  %has = icmp sgt i32 %_c, 0\n"
+  "  br i1 %has, label %begin, label %blank\n"
+  "blank:\n"
+  "  store i8 0, ptr %line\n"
+  "  br label %begin\n"
+  "begin:\n"
+  "  store i64 0, ptr %i\n"
+  "  store i64 0, ptr %o\n"
+  "  store ptr %out, ptr %vec\n"
+  "  store i64 1, ptr %n\n"
+  "  %c0 = load i8, ptr %line\n"
+  "  %q0 = icmp eq i8 %c0, 34\n"
+  "  br i1 %q0, label %name_quoted, label %name_plain\n"
+  "name_quoted:\n"
+  "  store i64 1, ptr %i\n"
+  "  br label %nq\n"
+  "nq:\n"
+  "  %nqi = load i64, ptr %i\n"
+  "  %nqp = getelementptr i8, ptr %line, i64 %nqi\n"
+  "  %nqc = load i8, ptr %nqp\n"
+  "  %nq_end = icmp eq i8 %nqc, 0\n"
+  "  %nq_quote = icmp eq i8 %nqc, 34\n"
+  "  %nq_stop = or i1 %nq_end, %nq_quote\n"
+  "  br i1 %nq_stop, label %nq_close, label %nq_copy\n"
+  "nq_copy:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 %nqc, i64 1)\n"
+  "  %nqi1 = add i64 %nqi, 1\n"
+  "  store i64 %nqi1, ptr %i\n"
+  "  br label %nq\n"
+  "nq_close:\n"
+  "  %nqskip = zext i1 %nq_quote to i64\n"
+  "  %nqi2 = add i64 %nqi, %nqskip\n"
+  "  store i64 %nqi2, ptr %i\n"
+  "  br label %name_done\n"
+  "name_plain:\n"
+  "  %npi = load i64, ptr %i\n"
+  "  %npp = getelementptr i8, ptr %line, i64 %npi\n"
+  "  %npc = load i8, ptr %npp\n"
+  "  %np_end = icmp eq i8 %npc, 0\n"
+  "  %np_space = icmp eq i8 %npc, 32\n"
+  "  %np_tab = icmp eq i8 %npc, 9\n"
+  "  %np_blank = or i1 %np_space, %np_tab\n"
+  "  %np_stop = or i1 %np_end, %np_blank\n"
+  "  br i1 %np_stop, label %name_done, label %np_copy\n"
+  "np_copy:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 %npc, i64 1)\n"
+  "  %npi1 = add i64 %npi, 1\n"
+  "  store i64 %npi1, ptr %i\n"
+  "  br label %name_plain\n"
+  "name_done:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 0, i64 1)\n"
+  "  br label %skip\n"
+  "skip:\n"
+  "  %si = load i64, ptr %i\n"
+  "  %sp = getelementptr i8, ptr %line, i64 %si\n"
+  "  %sc = load i8, ptr %sp\n"
+  "  %s_space = icmp eq i8 %sc, 32\n"
+  "  %s_tab = icmp eq i8 %sc, 9\n"
+  "  %s_blank = or i1 %s_space, %s_tab\n"
+  "  br i1 %s_blank, label %skip_one, label %start\n"
+  "skip_one:\n"
+  "  %si1 = add i64 %si, 1\n"
+  "  store i64 %si1, ptr %i\n"
+  "  br label %skip\n"
+  "start:\n"
+  "  %s_end = icmp eq i8 %sc, 0\n"
+  "  br i1 %s_end, label %finished, label %open\n"
+  "open:\n"
+  "  %an = load i64, ptr %n\n"
+  "  %slot = getelementptr ptr, ptr %vec, i64 %an\n"
+  "  %ao = load i64, ptr %o\n"
+  "  %ap = getelementptr i8, ptr %out, i64 %ao\n"
+  "  store ptr %ap, ptr %slot\n"
+  "  %an1 = add i64 %an, 1\n"
+  "  store i64 %an1, ptr %n\n"
+  "  store i1 false, ptr %quoted\n"
+  "  br label %char\n"
+  "char:\n"
+  "  %ci = load i64, ptr %i\n"
+  "  %cp = getelementptr i8, ptr %line, i64 %ci\n"
+  "  %c = load i8, ptr %cp\n"
+  "  %c_end = icmp eq i8 %c, 0\n"
+  "  br i1 %c_end, label %close, label %c_look\n"
+  "c_look:\n"
+  "  %q = load i1, ptr %quoted\n"
+  "  %c_space = icmp eq i8 %c, 32\n"
+  "  %c_tab = icmp eq i8 %c, 9\n"
+  "  %c_blank = or i1 %c_space, %c_tab\n"
+  "  %outside = xor i1 %q, true\n"
+  "  %parts = and i1 %c_blank, %outside\n"
+  "  br i1 %parts, label %close, label %c_kind\n"
+  "c_kind:\n"
+  "  %c_slash = icmp eq i8 %c, 92\n"
+  "  br i1 %c_slash, label %slashes, label %c_quote\n"
+  "c_quote:\n"
+  "  %c_is_quote = icmp eq i8 %c, 34\n"
+  "  br i1 %c_is_quote, label %quote, label %plain\n"
+  "plain:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 %c, i64 1)\n"
+  "  %ci1 = add i64 %ci, 1\n"
+  "  store i64 %ci1, ptr %i\n"
+  "  br label %char\n"
+  "slashes:\n"
+  "  %k = phi i64 [ 0, %c_kind ], [ %k1, %slashes ]\n"
+  "  %ki = add i64 %ci, %k\n"
+  "  %kp = getelementptr i8, ptr %line, i64 %ki\n"
+  "  %kc = load i8, ptr %kp\n"
+  "  %k1 = add i64 %k, 1\n"
+  "  %k_more = icmp eq i8 %kc, 92\n"
+  "  br i1 %k_more, label %slashes, label %slashes_end\n"
+  "slashes_end:\n"
+  "  store i64 %ki, ptr %i\n"
+  "  %before_quote = icmp eq i8 %kc, 34\n"
+  "  br i1 %before_quote, label %halve, label %literal\n"
+  "literal:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 92, i64 %k)\n"
+  "  br label %char\n"
+  "halve:\n"
+  "  %kh = lshr i64 %k, 1\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 92, i64 %kh)\n"
+  "  %odd = and i64 %k, 1\n"
+  "  %is_odd = icmp ne i64 %odd, 0\n"
+  "  br i1 %is_odd, label %escaped, label %quote\n"
+  "escaped:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 34, i64 1)\n"
+  "  %ei = add i64 %ki, 1\n"
+  "  store i64 %ei, ptr %i\n"
+  "  br label %char\n"
+  "quote:\n"
+  "  %qi = load i64, ptr %i\n"
+  "  %qq = load i1, ptr %quoted\n"
+  "  %qn = add i64 %qi, 1\n"
+  "  %qnp = getelementptr i8, ptr %line, i64 %qn\n"
+  "  %qnc = load i8, ptr %qnp\n"
+  "  %doubled = icmp eq i8 %qnc, 34\n"
+  "  %inner = and i1 %qq, %doubled\n"
+  "  br i1 %inner, label %quote_char, label %toggle\n"
+  "quote_char:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 34, i64 1)\n"
+  "  %qi2 = add i64 %qi, 2\n"
+  "  store i64 %qi2, ptr %i\n"
+  "  br label %char\n"
+  "toggle:\n"
+  "  %flip = xor i1 %qq, true\n"
+  "  store i1 %flip, ptr %quoted\n"
+  "  store i64 %qn, ptr %i\n"
+  "  br label %char\n"
+  "close:\n"
+  "  call void @__ada_argument_put(ptr %out, ptr %o, i8 0, i64 1)\n"
+  "  br label %skip\n"
+  "finished:\n"
+  "  %fn = load i64, ptr %n\n"
+  "  %last = getelementptr ptr, ptr %vec, i64 %fn\n"
+  "  store ptr null, ptr %last\n"
+  "  %fn32 = trunc i64 %fn to i32\n"
+  "  store i32 %fn32, ptr %count\n"
+  "  ret ptr %vec\n"
+  "}\n"
+  "\n"
+  "; the heap's memory: committed pages, given back whole\n"
+  "define internal ptr @__ada_map(i64 %bytes) nounwind {\n"
+  "  %p = call ptr @VirtualAlloc(ptr null, i64 %bytes, i32 12288, i32 4)\n"
+  "  ret ptr %p\n"
+  "}\n"
+  "\n"
+  "define internal void @__ada_unmap(ptr %p, i64 %bytes) nounwind {\n"
+  "  %_f = call i32 @VirtualFree(ptr %p, i64 0, i32 32768)\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define noalias ptr @_aligned_malloc(i64 %n, i64 %align) nounwind {\n"
+  "  %p = call ptr @aligned_alloc(i64 %align, i64 %n)\n"
+  "  ret ptr %p\n"
+  "}\n"
+  "\n"
+  "; no C runtime, so no descriptors for _setmode to switch to binary and\n"
+  "; no C heap for _heapmin to trim\n"
+  "define i32 @_setmode(i32 %fd, i32 %mode) nounwind {\n"
+  "  ret i32 0\n"
+  "}\n"
+  "\n"
+  "define i32 @_heapmin() nounwind {\n"
+  "  ret i32 0\n"
+  "}\n"
+  "\n"
+  "; a contended word lock yields its processor and looks again\n"
+  "define linkonce_odr void @__ada_word_lock(ptr %w) nounwind {\n"
+  "entry:\n"
+  "  %fast = cmpxchg ptr %w, i32 0, i32 1 acquire monotonic\n"
+  "  %got = extractvalue { i32, i1 } %fast, 1\n"
+  "  br i1 %got, label %out, label %contend\n"
+  "contend:\n"
+  "  %was = atomicrmw xchg ptr %w, i32 2 acquire\n"
+  "  %won = icmp eq i32 %was, 0\n"
+  "  br i1 %won, label %out, label %yield\n"
+  "yield:\n"
+  "  %_y = call i32 @SwitchToThread()\n"
+  "  br label %contend\n"
+  "out:\n"
+  "  ret void\n"
+  "}\n"
+  "\n"
+  "define linkonce_odr void @__ada_word_unlock(ptr %w) nounwind {\n"
+  "  %_was = atomicrmw xchg ptr %w, i32 0 release\n"
+  "  ret void\n"
+  "}\n";
+
+static const char *const Pure_Import_Declarations[] = {
+#define PURE_IMPORT_DECLARATION(platform, text) PURE_IMPORT_ON_ ## platform (text)
+#define PURE_IMPORT_ON_WIN32(text)      text,
+#define PURE_IMPORT_ON_EH_WINDOWS(text) text,
+#define PURE_IMPORT_ON_ANY(text)
+#define PURE_IMPORT_ON_APPLE(text)
+#define PURE_IMPORT_ON_LINUX(text)
+#define PURE_IMPORT_ON_POSIX(text)
+#define PURE_IMPORT_ON_EH_SEH(text)
+#define PURE_IMPORT_ON_EH_LSDA(text)
+#define PURE_IMPORT_ON_EH_UNWIND(text)
+#define PURE_IMPORT_ON_PURE(text)
+#define PURE_IMPORT_ON_PURE_WIN32(text)
+#define PURE_IMPORT_ON_UCRT(text)
+  EXTERNAL_DECLARATION_LIST (PURE_IMPORT_DECLARATION)
+#undef PURE_IMPORT_ON_UCRT
+#undef PURE_IMPORT_ON_PURE_WIN32
+#undef PURE_IMPORT_ON_PURE
+#undef PURE_IMPORT_ON_EH_UNWIND
+#undef PURE_IMPORT_ON_EH_LSDA
+#undef PURE_IMPORT_ON_EH_SEH
+#undef PURE_IMPORT_ON_POSIX
+#undef PURE_IMPORT_ON_LINUX
+#undef PURE_IMPORT_ON_APPLE
+#undef PURE_IMPORT_ON_ANY
+#undef PURE_IMPORT_ON_EH_WINDOWS
+#undef PURE_IMPORT_ON_WIN32
+#undef PURE_IMPORT_DECLARATION
+};
+#endif
+#endif
 
 #if defined(_WIN32)
   #define STANDARD_STREAM_LIST(_)                                              \
@@ -22446,9 +27666,44 @@ static const char External_Declarations_Text[] =
   "  ret i64 %address\n"                                                       \
   "}\n\n"
 
-static const char Runtime_Text_Io_Text[] =
-  "; ---- TEXT_IO: the three standard streams ----\n"
-  STANDARD_STREAM_LIST (STANDARD_STREAM_FUNCTION);
+#ifdef _WIN32
+  #define FILE_TELL "@_ftelli64"
+  #define FILE_SEEK "@_fseeki64"
+#else
+  #define FILE_TELL "@ftell"
+  #define FILE_SEEK "@fseek"
+#endif
+
+#define FORWARDED_FILE_LIST(_)                                                 \
+  _ ("i64", "fopen",   "i64 %a, i64 %b",               "@fopen")               \
+  _ ("i32", "fclose",  "i64 %a",                       "@fclose")              \
+  _ ("i32", "fputc",   "i32 %a, i64 %b",               "@fputc")               \
+  _ ("i32", "fgetc",   "i64 %a",                       "@fgetc")               \
+  _ ("i32", "ungetc",  "i32 %a, i64 %b",               "@ungetc")              \
+  _ ("i64", "fwrite",  "i64 %a, i64 %b, i64 %c, i64 %d", "@fwrite")            \
+  _ ("i64", "fread",   "i64 %a, i64 %b, i64 %c, i64 %d", "@fread")             \
+  _ ("i32", "fflush",  "i64 %a",                       "@fflush")              \
+  _ ("i64", "ftell",   "i64 %a",                       FILE_TELL)              \
+  _ ("i32", "fseek",   "i64 %a, i64 %b, i32 %c",       FILE_SEEK)              \
+  _ ("i64", "fgets",   "i64 %a, i32 %b, i64 %c",       "@fgets")               \
+  _ ("i64", "tmpfile", "",                             "@tmpfile")             \
+  _ ("i32", "remove",  "i64 %a",                       "@remove")
+
+#define FORWARDED_FILE_FUNCTION(result, name, parameters, target)              \
+  "define linkonce_odr " result " @__ada_" name "(" parameters ") nounwind {\n" \
+  "  %r = call " result " " target "(" parameters ")\n"                        \
+  "  ret " result " %r\n"                                                      \
+  "}\n"
+
+static const char Runtime_Forwarded_Files_Text[] =
+  "; ---- TEXT_IO's files are the C library's, and so are the three\n"
+  ";      standard streams ----\n"
+  STANDARD_STREAM_LIST (STANDARD_STREAM_FUNCTION)
+  FORWARDED_FILE_LIST (FORWARDED_FILE_FUNCTION)
+  "define linkonce_odr void @__ada_files_flush_all() nounwind {\n"
+  "  %_r = call i32 @fflush(i64 0)\n"
+  "  ret void\n"
+  "}\n\n";
 
 enum {
   RUNTIME_GROUP_CORE,
@@ -22475,6 +27730,9 @@ typedef struct Runtime_Helper {
 #define RUNTIME_HELPER_LIST(_)                                            \
   _ (CORE,    NONE,   RUNTIME_TEXT (Module_Header_Text))                 \
   _ (CORE,    NONE,   RUNTIME_TEXT (External_Declarations_Text))         \
+  _ (CORE,    NONE,   RUNTIME_TEXT (Runtime_System_Calls_Text))          \
+  _ (CORE,    NONE,   RUNTIME_TEXT (Runtime_Decimal_Text))               \
+  _ (CORE,    NONE,   RUNTIME_TEXT (Runtime_Real_Arithmetic_Text))       \
   _ (CORE,    NONE,   RUNTIME_CALL (Emit_Runtime_Value_Attribute))        \
   _ (CORE,    NONE,   RUNTIME_CALL (Emit_Runtime_Exponentiation))         \
   _ (CORE,    NONE,   RUNTIME_TEXT (Runtime_Wide_Builtins_Text))          \
@@ -22532,7 +27790,7 @@ typedef struct Runtime_Helper {
   _ (TASKING, NONE,   RUNTIME_TEXT (Runtime_Protected_Text))              \
   _ (TASKING, NONE,   RUNTIME_TEXT (Runtime_Accept_Complete_Text))        \
   _ (TASKING, NONE,   RUNTIME_TEXT (Runtime_Requeue_Text))                \
-  _ (LIBRARY, NONE,   RUNTIME_TEXT (Runtime_Text_Io_Text))                \
+  _ (LIBRARY, NONE,   RUNTIME_CALL (Emit_Runtime_Files))                  \
   _ (LIBRARY, NONE,   RUNTIME_TEXT (Runtime_Command_Line_Text))           \
   _ (LIBRARY, NONE,   RUNTIME_TEXT (Runtime_Dynamic_Library_Text))        \
   _ (LIBRARY, NONE,   RUNTIME_CALL (Emit_Runtime_Image_Attributes))
@@ -22770,15 +28028,18 @@ static const char Runtime_Memory_Pages_Text[] =
     "@.statm_mode = linkonce_odr constant [3 x i8] c\"rb\\00\", align 2\n"
     "define linkonce_odr i64 @__ada_memory_pages() nounwind {\n"
     "entry:\n"
-    "  %file = call ptr @fopen(ptr @.statm_path, ptr @.statm_mode)\n"
-    "  %closed = icmp eq ptr %file, null\n"
+    "  %path = ptrtoint ptr @.statm_path to i64\n"
+    "  %mode = ptrtoint ptr @.statm_mode to i64\n"
+    "  %file = call i64 @__ada_fopen(i64 %path, i64 %mode)\n"
+    "  %closed = icmp eq i64 %file, 0\n"
     "  br i1 %closed, label %unknown, label %read\n"
     "unknown:\n"
     "  ret i64 -1\n"
     "read:\n"
     "  %text = alloca [48 x i8], align 8\n"
-    "  %got = call i64 @fread(ptr %text, i64 1, i64 47, ptr %file)\n"
-    "  %_c = call i32 @fclose(ptr %file)\n"
+    "  %buffer = ptrtoint ptr %text to i64\n"
+    "  %got = call i64 @__ada_fread(i64 %buffer, i64 1, i64 47, i64 %file)\n"
+    "  %_c = call i32 @__ada_fclose(i64 %file)\n"
     "  %empty = icmp eq i64 %got, 0\n"
     "  br i1 %empty, label %unknown, label %digits\n"
     "digits:\n"
@@ -25324,9 +30585,48 @@ static const char Runtime_Dynamic_Library_Text[] =
     "@__ada_dynamic_self = linkonce_odr constant [15 x i8]"
       " c\"/proc/self/exe\\00\"\n"
 #endif
-    "@__ada_dynamic_join = linkonce_odr constant [5 x i8] c\"%s%s\\00\"\n"
-    "@__ada_dynamic_missing = linkonce_odr constant [34 x i8]"
-      " c\"%s is in none of the libraries %s\\00\"\n\n"
+    "@__ada_dynamic_missing = linkonce_odr constant [30 x i8]"
+      " c\" is in none of the libraries \\00\"\n"
+    "@__ada_text_nothing = linkonce_odr constant [1 x i8] zeroinitializer\n\n"
+    "; %head, %middle and %tail one after another at %out, cut to %room\n"
+    "; bytes with the terminator\n"
+    "define linkonce_odr void @__ada_text_join(ptr %out, i64 %room,"
+      " ptr %head, ptr %middle, ptr %tail) nounwind {\n"
+    "entry:\n"
+    "  %limit = sub i64 %room, 1\n"
+    "  %a = call i64 @__ada_text_append(ptr %out, i64 0, i64 %limit,"
+      " ptr %head)\n"
+    "  %b = call i64 @__ada_text_append(ptr %out, i64 %a, i64 %limit,"
+      " ptr %middle)\n"
+    "  %c = call i64 @__ada_text_append(ptr %out, i64 %b, i64 %limit,"
+      " ptr %tail)\n"
+    "  %end = getelementptr i8, ptr %out, i64 %c\n"
+    "  store i8 0, ptr %end\n"
+    "  ret void\n"
+    "}\n\n"
+    "define linkonce_odr i64 @__ada_text_append(ptr %out, i64 %at,"
+      " i64 %limit, ptr %text) nounwind {\n"
+    "entry:\n"
+    "  br label %copy\n"
+    "copy:\n"
+    "  %i = phi i64 [ 0, %entry ], [ %i1, %store ]\n"
+    "  %w = phi i64 [ %at, %entry ], [ %w1, %store ]\n"
+    "  %full = icmp sge i64 %w, %limit\n"
+    "  br i1 %full, label %done, label %read\n"
+    "read:\n"
+    "  %sp = getelementptr i8, ptr %text, i64 %i\n"
+    "  %c = load i8, ptr %sp\n"
+    "  %ended = icmp eq i8 %c, 0\n"
+    "  br i1 %ended, label %done, label %store\n"
+    "store:\n"
+    "  %dp = getelementptr i8, ptr %out, i64 %w\n"
+    "  store i8 %c, ptr %dp\n"
+    "  %i1 = add i64 %i, 1\n"
+    "  %w1 = add i64 %w, 1\n"
+    "  br label %copy\n"
+    "done:\n"
+    "  ret i64 %w\n"
+    "}\n\n"
     "define linkonce_odr void @__ada_dynamic_directory(ptr %buffer)"
       " nounwind {\n"
     "entry:\n"
@@ -25387,9 +30687,8 @@ static const char Runtime_Dynamic_Library_Text[] =
     "  %beside = and i1 %relative, %has_directory\n"
     "  br i1 %beside, label %local, label %system\n"
     "local:\n"
-    "  %joined = call i32 (ptr, i64, ptr, ...) @" ADA_SNPRINTF "(ptr %path, i64 "
-      DYNAMIC_PATH_ROOM ", ptr @__ada_dynamic_join, ptr %directory,"
-      " ptr %file)\n"
+    "  call void @__ada_text_join(ptr %path, i64 " DYNAMIC_PATH_ROOM ","
+      " ptr %directory, ptr @__ada_text_nothing, ptr %file)\n"
     DYNAMIC_OPEN ("near", "%path")
     "  %found_near = icmp ne ptr %near, null\n"
     "  br i1 %found_near, label %stored, label %system\n"
@@ -25510,8 +30809,8 @@ static const char Runtime_Dynamic_Library_Text[] =
     "refuse:\n"
     "  %spelled_at = " DYNAMIC_LIBRARY_FIELD ("%library", SPELLED) "\n"
     "  %spelled = load ptr, ptr %spelled_at\n"
-    "  %written = call i32 (ptr, i64, ptr, ...) @" ADA_SNPRINTF "(ptr %message,"
-      " i64 256, ptr @__ada_dynamic_missing, ptr %name, ptr %spelled)\n"
+    "  call void @__ada_text_join(ptr %message, i64 256, ptr %name,"
+      " ptr @__ada_dynamic_missing, ptr %spelled)\n"
     "  %length = call i64 @strlen(ptr %message)\n"
     "  call void @__ada_pend_text(ptr %message, i64 %length)\n"
     "  %program_error = ptrtoint ptr @__exc.program_error to i64\n"
@@ -25519,7 +30818,7 @@ static const char Runtime_Dynamic_Library_Text[] =
     "  unreachable\n"
     "}\n\n";
 
-#if defined(ADA_WINDOWS_NATIVE) and defined(SIMD_X86_64)
+#if defined(_WIN32) and defined(SIMD_X86_64)
   #define WIDE_LIBCALL_RESULT        "<2 x i64>"
   #define WIDE_LIBCALL_PAIR          "(ptr %left, ptr %right)"
   #define WIDE_LIBCALL_SINGLE        "(ptr %left)"
@@ -25531,7 +30830,7 @@ static const char Runtime_Dynamic_Library_Text[] =
   #define WIDE_LIBCALL_GIVE(value)                                        \
     "  %packed = bitcast i128 " value " to <2 x i64>\n"                   \
     "  ret <2 x i64> %packed\n"
-#elif defined(ADA_WINDOWS_NATIVE)
+#elif defined(ADA_WINDOWS_NATIVE) or defined(PURE_PLATFORM_AVAILABLE)
   #define WIDE_LIBCALL_RESULT        "i128"
   #define WIDE_LIBCALL_PAIR          "(i128 %n, i128 %d)"
   #define WIDE_LIBCALL_SINGLE        "(i128 %n)"
@@ -25540,7 +30839,7 @@ static const char Runtime_Dynamic_Library_Text[] =
   #define WIDE_LIBCALL_GIVE(value)   "  ret i128 " value "\n"
 #endif
 
-#ifdef ADA_WINDOWS_NATIVE
+#if defined(ADA_WINDOWS_NATIVE) or defined(PURE_PLATFORM_AVAILABLE)
   #define WIDE_BUILTIN_LIST(_)                                            \
     _ ("__divti3")      _ ("__udivti3")    _ ("__modti3")                 \
     _ ("__umodti3")     _ ("__floattidf")  _ ("__floatuntidf")            \
@@ -25630,12 +30929,26 @@ static const char Runtime_Dynamic_Library_Text[] =
 
   static const char Runtime_Wide_Builtins_Text[] =
     "; ---- The 128-bit division and conversion routines code generation\n"
-    ";      calls by name, which the MSVC runtime does not carry ----\n"
+    ";      calls by name, which no C runtime need carry ----\n"
     "define linkonce_odr i128 @__ada_wide_divide(i128 %n, i128 %d,"
       " ptr %rest) nounwind uwtable {\n"
     "entry:\n"
     "  %zero = icmp eq i128 %n, 0\n"
-    "  br i1 %zero, label %empty, label %begin\n"
+    "  br i1 %zero, label %empty, label %width\n"
+    "width:\n"
+    "  %both = or i128 %n, %d\n"
+    "  %upper = lshr i128 %both, 64\n"
+    "  %narrow = icmp eq i128 %upper, 0\n"
+    "  br i1 %narrow, label %short, label %begin\n"
+    "short:\n"
+    "  %n64 = trunc i128 %n to i64\n"
+    "  %d64 = trunc i128 %d to i64\n"
+    "  %q64 = udiv i64 %n64, %d64\n"
+    "  %r64 = urem i64 %n64, %d64\n"
+    "  %r128 = zext i64 %r64 to i128\n"
+    "  store i128 %r128, ptr %rest, align 16\n"
+    "  %q128 = zext i64 %q64 to i128\n"
+    "  ret i128 %q128\n"
     "empty:\n"
     "  store i128 0, ptr %rest, align 16\n"
     "  ret i128 0\n"
@@ -25753,7 +31066,7 @@ const Runtime_Helper Runtime_Helpers[] = {
   RUNTIME_HELPER_LIST (RUNTIME_HELPER_ROW)
 #undef RUNTIME_HELPER_ROW
 };
-_Static_assert (Count_Of (Runtime_Helpers) == 63,
+_Static_assert (Count_Of (Runtime_Helpers) == 66,
                 "RUNTIME_HELPER_LIST row count");
 
 
@@ -26121,6 +31434,22 @@ _Noreturn void Host_Worker_Exit (int status) {
   exit (status);
 #else
   _exit (status);
+#endif
+}
+
+// a statically linked glibc program cannot safely load a shared library that
+// needs libc.so itself (libLLVM does); only a program the loader started --
+// one whose headers name an interpreter -- may dlopen
+bool Host_Libraries_Loadable (void) {
+#ifdef __linux__
+  const ElfW(Phdr) *headers = (const ElfW(Phdr) *) getauxval (AT_PHDR);
+  unsigned long     count   = getauxval (AT_PHNUM);
+  if (not headers) return true;
+  for (unsigned long i = 0; i < count; i++)
+    if (headers[i].p_type == PT_INTERP) return true;
+  return false;
+#else
+  return true;
 #endif
 }
 
@@ -58579,10 +63908,9 @@ void Layout_Protected_Components (Node *node, Symbol *type_sym) {
   for (u32 i = 0; i < type->record.component_count; i++)
     type->record.components[i].byte_offset += header;
   type->record.variant_offset += header;
-  if (Has_Static_Size (type))
-    Set_Static_Size (type, (i128) Round_Up_To ((u64) (type->size + header),
-                                               POINTER_ALLOC_SIZE));
   type->alignment = POINTER_ALLOC_SIZE;
+  if (Has_Static_Size (type))
+    Set_Static_Size (type, Round_Up_To (type->size + header, type->alignment));
 
   u32 slot = Note_Protected_Components (&node->protected_spec.discriminants,
                                         type_sym, type, 0);
@@ -71675,7 +77003,7 @@ Value Emit_Convert_Ext (u32 src, Rep src_rep,
     Emit ("  %s = inttoptr " PTR_INT_TYPE " %s to ptr\n",  REG (t),  REG (int_temp));
 
   } else if (src_is_float and not dst_is_ptr) {
-    u32 rounded = Emit_Call_Result ("%s @llvm.round.%s(%s %s)",  Spell_Rep (src_s),
+    u32 rounded = Emit_Call_Result ("%s @__ada_round_%s(%s %s)",  Spell_Rep (src_s),
                                     src_s.bits == 32 ? "f32" : "f64",
        Spell_Rep (src_s),  REG (src));
     Emit ("  %s = %s %s %s to %s\n",  REG (t),
@@ -73383,7 +78711,7 @@ Value Convert_Double_To_Integer_Representation (u32    value,
                                                 const char *outside_message)
 {
   u32 rounded = Emit_Call_Result (
-    "double @llvm.round.f64(double %s)",  REG (value));
+    "double @__ada_round_f64(double %s)",  REG (value));
   u32 bits = destination_rep.bits > 0 ? destination_rep.bits : 64;
   bool uns = destination_rep.is_unsigned;
   double magnitude = ldexp (1.0, uns ? (int) bits : (int) bits - 1);
@@ -74567,12 +79895,34 @@ Value Lower_Exponentiation (Node *node, u32 left, u32 right,
     Emit_Raise_Constraint_Error_When (Emit_And_I1 (base_is_zero, exponent_is_neg),
                                       "0.0 ** negative");
 
+    // a static square is one multiplication, already correctly rounded
+    i128 static_exponent;
+    if (Eval_Universal_Integer (node->binary.right, &static_exponent) ==
+          UNIVERSAL_INTEGER_EXACT and
+        (static_exponent == 1 or static_exponent == 2)) {
+      u32 t = static_exponent == 1 ? left
+            : Emit_Result ("fmul %s %s, %s\n", Spell_Rep (base_rep),
+                           REG (left), REG (left));
+      if (static_exponent == 2 and base_rep.bits == 32 and Is_Float (result_type))
+        Emit_Float_Finite_Check (t, base_rep,
+                                 "exponentiation overflowed the type");
+      return Wrap (t, base_rep);
+    }
+
+#ifdef ADA_EXTENDED_POWER
+    u32 exponent = Emit_Convert (right, right_int_type,
+                                 Make_Int_Rep (64, false)).reg;
+    u32 t = Emit_Call_Result ("%s @__ada_power_%s(%s %s, i64 %s)",
+       Spell_Rep (base_rep),  base_rep.bits == 32 ? "f32" : "f64",
+       Spell_Rep (base_rep),  REG (left),  REG (exponent));
+#else
     u32 exponent = Emit_Convert_To_Float (Wrap (right, right_int_type),
                                                NULL, base_rep).reg;
     u32 t = Emit_Call_Result ("%s @llvm.pow.%s(%s %s, %s %s)",
        Spell_Rep (base_rep),  base_rep.bits == 32 ? "f32" : "f64",
        Spell_Rep (base_rep),  REG (left),
        Spell_Rep (base_rep),  REG (exponent));
+#endif
     if (base_rep.bits == 32 and Is_Float (result_type))
       Emit_Float_Finite_Check (t, base_rep,
                                "exponentiation overflowed the type");
@@ -75487,7 +80837,7 @@ Value Emit_Checked_Scalar_Conversion (Value value,
           memcpy (&small_bits, &small, sizeof (small_bits));
           Emit ("  %s = fmul double %s, 0x%016llX  ; scale by SMALL\n",
              REG (f2),  REG (f1),  (unsigned long long)small_bits);
-          u32 f3 = Emit_Call_Result ("double @llvm.round.f64(double %s)",  REG (f2));
+          u32 f3 = Emit_Call_Result ("double @__ada_round_f64(double %s)",  REG (f2));
           u32 t2 = Emit_Temp ();
           Rep dst_llvm = To_Rep (dst_type);
           Emit ("  %s = fptosi double %s to %s  ; fixed>integer\n",
@@ -91423,8 +96773,8 @@ void Lower_Return_Statement (Node *node) {
   if (Is_Fixed_Point (ret_type) and val_is_float) {
     Rep src_fty_rep = actual_rep;
     u32 div_t = Emit_Scale_By_Small (value.reg, Get_Base_Small (ret_type), true, src_fty_rep);
-    u32 rounded = Emit_Call_Result ("%s @llvm.round.%s(%s %s)",  Spell_Rep (src_fty_rep),
-                                    Spell_Rep (src_fty_rep),
+    u32 rounded = Emit_Call_Result ("%s @__ada_round_%s(%s %s)",  Spell_Rep (src_fty_rep),
+                                    src_fty_rep.bits == 32 ? "f32" : "f64",
        Spell_Rep (src_fty_rep),  REG (div_t));
     u32 conv_t = Emit_Result ("fptosi %s %s to %s\n",  Spell_Rep (src_fty_rep),  REG (rounded),
                               Spell_Rep (ret_rep));
@@ -103271,6 +108621,7 @@ void Emit_Program_Entry_Point () {
     }
 
   Emit_Call_Void ("void @__ada_sec_stack_drop()");
+  Emit_Call_Void ("void @__ada_files_flush_all()");
   Emit_Call_Void ("void @exit (i32 0)");
   Emit ("  ret i32 0\n");
   Emit ("}\n");
@@ -103741,7 +109092,7 @@ void Emit_Runtime_Value_Attribute () {
       Emit_Numeric_Value (&Numeric_Image_Flavor_Table[f]);
 
   Emit_Verbatim (
-    "; ---- Float'VALUE: strip underlines, then strtod ----\n"
+    "; ---- Float'VALUE: strip underlines, then read the decimal ----\n"
     "define linkonce_odr double @__ada_float_value(" FAT_PTR_TYPE " %str)"
     ADA_MAY_RAISE " {\n"
     "entry:\n");
@@ -103778,7 +109129,7 @@ void Emit_Runtime_Value_Attribute () {
     "  %fv_tp = getelementptr inbounds i8, ptr %fv_buf, i64 %fv_j\n"
     "  store i8 0, ptr %fv_tp\n"
     "  %fv_ep = alloca ptr\n"
-    "  %result = call double @strtod(ptr %fv_buf, ptr %fv_ep)\n"
+    "  %result = call double @__ada_decimal_parse(ptr %fv_buf, ptr %fv_ep)\n"
     "  %fv_end = load ptr, ptr %fv_ep\n"
     "  %fv_moved = icmp ne ptr %fv_end, %fv_buf\n"
     "  br i1 %fv_moved, label %fv_trail, label %fv_bad\n"
@@ -103949,6 +109300,16 @@ void Emit_Runtime_String_Trim () {
 }
 
 
+void Emit_Runtime_Files () {
+#ifdef OWN_FILES_AVAILABLE
+  if (not Freestanding_Mode) {
+    Emit_Verbatim (Runtime_Own_Files_Text);
+    return;
+  }
+#endif
+  Emit_Verbatim (Runtime_Forwarded_Files_Text);
+}
+
 void Emit_Runtime_Globals () {
   Emit_Verbatim (
     "; Runtime globals; no thread-local here is general-dynamic, so none\n"
@@ -104098,9 +109459,18 @@ void Emit_Runtime_Globals () {
     "  %_j = call i32 @pthread_join(ptr %tid, ptr null)\n"
     "  ret void\n"
     "}\n"
+#ifdef LINUX_SYSTEM_CALL_ASM
+    "define linkonce_odr i64 @__ada_rt_now_us() nounwind willreturn {\n"
+    "  %ts = alloca " TIMESPEC_STORAGE ", align 8\n"
+    "  %tsi = ptrtoint ptr %ts to i64\n"
+    "  %_r = " LINUX_SYSTEM_CALL (clock_gettime,
+                                  TEXT_OF (LINUX_CLOCK_REALTIME), "%tsi",
+                                  "0", "0", "0", "0") "\n"
+#else
     "define linkonce_odr i64 @__ada_rt_now_us() nounwind willreturn {\n"
     "  %ts = alloca " TIMESPEC_STORAGE ", align 8\n"
     "  %_r = call i32 @clock_gettime(i32 0, ptr %ts)\n"
+#endif
     "  %secp = " TIMESPEC_FIELD ("%ts", SECONDS) "\n"
     "  %sec = load i64, ptr %secp\n"
     "  %nsp = " TIMESPEC_FIELD ("%ts", NANOSECONDS) "\n"
@@ -104116,12 +109486,39 @@ void Emit_Runtime_Globals () {
     TIMESPEC_FROM_MICROSECONDS ("%ts", "%us")
     "  br label %loop\n"
     "loop:\n"
+#ifdef LINUX_SYSTEM_CALL_ASM
+    "  %tsi = ptrtoint ptr %ts to i64\n"
+    "  %r = " LINUX_SYSTEM_CALL (nanosleep, "%tsi", "%tsi", "0", "0", "0", "0")
+      "\n"
+    "  %interrupted = icmp eq i64 %r, -" TEXT_OF (LINUX_EINTR) "\n"
+#else
     "  %r = call i32 @nanosleep(ptr %ts, ptr %ts)\n"
     "  %interrupted = icmp ne i32 %r, 0\n"
+#endif
     "  br i1 %interrupted, label %loop, label %done\n"
     "done:\n"
     "  ret void\n"
     "}\n"
+#ifdef LINUX_SYSTEM_CALL_ASM
+    RUNTIME_VOID_HOOK ("rt_yield",
+      "  %_y = " LINUX_SYSTEM_CALL (sched_yield, "0", "0", "0", "0", "0", "0")
+        "\n")
+    COLLECTION_DEFAULT_RUNTIME (
+      "  %info = alloca [" TEXT_OF (LINUX_SYSINFO_SIZE) " x i8], align 8\n"
+      "  %infoi = ptrtoint ptr %info to i64\n"
+      "  %rc = " LINUX_SYSTEM_CALL (sysinfo, "%infoi", "0", "0", "0", "0", "0")
+        "\n"
+      "  %ramp = getelementptr i8, ptr %info, i64 "
+        TEXT_OF (LINUX_SYSINFO_TOTAL_RAM) "  ; struct sysinfo.totalram\n"
+      "  %ram = load i64, ptr %ramp\n"
+      "  %unitp = getelementptr i8, ptr %info, i64 "
+        TEXT_OF (LINUX_SYSINFO_MEMORY_UNIT) "  ; struct sysinfo.mem_unit\n"
+      "  %unit32 = load i32, ptr %unitp\n"
+      "  %unit = zext i32 %unit32 to i64\n"
+      "  %told = icmp eq i64 %rc, 0\n"
+      "  %product = mul i64 %ram, %unit\n"
+      "  %total = select i1 %told, i64 %product, i64 0\n")
+#else
     RUNTIME_VOID_HOOK ("rt_yield", "  %_y = call i32 @sched_yield()\n")
     COLLECTION_DEFAULT_RUNTIME (
       "  %pages = call i64 @sysconf(i32 "
@@ -104133,6 +109530,7 @@ void Emit_Runtime_Globals () {
       "  %told = and i1 %counted, %sized\n"
       "  %product = mul i64 %pages, %page\n"
       "  %total = select i1 %told, i64 %product, i64 0\n")
+#endif
 #endif
     );
   }
@@ -104231,6 +109629,18 @@ void Emit_Runtime_Storage () {
 
     "  %self = call ptr @pthread_self()\n"
     "  %l2 = call i64 @pthread_get_stacksize_np(ptr %self)\n"
+    "  store i64 %l2, ptr @__stk_limit\n"
+    "  br label %check\n"
+#elif defined(LINUX_SYSTEM_CALL_ASM)
+    "  %rl = alloca [2 x i64]\n"
+    "  %rli = ptrtoint ptr %rl to i64\n"
+    "  %rc = " LINUX_SYSTEM_CALL (prlimit64, "0", TEXT_OF (LINUX_RLIMIT_STACK),
+                                  "0", "%rli", "0", "0") "  ; RLIMIT_STACK\n"
+    "  %rc_ok = icmp eq i64 %rc, 0\n"
+    "  %cur = load i64, ptr %rl\n"
+    "  %inf = icmp eq i64 %cur, -1  ; RLIM_INFINITY\n"
+    "  %l1 = select i1 %inf, i64 1099511627776, i64 %cur  ; unlimited: 1 TiB\n"
+    "  %l2 = select i1 %rc_ok, i64 %l1, i64 8388608  ; unqueryable: 8 MiB\n"
     "  store i64 %l2, ptr @__stk_limit\n"
     "  br label %check\n"
 #else
@@ -104445,14 +109855,6 @@ void Emit_Runtime_Synchronisation () {
     "  ret void\n"
     "}\n\n");
 
-#if defined(__linux__) and defined(SIMD_X86_64)
-  #define ADA_SYS_FUTEX "202"
-#elif defined(__linux__) and (defined(SIMD_ARM64) or defined(__riscv))
-  #define ADA_SYS_FUTEX "98"
-#else
-  #define ADA_SYS_FUTEX "0"
-#endif
-
   if (Freestanding_Mode) {
   Emit_Verbatim (
     "; freestanding: the runtime lock is a bare spin word, and a parked\n"
@@ -104549,11 +109951,19 @@ void Emit_Runtime_Synchronisation () {
       "  call void @ReleaseSRWLockExclusive(ptr @__ada_word_mutex)\n")
 #endif
 #else
+#ifdef LINUX_SYSTEM_CALL_ASM
+    "; the runtime lock is a futex word: 0 free, 1 held, 2 held with a\n"
+    "; sleeper, so the release makes a system call only when one sleeps\n"
+    "@__rv_mutex = linkonce_odr global i32 0, align 4\n"
+#else
     "; sized for the largest host pthread objects (macOS: mutex 64, cond 48);\n"
     "; zeroed storage is not a valid mutex or condition everywhere, so main\n"
     "; initialises them through __ada_tasking_init before elaboration\n"
     "@__rv_mutex = linkonce_odr global [64 x i8] zeroinitializer, align 8\n"
-#if ADA_WORD_WAIT_SIGNALED
+#endif
+#if ADA_WORD_WAIT_SIGNALED and defined(LINUX_SYSTEM_CALL_ASM)
+    RUNTIME_VOID_HOOK ("tasking_init", ADA_SPIN_CORE_QUERY)
+#elif ADA_WORD_WAIT_SIGNALED
     RUNTIME_VOID_HOOK ("tasking_init",
       "  %_m = call i32 @pthread_mutex_init(ptr @__rv_mutex, ptr null)\n"
       ADA_SPIN_CORE_QUERY)
@@ -104566,17 +109976,45 @@ void Emit_Runtime_Synchronisation () {
     "@__ada_word_cond = linkonce_odr global [48 x i8] zeroinitializer,"
       " align 8\n"
     RUNTIME_VOID_HOOK ("tasking_init",
-      "  %_m = call i32 @pthread_mutex_init(ptr @__rv_mutex, ptr null)\n"
+      ADA_RV_MUTEX_INIT
       "  %_wm = call i32 @pthread_mutex_init(ptr @__ada_word_mutex,"
         " ptr null)\n"
       "  %_wc = call i32 @pthread_cond_init(ptr @__ada_word_cond,"
         " ptr null)\n"
       ADA_SPIN_CORE_QUERY)
 #endif
+#ifdef LINUX_SYSTEM_CALL_ASM
+    RUNTIME_SPINNING_LOCK (
+      "  br label %contend\n"
+      "contend:\n"
+      "  %was = atomicrmw xchg ptr @__rv_mutex, i32 2 acquire\n"
+      "  %won = icmp eq i32 %was, 0\n"
+      "  br i1 %won, label %taken, label %sleep\n"
+      "sleep:\n"
+      "  %_fw = " LINUX_SYSTEM_CALL (futex, "ptrtoint (ptr @__rv_mutex to i64)",
+                                     TEXT_OF (LINUX_FUTEX_WAIT_PRIVATE), "2",
+                                     "0", "0", "0") "\n"
+      "  br label %contend\n"
+      "taken:\n")
+    "define linkonce_odr void @__ada_rt_unlock() {\n"
+    "entry:\n"
+    "  %was = atomicrmw xchg ptr @__rv_mutex, i32 0 release\n"
+    "  %slept = icmp eq i32 %was, 2\n"
+    "  br i1 %slept, label %wake, label %out\n"
+    "wake:\n"
+    "  %_fk = " LINUX_SYSTEM_CALL (futex, "ptrtoint (ptr @__rv_mutex to i64)",
+                                   TEXT_OF (LINUX_FUTEX_WAKE_PRIVATE), "1",
+                                   "0", "0", "0") "\n"
+    "  br label %out\n"
+    "out:\n"
+    "  ret void\n"
+    "}\n"
+#else
     RUNTIME_SPINNING_LOCK (
       "  %_l = call i32 @pthread_mutex_lock(ptr @__rv_mutex)\n")
     RUNTIME_VOID_HOOK ("rt_unlock",
       "  %_u = call i32 @pthread_mutex_unlock(ptr @__rv_mutex)\n")
+#endif
 #if ADA_WORD_WAIT_SIGNALED
     "; FUTEX_WAIT_BITSET (9) private (128) on the realtime clock (256),\n"
     "; so the deadline is the absolute one __ada_rt_now_us reads, and\n"
@@ -104589,12 +110027,14 @@ void Emit_Runtime_Synchronisation () {
       "wait:\n"
       "  %tsp = phi ptr [ %ts, %clocked ], [ null, %sleep ]\n"
       "  %exp64 = sext i32 %expected to i64\n"
-      "  %_rc = call i64 (i64, ...) @syscall(i64 " ADA_SYS_FUTEX
-        ", ptr %w, i64 393, i64 %exp64, ptr %tsp, ptr null,"
-        " i64 4294967295)\n")
+      "  %wi = ptrtoint ptr %w to i64\n"
+      "  %tspi = ptrtoint ptr %tsp to i64\n"
+      "  %_rc = " LINUX_SYSTEM_CALL (futex, "%wi", "393", "%exp64", "%tspi",
+                                     "0", "4294967295") "\n")
     RUNTIME_WORD_WAKE (
-      "  %_rc = call i64 (i64, ...) @syscall(i64 " ADA_SYS_FUTEX
-        ", ptr %w, i64 129, i64 2147483647, ptr null)\n")
+      "  %wi = ptrtoint ptr %w to i64\n"
+      "  %_rc = " LINUX_SYSTEM_CALL (futex, "%wi", "129", "2147483647", "0",
+                                     "0", "0") "\n")
 #else
     RUNTIME_WORD_WAIT (RUNTIME_WORD_TIMESPEC_PROLOGUE,
       RUNTIME_WORD_CONDITION_SLEEP (
@@ -104617,7 +110057,6 @@ void Emit_Runtime_Synchronisation () {
 #endif
     );
   }
-  #undef ADA_SYS_FUTEX
   #undef ADA_SPIN_HINT
 }
 
@@ -105870,10 +111309,17 @@ void Emit_Runtime_Raise () {
     "  br label %report\n"
     "report:\n"
     "  %length = phi i64 [ 0, %entry ], [ %measured, %measure ]\n"
-    "  %format = call ptr @__ada_occurrence_format(ptr %detail, i64 %length)\n"
-    "  %precision = trunc i64 %length to i32\n"
-    "  call i32 (ptr, ...) @printf (ptr %format, ptr @.occurrence.unhandled,"
-      " ptr %exc_name, i32 %precision, ptr %detail)\n"
+    "  %name_length = call i64 @strlen(ptr %exc_name)\n"
+    "  %text_room = add i64 %name_length, %length\n"
+    "  %room = add i64 %text_room, 64\n"
+    "  %buffer = alloca i8, i64 %room\n"
+    "  %written = call i64 @__ada_occurrence_write(ptr %buffer,"
+      " ptr @.occurrence.unhandled, ptr %exc_name, ptr %detail, i64 %length)\n"
+    "  %stream = call i64 @__ada_stdout()\n"
+    "  %bufferi = ptrtoint ptr %buffer to i64\n"
+    "  %_w = call i64 @__ada_fwrite(i64 %bufferi, i64 1, i64 %written,"
+      " i64 %stream)\n"
+    "  call void @__ada_files_flush_all()\n"
     "  call void @exit (i32 1)\n"
     "  unreachable\n"
     "}\n\n"
@@ -105975,7 +111421,6 @@ void Emit_Runtime_Raise () {
 void Emit_Runtime_Occurrences () {
   Rep         sbt  = Pick_String_Bound_Rep ();
   Rep         wide = Make_Int_Rep (64, false);
-  Rep         word = Make_Int_Rep (32, false);
   const char *length;
   char        high[64];
 
@@ -105991,21 +111436,56 @@ void Emit_Runtime_Occurrences () {
   #undef RUNTIME_OCCURRENCE_TEXT_ROW
 
   Emit_Verbatim (
-    "\ndefine linkonce_odr ptr @__ada_occurrence_format(ptr %text,"
-      " i64 %length) nounwind {\n"
+    "\n; the report of an occurrence: %prefix and the exception's name, then\n"
+    "; its message after a colon on the same line, or on lines of its own\n"
+    "; when it ends one; the result is the length written at %out\n"
+    "define linkonce_odr i64 @__ada_occurrence_write(ptr %out, ptr %prefix,"
+      " ptr %name, ptr %text, i64 %length) nounwind {\n"
     "entry:\n"
+    "  %prefix_length = call i64 @strlen(ptr %prefix)\n"
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %prefix,"
+      " i64 %prefix_length, i1 false)\n"
+    "  %name_at = getelementptr i8, ptr %out, i64 %prefix_length\n"
+    "  %name_length = call i64 @strlen(ptr %name)\n"
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %name_at, ptr %name,"
+      " i64 %name_length, i1 false)\n"
+    "  %head = add i64 %prefix_length, %name_length\n"
+    "  %head_end = getelementptr i8, ptr %out, i64 %head\n"
     "  %bare = icmp slt i64 %length, 1\n"
     "  br i1 %bare, label %named, label %shaped\n"
     "named:\n"
-    "  ret ptr @.occurrence.bare\n"
+    "  store i8 10, ptr %head_end\n"
+    "  %named_length = add i64 %head, 1\n"
+    "  ret i64 %named_length\n"
     "shaped:\n"
     "  %last_at = sub i64 %length, 1\n"
     "  %last_p = getelementptr i8, ptr %text, i64 %last_at\n"
     "  %last = load i8, ptr %last_p\n"
     "  %block = icmp eq i8 %last, 10\n"
-    "  %format = select i1 %block, ptr @.occurrence.block,"
-      " ptr @.occurrence.inline\n"
-    "  ret ptr %format\n"
+    "  br i1 %block, label %lines, label %inline\n"
+    "lines:\n"
+    "  store i8 10, ptr %head_end\n"
+    "  %lines_at = getelementptr i8, ptr %head_end, i64 1\n"
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %lines_at, ptr %text,"
+      " i64 %length, i1 false)\n"
+    "  %lines_head = add i64 %head, 1\n"
+    "  %lines_length = add i64 %lines_head, %length\n"
+    "  ret i64 %lines_length\n"
+    "inline:\n"
+    "  store i8 32, ptr %head_end\n"
+    "  %colon_p = getelementptr i8, ptr %head_end, i64 1\n"
+    "  store i8 58, ptr %colon_p\n"
+    "  %space_p = getelementptr i8, ptr %head_end, i64 2\n"
+    "  store i8 32, ptr %space_p\n"
+    "  %inline_at = getelementptr i8, ptr %head_end, i64 3\n"
+    "  call void @llvm.memcpy.p0.p0.i64(ptr %inline_at, ptr %text,"
+      " i64 %length, i1 false)\n"
+    "  %inline_head = add i64 %head, 3\n"
+    "  %inline_end = add i64 %inline_head, %length\n"
+    "  %newline_p = getelementptr i8, ptr %out, i64 %inline_end\n"
+    "  store i8 10, ptr %newline_p\n"
+    "  %inline_length = add i64 %inline_end, 1\n"
+    "  ret i64 %inline_length\n"
     "}\n\n"
 
     "define linkonce_odr void @__ada_pend_text(ptr %text, i64 %length)"
@@ -106150,13 +111630,13 @@ void Emit_Runtime_Occurrences () {
     "  ret void\n"
     "}\n\n"
 
+    "; a message crossing to another task travels as a copy of its own,\n"
+    "; which the receiving side frees once it holds the text\n"
     "define linkonce_odr ptr @__ada_message_export() nounwind {\n"
     "entry:\n"
     "  %detail = load ptr, ptr @__reported_detail\n"
-    "  %owned = icmp eq ptr %detail, @__exception_message\n"
-    "  br i1 %owned, label %copy, label %shared\n"
-    "shared:\n"
-    "  ret ptr %detail\n"
+    "  %silent = icmp eq ptr %detail, null\n"
+    "  br i1 %silent, label %none, label %copy\n"
     "copy:\n"
     "  %length = call i64 @strlen(ptr %detail)\n"
     "  %room = add i64 %length, 1\n"
@@ -106168,24 +111648,17 @@ void Emit_Runtime_Occurrences () {
     "fill:\n"
     "  call void @llvm.memcpy.p0.p0.i64(ptr %block, ptr %detail,"
       " i64 %room, i1 false)\n"
-    "  %address = ptrtoint ptr %block to i64\n"
-    "  %marked = or i64 %address, 1\n"
-    "  %handle = inttoptr i64 %marked to ptr\n"
-    "  ret ptr %handle\n"
+    "  ret ptr %block\n"
     "}\n\n"
 
-    "define linkonce_odr void @__ada_message_import(ptr %handle) nounwind {\n"
+    "define linkonce_odr void @__ada_message_import(ptr %block) nounwind {\n"
     "entry:\n"
-    "  %address = ptrtoint ptr %handle to i64\n"
-    "  %mark = and i64 %address, 1\n"
-    "  %copied = icmp ne i64 %mark, 0\n"
-    "  br i1 %copied, label %adopt, label %share\n"
-    "share:\n"
-    "  store ptr %handle, ptr @__pending_detail\n"
+    "  %silent = icmp eq ptr %block, null\n"
+    "  br i1 %silent, label %none, label %adopt\n"
+    "none:\n"
+    "  store ptr null, ptr @__pending_detail\n"
     "  ret void\n"
     "adopt:\n"
-    "  %cleared = and i64 %address, -2\n"
-    "  %block = inttoptr i64 %cleared to ptr\n"
     "  %length = call i64 @strlen(ptr %block)\n"
     "  call void @__ada_pend_text(ptr %block, i64 %length)\n"
     "  call void @free(ptr %block)\n"
@@ -106246,16 +111719,13 @@ void Emit_Runtime_Occurrences () {
     "  %name = inttoptr i64 %id to ptr\n"
     "  %data = call ptr @__ada_occurrence_text(ptr %x, ptr %length_slot)\n"
     "  %length = load i64, ptr %length_slot\n"
-    "  %format = call ptr @__ada_occurrence_format(ptr %data, i64 %length)\n"
     "  %name_length = call i64 @strlen(ptr %name)\n"
     "  %text_room = add i64 %name_length, %length\n"
     "  %room = add i64 %text_room, 16\n"
     "  %buffer = call ptr @__ada_sec_stack_alloc(i64 %room)\n"
-    "  %precision = trunc i64 %length to i32\n"
-    "  %written = call i32 (ptr, i64, ptr, ...) @" ADA_SNPRINTF "(ptr %buffer,"
-      " i64 %room, ptr %format, ptr @.occurrence.raised, ptr %name,"
-      " i32 %precision, ptr %data)\n");
-  length = Emit_Named_Resize ("written", "written_bt", word, sbt);
+    "  %written = call i64 @__ada_occurrence_write(ptr %buffer,"
+      " ptr @.occurrence.raised, ptr %name, ptr %data, i64 %length)\n");
+  length = Emit_Named_Resize ("written", "written_bt", wide, sbt);
   snprintf (high, sizeof high, "%%%s", length);
   Emit_Image_Slice_Return ("ptr %buffer", high, sbt);
 }
@@ -106313,6 +111783,7 @@ void Emit_Runtime_Task_Wrapper () {
   Emit_Verbatim (
     "define linkonce_odr ptr @__ada_task_wrapper(ptr %tcb) {\n"
     "entry:\n"
+    TASK_FLOAT_SETUP
     "  store ptr %tcb, ptr @__self_task\n"
     "  br label %run\n"
     TASK_WRAPPER_RUN);
@@ -106320,6 +111791,7 @@ void Emit_Runtime_Task_Wrapper () {
   Emit_Verbatim (
     "define linkonce_odr ptr @__ada_task_wrapper(ptr %tcb) {\n"
     "entry:\n"
+    TASK_FLOAT_SETUP
     "  store ptr %tcb, ptr @__self_task\n"
 #ifdef _WIN32
     "  %wbuf = alloca [64 x i16], align 2\n"
@@ -106350,6 +111822,11 @@ void Emit_Runtime_Task_Wrapper () {
 #elif defined(__APPLE__)
     TASK_NAME_CLAMP ("63")
     "  %_sn = call i32 @pthread_setname_np(ptr %tail)\n"
+#elif defined(LINUX_SYSTEM_CALL_ASM)
+    TASK_NAME_CLAMP ("15")
+    "  %taili = ptrtoint ptr %tail to i64\n"
+    "  %_sn = " LINUX_SYSTEM_CALL (prctl, TEXT_OF (LINUX_PR_SET_NAME), "%taili",
+                                   "0", "0", "0", "0") "\n"
 #else
     TASK_NAME_CLAMP ("15")
     "  %self = call i64 @pthread_self()\n"
@@ -106454,37 +111931,21 @@ void Emit_Numeric_Image (const Numeric_Image_Flavor *flavor, Rep rts_sbt) {
   Emit_Image_Slice_Return ("ptr %start", high, rts_sbt);
 }
 
-void Emit_Snprintf_Image (const char *noun, const char *argument,
-                          int capacity, const char *format, Rep rts_sbt) {
-  Emit ("define linkonce_odr " FAT_PTR_TYPE " @__ada_%s_image(%s %%val)"
-        ADA_MAY_RAISE " {\n", noun, argument);
-  Emit ("entry:\n");
-  Emit ("  %%buf = call ptr @__ada_sec_stack_alloc(i64 %d)\n", capacity);
-  Emit ("  %%len32 = call i32 (ptr, i64, ptr, ...) @" ADA_SNPRINTF
-        " (ptr %%buf, i64 %d, ptr %s, %s %%val)\n", capacity, format, argument);
-  const char *length = Emit_Named_Resize ("len32", "len_bt",
-                                          Make_Int_Rep (32, false), rts_sbt);
-  char high[64];
-  snprintf (high, sizeof high, "%%%s", length);
-  Emit_Image_Slice_Return ("ptr %buf", high, rts_sbt);
-}
-
 void Emit_Real_Image (Rep rts_sbt) {
   Emit_Verbatim (
     "; ---- a real type's 'IMAGE: a sign or a leading blank, then Aft digits"
     " after the point, and an exponent for floating point ----\n"
-    "@.img_fmt_point = linkonce_odr constant [6 x i8] c\"% .*f\\00\"\n"
-    "@.img_fmt_exponent = linkonce_odr constant [6 x i8] c\"% .*E\\00\"\n"
     "define linkonce_odr " FAT_PTR_TYPE " @__ada_real_image(double %val,"
     " i32 %aft, i1 %exponent)" ADA_MAY_RAISE " {\n"
     "entry:\n"
-    "  %buf = call ptr @__ada_sec_stack_alloc(i64 400)\n"
-    "  %fmt = select i1 %exponent, ptr @.img_fmt_exponent,"
-    " ptr @.img_fmt_point\n"
-    "  %len32 = call i32 (ptr, i64, ptr, ...) @" ADA_SNPRINTF
-    " (ptr %buf, i64 400, ptr %fmt, i32 %aft, double %val)\n");
-  const char *length = Emit_Named_Resize ("len32", "len_bt",
-                                          Make_Int_Rep (32, false), rts_sbt);
+    "  %aft64 = zext i32 %aft to i64\n"
+    "  %room = add i64 %aft64, 400  ; sign, 309 integer digits, point,"
+      " exponent\n"
+    "  %buf = call ptr @__ada_sec_stack_alloc(i64 %room)\n"
+    "  %len64 = call i64 @__ada_format_real(ptr %buf, double %val,"
+    " i32 %aft, i1 %exponent)\n");
+  const char *length = Emit_Named_Resize ("len64", "len_bt",
+                                          Make_Int_Rep (64, false), rts_sbt);
   char high[64];
   snprintf (high, sizeof high, "%%%s", length);
   Emit_Image_Slice_Return ("ptr %buf", high, rts_sbt);
@@ -106548,14 +112009,11 @@ void Emit_Runtime_Image_Attributes () {
 
   Emit_Verbatim (
     "; Attribute runtime support\n"
-    "@.img_fmt_f = linkonce_odr constant [5 x i8] c\"%.6g\\00\"\n\n"
     "; ---- Integer'IMAGE and Modular'IMAGE: a sign or a leading blank,"
     " then the digits ----\n");
   for (Numeric_Image_Flavor_Kind f = 0; f < NUMERIC_IMAGE_FLAVOR_COUNT; f++)
     Emit_Numeric_Image (&Numeric_Image_Flavor_Table[f], rts_sbt);
 
-  Emit ("; ---- Float'IMAGE ----\n");
-  Emit_Snprintf_Image ("float", "double", 32, "@.img_fmt_f", rts_sbt);
   Emit_Real_Image (rts_sbt);
 
   Emit_Verbatim (
@@ -119444,7 +124902,7 @@ bool Repl_Reply_Ok (const Json *reply) {
   const Json *success = Json_Member (reply, "success");
   if (success and success->Kind == JSON_BOOL and success->Boolean)
     return true;
-  const char *message = Json_Text (Json_Member (reply, "message"));
+  const char *message = Dap_Error_Text (reply);
   puts (message and *message ? message : "The request failed.");
   return false;
 }
@@ -120191,6 +125649,15 @@ const char *Dap_Result_Text (const Json *response) {
   return Json_Text (Dap_Body_Member (response, "result"));
 }
 
+// a failed request's words: the response's message, or where newer
+// lldb-dap puts them, its body's error format
+const char *Dap_Error_Text (const Json *response) {
+  const char *message = Json_Text (Json_Member (response, "message"));
+  if (message and *message) return message;
+  return Json_Text (Json_Member (Json_Member (Json_Member (response, "body"),
+                                              "error"), "format"));
+}
+
 bool Dap_Result_Unsigned (const Json *response, u64 *value) {
   const char *text = Dap_Result_Text (response);
   if (not text) return false;
@@ -120848,7 +126315,7 @@ void Dap_Walk_Self (Dap_Quest *quest, int index,
   Dap_Task_Slot *task  = &quest->tasks[index];
   u64            value = 0;
   if (not Dap_Result_Unsigned (response, &value)) {
-    const char *message = Json_Text (Json_Member (response, "message"));
+    const char *message = Dap_Error_Text (response);
     if (message and strstr (message, "undeclared identifier")) {
       Dap_Proxy.tasking = -1;
       task->probed      = true;
@@ -121919,6 +127386,13 @@ int Dump_Rep_And_Print (const char *path, const char *directory,
 bool Llvm_C_Api_Load (Llvm_C_Api *api, char *err, size_t err_size) {
 
   memset (api, 0, sizeof (*api));
+  if (not Host_Libraries_Loadable ()) {
+    snprintf (err, err_size,
+      "this %s is statically linked and cannot load libLLVM; build it "
+      "dynamically linked",
+      TURBOADA_PROGRAM_NAME);
+    return false;
+  }
   const char *override = getenv ("TURBOADA_LLVM_LIB");
   if (override)
     api->library = Host_Library_Open (override);
@@ -121993,6 +127467,34 @@ bool Llvm_C_Api_Load (Llvm_C_Api *api, char *err, size_t err_size) {
                                                  "building a shared library" },
     { (void **) &api->Set_Thread_Local_Mode,     "LLVMSetThreadLocalMode",
                                                  "building a shared library" },
+    { (void **) &api->Buffer_From_Text,          "LLVMCreateMemoryBufferWithMemoryRangeCopy",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->First_Function,            "LLVMGetFirstFunction",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Next_Function,             "LLVMGetNextFunction",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Is_Declaration,            "LLVMIsDeclaration",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Value_Name,                "LLVMGetValueName2",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->First_Use,                 "LLVMGetFirstUse",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Next_Use,                  "LLVMGetNextUse",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Use_User,                  "LLVMGetUser",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Is_Instruction,            "LLVMIsAInstruction",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Instruction_Block,         "LLVMGetInstructionParent",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Block_Function,            "LLVMGetBasicBlockParent",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Linkage,                   "LLVMGetLinkage",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Named_Function,            "LLVMGetNamedFunction",
+                                                 PURE_LINK_FEATURE },
+    { (void **) &api->Delete_Function,           "LLVMDeleteFunction",
+                                                 PURE_LINK_FEATURE },
   };
   for (size_t i = 0; i < Count_Of (table); i++) {
     *table[i].slot = Host_Library_Symbol (api->library, table[i].name);
@@ -122099,6 +127601,15 @@ int Native_Backend_Compile (const char *ir_path, const char *const *extra_ir,
     }
   }
 
+  bool pure = false;
+#ifdef PURE_PLATFORM_AVAILABLE
+  bool demanded = false;
+  if (Pure_Link_Wanted (options, &demanded)) {
+    pure = Pure_Platform_Join (context, module, demanded);
+    if (demanded and not pure) goto done;
+  }
+#endif
+
   if (options->shared_library and Native_Backend_Llvm_Api.First_Global and
       Native_Backend_Llvm_Api.Next_Global and
       Native_Backend_Llvm_Api.Thread_Local_Mode and
@@ -122176,7 +127687,27 @@ int Native_Backend_Compile (const char *ir_path, const char *const *extra_ir,
 
   const char *configured = getenv (Linker.environment);
   bool        driver_ran = false;
-  for (size_t i = 0; i <= LINKER_DRIVER_COUNT; i++) {
+#ifdef PURE_PLATFORM_AVAILABLE
+  if (pure) {
+    int pure_status = Pure_Link_Run (obj_path, output);
+    driver_ran = pure_status >= 0;
+    status     = pure_status == 0 ? 0 : 1;
+    if (not driver_ran and demanded) {
+      Report_Driver_Error ("%s", PURE_LINKER_ADVICE);
+      remove (obj_path);
+      goto done;
+    }
+    if (not driver_ran) {
+      Native_Backend_Options hosted = *options;
+      hosted.hosted_link = true;
+      remove (obj_path);
+      status = Native_Backend_Compile (ir_path, extra_ir, extra_count,
+                                       exe_path, &hosted);
+      goto done;
+    }
+  }
+#endif
+  for (size_t i = 0; not pure and i <= LINKER_DRIVER_COUNT; i++) {
     const char *driver = options->link_driver ? (i ? NULL : options->link_driver)
                        : i ? Linker_Drivers[i - 1] : configured;
     if (not driver) continue;
@@ -122232,6 +127763,243 @@ done:
   Native_Backend_Llvm_Api.Context_Dispose (context);
   return status;
 }
+
+#ifdef PURE_PLATFORM_AVAILABLE
+bool Pure_Link_Wanted (const Native_Backend_Options *options, bool *demanded) {
+  const char *choice = getenv ("TURBOADA_LINK");
+  *demanded = choice and strcmp (choice, "pure") == 0;
+  if (choice and strcmp (choice, "hosted") == 0) return false;
+  if (options->emit_object_only or options->shared_library or
+      options->hosted_link)
+    return false;
+  if (options->extra_link_word_count or options->leading_link_word_count or
+      options->link_driver)
+    return false;
+  return Native_Backend_Llvm_Api.Buffer_From_Text and
+         Native_Backend_Llvm_Api.First_Function and
+         Native_Backend_Llvm_Api.Next_Function and
+         Native_Backend_Llvm_Api.Is_Declaration and
+         Native_Backend_Llvm_Api.Value_Name and
+         Native_Backend_Llvm_Api.First_Use and
+         Native_Backend_Llvm_Api.Next_Use and
+         Native_Backend_Llvm_Api.Use_User and
+         Native_Backend_Llvm_Api.Is_Instruction and
+         Native_Backend_Llvm_Api.Instruction_Block and
+         Native_Backend_Llvm_Api.Block_Function and
+         Native_Backend_Llvm_Api.Linkage and
+         Native_Backend_Llvm_Api.Named_Function and
+         Native_Backend_Llvm_Api.Delete_Function and
+         Native_Backend_Llvm_Api.First_Global and
+         Native_Backend_Llvm_Api.Next_Global;
+}
+
+Slice Pure_Link_Name (void *value) {
+  size_t      length = 0;
+  const char *name   = Native_Backend_Llvm_Api.Value_Name (value, &length);
+  return (Slice){ name, (u32) length };
+}
+
+bool Pure_Link_Replaceable (void *global) {
+  int linkage = Native_Backend_Llvm_Api.Linkage (global);
+  return linkage == 2 or linkage == 3 or linkage == 5 or linkage == 6;
+}
+
+bool Pure_Link_Uses_Elsewhere (void *function, Name_Index *replaced) {
+  for (void *use = Native_Backend_Llvm_Api.First_Use (function); use;
+       use = Native_Backend_Llvm_Api.Next_Use (use)) {
+    void *instruction = Native_Backend_Llvm_Api.Is_Instruction (
+                          Native_Backend_Llvm_Api.Use_User (use));
+    if (not instruction) return true;
+    void *owner = Native_Backend_Llvm_Api.Block_Function (
+                    Native_Backend_Llvm_Api.Instruction_Block (instruction));
+    if (not Pure_Link_Replaceable (owner) or
+        not Name_Index_Find_Exact (replaced, Pure_Link_Name (owner)))
+      return true;
+  }
+  return false;
+}
+
+bool Pure_Platform_Join (void *context, void *module, bool demanded) {
+  char *message  = NULL;
+  void *platform = NULL;
+  char *text     = Format_Alloc ("%s%s", Pure_Platform_Text, Pure_Heap_Text);
+  void *buffer   = Native_Backend_Llvm_Api.Buffer_From_Text (
+                     text, strlen (text), "platform");
+  free (text);
+  if (Native_Backend_Llvm_Api.Parse_Ir (context, buffer, &platform,
+                                        &message)) {
+    Report_Driver_Error ("platform module: %s", message ? message : "unknown");
+    if (message) Native_Backend_Llvm_Api.Dispose_Message (message);
+    return false;
+  }
+  for (u32 i = 0; i < Count_Of (Pure_Tasking_Functions); i++) {
+    void *wanted = Native_Backend_Llvm_Api.Named_Function (
+                     module, Pure_Tasking_Functions[i]);
+    void *offered = Native_Backend_Llvm_Api.Named_Function (
+                      platform, Pure_Tasking_Functions[i]);
+    if (offered and (not wanted or Native_Backend_Llvm_Api.Is_Declaration (wanted)))
+      Native_Backend_Llvm_Api.Delete_Function (offered);
+  }
+
+  Name_Index provided = { 0 };
+  for (void *f = Native_Backend_Llvm_Api.First_Function (platform); f;
+       f = Native_Backend_Llvm_Api.Next_Function (f))
+    if (not Native_Backend_Llvm_Api.Is_Declaration (f))
+      Name_Index_Insert_Exact (&provided,
+                               Arena_Duplicate_Slice (Pure_Link_Name (f)), 0);
+  for (void *g = Native_Backend_Llvm_Api.First_Global (platform); g;
+       g = Native_Backend_Llvm_Api.Next_Global (g))
+    if (not Native_Backend_Llvm_Api.Is_Declaration (g))
+      Name_Index_Insert_Exact (&provided,
+                               Arena_Duplicate_Slice (Pure_Link_Name (g)), 0);
+
+#ifdef PURE_IMPORT_LIBRARY
+  for (u32 i = 0; i < Count_Of (Pure_Import_Declarations); i++)
+    Name_Index_Insert_Exact (&provided,
+                             Pure_Import_Name (Pure_Import_Declarations[i]), 0);
+#endif
+
+  Slice missing = Empty_Slice;
+  for (void *f = Native_Backend_Llvm_Api.First_Function (module);
+       f and not missing.length; f = Native_Backend_Llvm_Api.Next_Function (f)) {
+    Slice name    = Pure_Link_Name (f);
+    bool  known   = Name_Index_Find_Exact (&provided, name) != NULL;
+    bool  defined = not Native_Backend_Llvm_Api.Is_Declaration (f);
+    if (name.length > 5 and memcmp (name.data, "llvm.", 5) == 0) continue;
+    if (defined and known and not Pure_Link_Replaceable (f)) missing = name;
+    if (not defined and not known and Pure_Link_Uses_Elsewhere (f, &provided))
+      missing = name;
+  }
+  for (void *g = Native_Backend_Llvm_Api.First_Global (module);
+       g and not missing.length; g = Native_Backend_Llvm_Api.Next_Global (g))
+    if (Native_Backend_Llvm_Api.Is_Declaration (g) and
+        Native_Backend_Llvm_Api.First_Use (g) and
+        not Name_Index_Find_Exact (&provided, Pure_Link_Name (g)))
+      missing = Pure_Link_Name (g);
+
+  if (missing.length) {
+    if (demanded)
+      Report_Driver_Error ("the program needs '%.*s' from the C library, so "
+                           "it cannot be linked without it",
+                           (int) missing.length, missing.data);
+    Native_Backend_Llvm_Api.Module_Dispose (platform);
+    return false;
+  }
+  if (Native_Backend_Llvm_Api.Link_Modules (module, platform)) {
+    Report_Driver_Error ("the platform module would not link into the program");
+    return false;
+  }
+  return true;
+}
+
+int Pure_Link_Run (const char *object, const char *output) {
+  const char *separator     = Host_Path_Split (output);
+  bool        has_extension =
+    strchr (separator ? separator : output, '.') != NULL;
+  char       *imports       = NULL;
+  int         status        = -1;
+#ifdef PURE_IMPORT_LIBRARY
+  imports = Format_Alloc ("%s.lib", object);
+  if (not Pure_Import_Library_Write (imports)) {
+    Report_Driver_Error ("cannot write the import library '%s'", imports);
+    free (imports);
+    return 1;
+  }
+#endif
+  for (u32 i = 0; status < 0 and i < Count_Of (Pure_Linkers); i++) {
+    Argument_List argv = { 0 };
+    Argument_List_Add_Words (&argv, Pure_Linkers[i].driver);
+    Argument_List_Add_Words (&argv, Pure_Linkers[i].options);
+    Argument_List_Add       (&argv, object);
+    if (imports) Argument_List_Add (&argv, imports);
+    Argument_List_Add_Words (&argv, Pure_Linkers[i].output_flag);
+    char *named = Format_Alloc ("%s%s%s", Pure_Linkers[i].output_prefix,
+                                output,
+                                has_extension ? "" : PURE_EXECUTABLE_SUFFIX);
+    Argument_List_Add       (&argv, named);
+    free (named);
+    int exit_status = Host_Run_Tool ((const char *const *) argv.items);
+    Argument_List_Free (&argv);
+    if (exit_status >= 0) status = exit_status == 0 ? 0 : 1;
+  }
+  if (imports) remove (imports);
+  free (imports);
+  return status;
+}
+
+#ifdef PURE_IMPORT_LIBRARY
+Slice Pure_Import_Name (const char *declaration) {
+  const char *name = strchr (declaration, '@') + 1;
+  return (Slice){ name, (u32) strcspn (name, " (") };
+}
+
+void Pure_Import_Header (FILE *file, const char *name, size_t size) {
+  fprintf (file, "%-16s%-12s%-6s%-6s%-8s%-10zu`\n", name, "0", "0", "0", "644",
+           size);
+}
+
+void Pure_Import_Big_Endian (FILE *file, u32 value) {
+  unsigned char bytes[4] = { (unsigned char) (value >> 24),
+                             (unsigned char) (value >> 16),
+                             (unsigned char) (value >> 8),
+                             (unsigned char) value };
+  fwrite (bytes, 1, sizeof bytes, file);
+}
+
+void Pure_Import_Little_Endian (FILE *file, u32 value, u32 width) {
+  for (u32 i = 0; i < width; i++) fputc ((int) (value >> (8 * i)) & 255, file);
+}
+
+bool Pure_Import_Library_Write (const char *path) {
+  u32    count       = (u32) Count_Of (Pure_Import_Declarations);
+  size_t dll         = strlen (PURE_IMPORT_LIBRARY);
+  size_t names       = 0;
+  for (u32 i = 0; i < count; i++)
+    names += 2 * (Pure_Import_Name (Pure_Import_Declarations[i]).length + 1)
+             + sizeof PURE_IMPORT_PREFIX - 1;
+  size_t table       = 4 + 8 * (size_t) count + names;
+  size_t member      = PURE_ARCHIVE_HEADER_BYTES + table + (table & 1);
+  FILE  *file        = fopen (path, "wb");
+  if (not file) return false;
+  fputs ("!<arch>\n", file);
+  Pure_Import_Header (file, "/", table);
+  Pure_Import_Big_Endian (file, 2 * count);
+  size_t offset = PURE_ARCHIVE_MAGIC_BYTES + member;
+  for (u32 i = 0; i < count; i++) {
+    Slice  name = Pure_Import_Name (Pure_Import_Declarations[i]);
+    size_t data = name.length + 1 + dll + 1;
+    size_t body = PURE_IMPORT_OBJECT_BYTES + data;
+    Pure_Import_Big_Endian (file, (u32) offset);
+    Pure_Import_Big_Endian (file, (u32) offset);
+    offset += PURE_ARCHIVE_HEADER_BYTES + body + (body & 1);
+  }
+  for (u32 i = 0; i < count; i++) {
+    Slice name = Pure_Import_Name (Pure_Import_Declarations[i]);
+    fprintf (file, "%.*s%c" PURE_IMPORT_PREFIX "%.*s%c", (int) name.length,
+             name.data, 0, (int) name.length, name.data, 0);
+  }
+  if (table & 1) fputc ('\n', file);
+  for (u32 i = 0; i < count; i++) {
+    Slice  name = Pure_Import_Name (Pure_Import_Declarations[i]);
+    size_t data = name.length + 1 + dll + 1;
+    size_t body = PURE_IMPORT_OBJECT_BYTES + data;
+    Pure_Import_Header (file, PURE_IMPORT_LIBRARY "/", body);
+    Pure_Import_Little_Endian (file, 0, 2);
+    Pure_Import_Little_Endian (file, PURE_IMPORT_SIGNATURE, 2);
+    Pure_Import_Little_Endian (file, 0, 2);
+    Pure_Import_Little_Endian (file, PURE_IMPORT_MACHINE, 2);
+    Pure_Import_Little_Endian (file, 0, 4);
+    Pure_Import_Little_Endian (file, (u32) data, 4);
+    Pure_Import_Little_Endian (file, 0, 2);
+    Pure_Import_Little_Endian (file, PURE_IMPORT_CODE_BY_NAME, 2);
+    fprintf (file, "%.*s%c%s%c", (int) name.length, name.data, 0,
+             PURE_IMPORT_LIBRARY, 0);
+    if (body & 1) fputc ('\n', file);
+  }
+  return fclose (file) == 0;
+}
+#endif
+#endif
 
 void Copy_Bundled_Library (const char *line, const char *end,
                            const char *directory) {

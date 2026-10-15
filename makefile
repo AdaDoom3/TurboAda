@@ -76,7 +76,8 @@ ICON_RSRC = Icns=`wc -c < $(BIN_DIR)/$(ICON).icns`; Data=$$((Icns + 4)); \
 
 Slice_Path       = $(if $1,staging/$(EXECUTABLE)-$1,$(BIN_DIR)/$(EXECUTABLE))
 Compile_Slice    = $(COMPILER) $(COMPILER_FLAGS) $(if $1,-arch $1) \
-                   -o $(call Slice_Path,$1) turboada.c $(RESOURCE_OBJECT)
+                   -o $(call Slice_Path,$1) turboada.c $(RESOURCE_OBJECT) \
+                   $(LINK_LIBRARIES)
 SLICES           = $(foreach Architecture,$(ARCHITECTURES),\
                      $(call Slice_Path,$(Architecture)))
 BUILD_EXECUTABLE = $(if $(SLICES),\
@@ -114,6 +115,7 @@ COMPILER_windows          = x86_64-w64-mingw32-gcc
 COMPILER_FLAGS_linux      = -O3 -Wall -g0 -std=gnu17 -march=x86-64 -mtune=generic -flto=auto
 COMPILER_FLAGS_macos      = -O3 -Wall -g0 -std=gnu2x
 COMPILER_FLAGS_windows    = -O2 -Wall -g0 -std=gnu2x -static -flto=auto
+LINK_LIBRARIES_linux      = -lpthread -ldl
 ARCHITECTURES_macos       = arm64 x86_64
 SUFFIX_windows            = .exe
 ARTWORK_linux             = $(ICON).png
@@ -134,7 +136,8 @@ $(if $(COMPILER_$(TARGET)),,\
   $(error TARGET is '$(TARGET)'; it must be linux, macos or windows))
 
 $(foreach Role,COMPILER COMPILER_FLAGS SUFFIX ARTWORK LAUNCHER \
-               RESOURCE_COMPILER SHARED_LIBRARIES ARCHITECTURES,\
+               RESOURCE_COMPILER SHARED_LIBRARIES ARCHITECTURES \
+               LINK_LIBRARIES,\
   $(eval $(Role) := $($(Role)_$(TARGET))))
 
 COMPILER_FLAGS += $(if $(CROSS),,$(WHOLE_PROGRAM))
@@ -205,7 +208,8 @@ ta: $(HOST_BINARY) $(HOST_RUNTIMES) $(HOST_LIBRARIES)
 $(HOST_BINARY): turboada.c
 	@mkdir -p $(@D)
 	@$(call STAGE,compiling turboada.c with $(CC))
-	$(CC) $(CFLAGS) $(WHOLE_PROGRAM) $(TUNE) -o $@ $<
+	$(CC) $(CFLAGS) $(WHOLE_PROGRAM) $(TUNE) -o $@ $< \
+	  $(LINK_LIBRARIES_$(HOST_TARGET))
 	@echo "Built $@."
 
 $(HOST_RUNTIMES): bin-$(HOST_TARGET)/%: %

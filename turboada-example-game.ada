@@ -727,6 +727,7 @@ procedure Turbo_Engine is
   Entity_Total : constant := First_Doll + Maximum_Ragdolls;
 
   subtype Entity_Id is Natural range 0..Entity_Total - 1;
+  type    Entity_Leaves is array (Entity_Id) of Integer;
 
   type Part_Values  is array (1..14) of Integer;
 
@@ -972,7 +973,8 @@ procedure Turbo_Engine is
     end record;
 
   type Sound_Channel is
-    (Master_Sound, Weapons_Sound, Footsteps_Sound, Impacts_Sound, Physics_Sound, Ambience_Sound, Interface_Sound, Voices_Sound);
+    (Master_Sound, Music_Sound, Weapons_Sound, Footsteps_Sound, Impacts_Sound, Physics_Sound, Ambience_Sound,
+     Interface_Sound, Voices_Sound);
 
   type Reticle_Tint is
     (Green_Tint, Yellow_Tint, Cyan_Tint, White_Tint, Amber_Tint, Magenta_Tint, Red_Tint);
@@ -3153,7 +3155,7 @@ procedure Turbo_Engine is
     (for Each in Player_Action => Actions (Each).Default);
 
   Channel_Labels : constant array (Sound_Channel) of Phrase :=
-    (new String'("Master volume"), new String'("Weapons"), new String'("Footsteps"),
+    (new String'("Master volume"), new String'("Music"), new String'("Weapons"), new String'("Footsteps"),
      new String'("Impacts"), new String'("Physics"), new String'("Ambience"),
      new String'("Menus and HUD"), new String'("Voices"));
 
@@ -3258,8 +3260,8 @@ procedure Turbo_Engine is
      Flag_Cue         => (Interface_Sound, -10.0,  0.0,   0.0, 0.00, 99, 2),
      Wave             => (Interface_Sound, -12.0,  0.0,   0.0, 0.00, 99, 1),
      Scrape_Loop      => (Physics_Sound,   -10.0,  2.0,  25.0, 0.00, 40, 3),
-     Stinger          => (Interface_Sound,  -9.0,  0.0,   0.0, 0.00, 99, 1),
-     Step_Stinger     => (Interface_Sound, -13.0,  0.0,   0.0, 0.00, 90, 2),
+     Stinger          => (Music_Sound,      -9.0,  0.0,   0.0, 0.00, 99, 1),
+     Step_Stinger     => (Music_Sound,     -13.0,  0.0,   0.0, 0.00, 90, 2),
      Gib_Burst        => (Impacts_Sound,    -5.0,  2.0,  45.0, 0.05, 75, 2),
      Fuse_Hiss        => (Impacts_Sound,    -3.0,  3.0,  60.0, 0.00, 92, 3),
      Announcer        => (Voices_Sound,     -4.0,  0.0,   0.0, 0.00, 99, 1));
@@ -3334,6 +3336,13 @@ procedure Turbo_Engine is
      Brute   => new String'("brute_roar"),
      Charger => new String'("charger_growl"));
 
+  Horde_Sounds : constant array (1..13) of access constant String :=
+    (new String'("charger_scream"), new String'("zombie_attack"), new String'("zombie_breath"),
+     new String'("zombie_death"), new String'("zombie_gib"), new String'("zombie_groan"),
+     new String'("zombie_shuffle"), new String'("horde_crowd"), new String'("pa_chime"),
+     new String'("wave_start"), new String'("stinger_wave"), new String'("stinger_step"),
+     new String'("stinger_end"));
+
   Hushed : constant array (1..3) of access constant String :=
     (new String'("amb_exit_sign"), new String'("amb_alarm_pan"), new String'("amb_traffic"));
 
@@ -3345,7 +3354,7 @@ procedure Turbo_Engine is
      (0.0, 0.0, 1.0));
 
   Bed_Mix : constant array (Bed_Kind) of Bed_Row :=
-    (Tension_Bed => (Ambience_Sound,  -9.0, 3.0),
+    (Tension_Bed => (Music_Sound,     -9.0, 3.0),
      Museum_Bed  => (Ambience_Sound, -15.0, 2.0),
      Crowd_Bed   => (Voices_Sound,   -10.0, 0.8));
 
@@ -3716,10 +3725,13 @@ procedure Turbo_Engine is
                    Best  : Real     := Real'Last;
                    From  : Positive := 1;
                    Found : Natural  := 0) return Natural is
-    (if    From > Last                   then Found
-     elsif Score (War, Wits, From) < Best
-     then  Lowest (War, Wits, Last, Score (War, Wits, From), From + 1, From)
-     else  Lowest (War, Wits, Last, Best, From + 1, Found));
+    (if From > Last then Found
+     else (declare
+             Scored : constant Real := Score (War, Wits, From);
+           begin
+             (if Scored < Best
+              then Lowest (War, Wits, Last, Scored, From + 1, From)
+              else Lowest (War, Wits, Last, Best, From + 1, Found))));
 
   generic
     type World is limited private;
@@ -3879,6 +3891,13 @@ procedure Turbo_Engine is
         Characters : String (1..Name_Length) := (others => ' ');
       end record;
 
+    Path_Length : constant := 1024;
+
+    type Bounded_Path is record
+        Length     : Natural                 := 0;
+        Characters : String (1..Path_Length) := (others => ' ');
+      end record;
+
     type Name_Array is array (Positive range <>) of Bounded_Name;
 
     type Name_List is record Count : Natural := 0; Names : Name_Array (1..64); end record;
@@ -3889,6 +3908,8 @@ procedure Turbo_Engine is
 
     function  To_Name      (Item : String)           return Bounded_Name;
     function  Image        (Item : Bounded_Name)     return String;
+    function  To_Path      (Item : String)           return Bounded_Path;
+    function  Image        (Item : Bounded_Path)     return String;
     function  Ends_With    (Item, Suffix : String)   return Boolean;
     function  Asset        (Relative : String)       return String;
     function  Exists       (Path : String)           return Boolean;
@@ -5194,6 +5215,7 @@ procedure Turbo_Engine is
   type Body_Index is range 0..Maximum_Bodies;
 
   subtype Body_Slot is Body_Index range 1..Maximum_Bodies;
+  type    Bone_Map  is array (Body_Slot) of Natural;
 
   ----------------
   -- Rigid_Body --
@@ -6602,6 +6624,11 @@ procedure Turbo_Engine is
       end case;
     end record;
 
+  type Sighting is record
+      Found : Prey   := (Kind => Nobody);
+      Point : Vector := Origin;
+    end record;
+
   type Intel is record
       Known, Seen        : Boolean := False;
       Place, Drift       : Vector  := Origin;
@@ -6932,12 +6959,13 @@ procedure Turbo_Engine is
   function Closed           (War : World; Idea : Thought)                                                   return Thought;
   function Acted            (War : World; Opening : Command; Awake : Mind)                                  return Thought;
   function Lived            (War : World; Wits : Mind)                                                      return Thought;
-  function Foe_Spotted      (War   : World;
+  function Sighted          (War   : World;
                              Wits  : Mind;
                              From  : Natural := 1;
                              Found : Prey    := (Kind => Nobody);
                              Best  : Real    := Real'Last;
-                             Point : Vector  := Origin) return Mind;
+                             Point : Vector  := Origin) return Sighting;
+  function Foe_Spotted      (War : World; Wits : Mind)                                                      return Mind;
   function Target_Kept      (War : World; Wits : Mind)                                                      return Mind;
   function Menacing         (War : World; Wits : Mind; Item : Positive)                                     return Boolean;
 
@@ -7161,6 +7189,7 @@ procedure Turbo_Engine is
       Shown         : Snapshot_Access;
       Scratch       : Snapshot_Access;
       Shown_Tick    : Integer    := -1;
+      Shown_Leaves  : Entity_Leaves := (others => -1);
       Told_Missiles : Projectile_Array;
       Told_Scores   : Score_Table;
       Told_State    : Match_State;
@@ -7418,13 +7447,11 @@ procedure Turbo_Engine is
   function  Field_Width       (Class : Entity_Class; Field : Positive; P : Positive := 1)              return Natural;
   function  Rule_Of           (Class : Entity_Class; Field : Positive)                                 return Field_Rule;
   function  Shift_Of          (Class : Entity_Class; P : Positive)                                     return Natural;
-  function Field_Sum (Class : Entity_Class; Field : Positive; Parts : Part_Values; P : Positive := 1; Sum : Long := 0)
-     return Integer;
+  function Field_Sums (Class : Entity_Class; Parts : Part_Values) return Field_Values;
   function Parts_Of        (Class : Entity_Class; Values : Field_Values) return Part_Values;
   function Entity_Class_Of (Id : Entity_Id)                              return Entity_Class;
-  function Bone_Of (Current : World; Item : Body_Slot; Doll : Natural := Maximum_Ragdolls; Part : Natural := Ragdoll_Parts'Last)
-     return Natural;
-  function Entity_Row_At (Current : World; Id : Entity_Id) return Entity_State;
+  function Bones_Of      (Current : World)                 return Bone_Map;
+  function Entity_Row_At (Current : World; Id : Entity_Id; Bones : Bone_Map) return Entity_State;
   function Snapshot_Of   (Current : World)                 return Snapshot;
   function Same_State    (Left, Right : Entity_State)      return Boolean;
   function Entity_Decoded (Data : Bytes; From : Natural; Class : Entity_Class; Known : Entity_State; Field : Natural := 0)
@@ -7690,6 +7717,7 @@ procedure Turbo_Engine is
   procedure Open          (Wide, High : Positive);
   procedure Prepare_Level (Number : Arena_Number);
   procedure Warm_Level    (Current : World);
+  procedure Preload_Horde;
   procedure Clear         (Tint : Colour);
   procedure Draw_World    (Current : World; View : Camera; Viewer : Player_Number; Clock : Real);
   procedure Draw_Weapon   (View : Camera; Holding : Weapon; Since_Fire, Clock : Real);
@@ -7896,6 +7924,7 @@ procedure Turbo_Engine is
   Batches      : array (1..96) of Batch;
   Batch_Count  : Natural := 0;
   Prepared     : Natural := 0;
+  Horde_Loaded : Boolean := False;
   Level_Low    : Vector  := Origin;
   Level_High   : Vector  := Origin;
   Level_Array  : GLuint  := 0;
@@ -9267,6 +9296,8 @@ procedure Turbo_Engine is
 
   procedure Open_Audio;
 
+  procedure Apply_Volumes;
+
   procedure Close_Audio;
 
   procedure Hear_World (Current : World; Heard_To : in out Natural; Ear : Vector; Yaw, Pitch : Real; Me : Player_Number := 0);
@@ -9572,9 +9603,9 @@ procedure Turbo_Engine is
       Wide      : Natural    := 0;
       High      : Natural    := 0;
       Connect   : Bounded_Name;
-      Shot      : Bounded_Name;
-      Walk      : Bounded_Name;
-      Replay    : Bounded_Name;
+      Shot      : Bounded_Path;
+      Walk      : Bounded_Path;
+      Replay    : Bounded_Path;
       Scene     : Scene_Kind := Splash_Scene;
       Ticks     : Natural    := 640;
       Viewing   : Boolean    := False;
@@ -9608,7 +9639,7 @@ procedure Turbo_Engine is
 
   type Choice_Flags     is array (1..5) of Boolean;
   type Virtual_Keys   is array (Player_Action) of Natural;
-  type Script_Lines   is array (1..1024) of Bounded_Name;
+  type Script_Lines   is array (1..1024) of Bounded_Path;
 
   type Request_Kind is
     (No_Request, Start_Match_Request, Join_Request, Replay_Request, Leave_Request, Restart_Request, Quit_Request);
@@ -9773,7 +9804,7 @@ procedure Turbo_Engine is
   Preview_Area     : Rect;
   Message          : Bounded_Name;
   Message_At       : Real                     := -99.0;
-  Shot_Path        : Bounded_Name;
+  Shot_Path        : Bounded_Path;
   Choice_Kept      : Start_Options;
   Run_Start        : Real                     := 0.0;
   Run_Last         : Real                     := 0.0;
@@ -10807,6 +10838,20 @@ procedure Turbo_Engine is
     -----------
 
     function Image (Item : Bounded_Name) return String is (Item.Characters (1..Item.Length));
+
+    -------------
+    -- To_Path --
+    -------------
+
+    function To_Path (Item : String) return Bounded_Path is
+      (Length     => Natural'Min (Item'Length, Path_Length),
+       Characters => (for I in 1..Path_Length => (if I <= Item'Length then Item (Item'First + I - 1) else ' ')));
+
+    -----------
+    -- Image --
+    -----------
+
+    function Image (Item : Bounded_Path) return String is (Item.Characters (1..Item.Length));
 
     ---------------
     -- Ends_With --
@@ -15926,11 +15971,12 @@ procedure Turbo_Engine is
   ------------
 
   procedure Unpack (Level : Map; From : Natural; Row : out Leaf_Set) is
-    Leaf   : Natural := 1;
-    Cursor : Natural := Natural'Max (Row_Offset (Level, From), 0);
+    Offset : constant Integer := Row_Offset (Level, From);
+    Leaf   : Natural          := 1;
+    Cursor : Natural          := Natural'Max (Offset, 0);
     begin
-      Row := (others => Row_Offset (Level, From) < 0);
-      while Row_Offset (Level, From) >= 0
+      Row := (others => Offset < 0);
+      while Offset >= 0
         and then Leaf <= Row'Last
         and then Cursor <= Level.Visibility'Last
       loop
@@ -24976,17 +25022,27 @@ procedure Turbo_Engine is
   -------------
 
   function Blocked (War : World; Wits : Mind) return Mark_Table is
-    (declare
-       Paths : constant Graph := Paths_Of (Wits);
-     begin
-       (for N in 1..Node_Count (Paths) =>
-          (for some Shun of Wits.Shunned => Shun = N)
-          or else (for some Prop of War.Physics.Bodies =>
-                     Prop.Motion /= Unused
-                     and then Prop.Owner = 0
-                     and then Prop.Mass > Rules (Carry_Limit)
-                     and then Norm (Paths.Nodes (N).Position - Prop.Position)
-                              < Radius_Of (Prop) + 32.0)));
+    Paths  : constant Graph := Paths_Of (Wits);
+    Result : Mark_Table (1..Node_Count (Paths)) := (others => False);
+    begin
+      for Shun of Wits.Shunned loop
+        if Shun in Result'Range then
+          Result (Shun) := True;
+        end if;
+      end loop;
+      for Prop of War.Physics.Bodies loop
+        if Prop.Motion /= Unused and then Prop.Owner = 0 and then Prop.Mass > Rules (Carry_Limit) then
+          declare
+            Reach : constant Real := Radius_Of (Prop) + 32.0;
+          begin
+            for N in Result'Range loop
+              Result (N) := Result (N) or else Norm (Paths.Nodes (N).Position - Prop.Position) < Reach;
+            end loop;
+          end;
+        end if;
+      end loop;
+      return Result;
+    end;
 
   -------------
   -- Planned --
@@ -26870,21 +26926,18 @@ procedure Turbo_Engine is
         then Acted (War, Opening, Risen (War, Heard_Of))
         else Acted (War, Opening, Heard_Of)));
 
-  -----------------
-  -- Foe_Spotted --
-  -----------------
+  -------------
+  -- Sighted --
+  -------------
 
-  function Foe_Spotted (War   : World;
-                        Wits  : Mind;
-                        From  : Natural := 1;
-                        Found : Prey    := (Kind => Nobody);
-                        Best  : Real    := Real'Last;
-                        Point : Vector  := Origin) return Mind is
+  function Sighted (War   : World;
+                    Wits  : Mind;
+                    From  : Natural := 1;
+                    Found : Prey    := (Kind => Nobody);
+                    Best  : Real    := Real'Last;
+                    Point : Vector  := Origin) return Sighting is
     (if From > Maximum_Players + Maximum_Zombies + Maximum_Bodies
-     then (Wits with delta
-             Seen_Since   => (if Found /= Wits.Target then Wits.Now else Wits.Seen_Since),
-             Target       => Found,
-             Target_Point => Point)
+     then (Found, Point)
      elsif From <= Maximum_Players
      then (declare
              Who    : constant Player_Index := Player_Index (From);
@@ -26910,8 +26963,13 @@ procedure Turbo_Engine is
                                   and then abs (Pitch_Of (Toward) + War.Players (Wits.Self).Pitch) < 0.644))
                and then Visible (Wits, Chest);
            begin
-             (if Spots then Foe_Spotted (War, Wits, From + 1, (A_Player, Who), Score, Chest)
-              else Foe_Spotted (War, Wits, From + 1, Found, Best, Point)))
+             (if Spots then Sighted (War, Wits, From + 1, (A_Player, Who), Score, Chest)
+              else Sighted (War, Wits, From + 1, Found, Best, Point)))
+     elsif From <= Maximum_Players + Maximum_Zombies and then War.Mode /= Zombie_Survival
+     then Sighted (War, Wits, Maximum_Players + Maximum_Zombies + 1, Found, Best, Point)
+     elsif From <= Maximum_Players + Maximum_Zombies
+       and then not War.Horde (Zombie_Index (From - Maximum_Players)).Alive
+     then Sighted (War, Wits, From + 1, Found, Best, Point)
      elsif From <= Maximum_Players + Maximum_Zombies
      then (declare
              Undead : constant Zombie_Index := Zombie_Index (From - Maximum_Players);
@@ -26919,12 +26977,9 @@ procedure Turbo_Engine is
              Score  : constant Real   :=
                Norm (Chest - Wits.Eyes) * Undead_Weight (War.Horde (Undead).Kind);
            begin
-             (if War.Mode = Zombie_Survival
-                 and then War.Horde (Undead).Alive
-                 and then Score < Best
-                 and then Visible (Wits, Chest)
-              then Foe_Spotted (War, Wits, From + 1, (An_Undead, Undead), Score, Chest)
-              else Foe_Spotted (War, Wits, From + 1, Found, Best, Point)))
+             (if Score < Best and then Visible (Wits, Chest)
+              then Sighted (War, Wits, From + 1, (An_Undead, Undead), Score, Chest)
+              else Sighted (War, Wits, From + 1, Found, Best, Point)))
      else (declare
              Barrel : constant Body_Slot := Body_Slot (From - Maximum_Players - Maximum_Zombies);
              Prop   : Rigid_Body renames War.Physics.Bodies (Barrel);
@@ -26946,8 +27001,21 @@ procedure Turbo_Engine is
                                                   and then Norm (War.Horde (B).Position - Prop.Position)
                                                            < 160.0)))
                  and then Visible (Wits, Prop.Position)
-              then Foe_Spotted (War, Wits, From + 1, (A_Body, Barrel), 0.0, Prop.Position)
-              else Foe_Spotted (War, Wits, From + 1, Found, Best, Point))));
+              then Sighted (War, Wits, From + 1, (A_Body, Barrel), 0.0, Prop.Position)
+              else Sighted (War, Wits, From + 1, Found, Best, Point))));
+
+  -----------------
+  -- Foe_Spotted --
+  -----------------
+
+  function Foe_Spotted (War : World; Wits : Mind) return Mind is
+    (declare
+       Seen : constant Sighting := Sighted (War, Wits);
+     begin
+       (Wits with delta
+          Seen_Since   => (if Seen.Found /= Wits.Target then Wits.Now else Wits.Seen_Since),
+          Target       => Seen.Found,
+          Target_Point => Seen.Point));
 
   -----------------
   -- Target_Kept --
@@ -27016,10 +27084,13 @@ procedure Turbo_Engine is
                (if Here = 0 or There = 0 or Here = There then (others => <>)
                 else Find_Route (Paths, Here, There, (others => <>), Open, Open));
            begin
+             -- each explorer weighs the routes by its own dice, so explorers
+             -- seated together spread over the map instead of touring it in
+             -- one order
              (if    Here = 0 or There = 0 then Real'Last
               elsif Here = There          then 0.0
               elsif Way.Length = 0        then Real'Last
-              else  Real (Way.Length))));
+              else  Real (Way.Length) * (0.5 + Chance (Key (Wits.Seed, Long (Item) + 16#7031#, Wits.Salt))))));
 
   --------------------
   -- Frontier_Score --
@@ -27081,14 +27152,16 @@ procedure Turbo_Engine is
        Placed  : constant Mind  :=
          (if Visited.Touring /= 0 or else not Me.Motion.Grounded then Visited
           else (Visited with delta Touring => Next_Tour (War, Visited, Maximum_Items)));
-       Unknown : constant Natural := Frontier (War, Placed, Node_Count (Paths));
      begin
        (if Placed.Touring /= 0
         then (Placed with delta Goal_Point => War.Items (Placed.Touring).Position)
         elsif Placed.Goal = 0
           or else Has_Seen (Placed, Placed.Goal)
           or else Norm (Paths.Nodes (Placed.Goal).Position - Wits.Feet) < 48.0
-        then (if Unknown /= 0 then (Placed with delta Goal_Point => Paths.Nodes (Unknown).Position) else Placed)
+        then (declare
+                Unknown : constant Natural := Frontier (War, Placed, Node_Count (Paths));
+              begin
+                (if Unknown /= 0 then (Placed with delta Goal_Point => Paths.Nodes (Unknown).Position) else Placed))
         else (Placed with delta Goal_Point => Paths.Nodes (Placed.Goal).Position)));
 
   -------------
@@ -27278,9 +27351,23 @@ procedure Turbo_Engine is
   -------------
 
   function Bits_At (Data : Bytes; From, Width : Natural; Sum : Long := 0) return Long is
-    (if Width = 0 then Sum
-     else Bits_At (Data, From + 1, Width - 1,
-                   2 * Sum + (if From / 8 > Data'Last then 0 else Long (Data (From / 8) / 2 ** (7 - From mod 8) mod 2))));
+    Total : Long    := Sum;
+    Place : Natural := From;
+    Left  : Natural := Width;
+    begin
+      while Left > 0 loop
+        declare
+          Room : constant Natural := 8 - Place mod 8;
+          Take : constant Natural := Natural'Min (Room, Left);
+          Held : constant Byte    := (if Place / 8 > Data'Last then 0 else Data (Place / 8));
+        begin
+          Total := Total * 2 ** Take + Long (Held) / 2 ** (Room - Take) mod 2 ** Take;
+          Place := Place + Take;
+          Left  := Left - Take;
+        end;
+      end loop;
+      return Total;
+    end;
 
   -------------
   -- Ones_At --
@@ -27294,7 +27381,15 @@ procedure Turbo_Engine is
   -------------
 
   function Top_Bit (Value : Long; Bit : Natural := 0) return Natural is
-    (if Value / 2 ** (Bit + 1) = 0 then Bit else Top_Bit (Value, Bit + 1));
+    Top  : Natural := Bit;
+    Rest : Long    := Value / 2 ** (Bit + 1);
+    begin
+      while Rest /= 0 loop
+        Top  := Top + 1;
+        Rest := Rest / 2;
+      end loop;
+      return Top;
+    end;
 
   -------------
   -- Code_At --
@@ -27320,11 +27415,19 @@ procedure Turbo_Engine is
   ----------------
 
   function Numbers_At (Data : Bytes; From, Count : Natural; Order : Natural := 3) return Number_List is
-    (if Count = 0 then No_Numbers
-     else (declare
-             Got : constant Bit_Code := Code_At (Data, From, Order, Signed_Bits);
-           begin
-             Got.Value & Numbers_At (Data, Got.Next, Count - 1, Order)));
+    Result : Number_List (1..Count);
+    Cursor : Natural := From;
+    begin
+      for K in Result'Range loop
+        declare
+          Got : constant Bit_Code := Code_At (Data, Cursor, Order, Signed_Bits);
+        begin
+          Result (K) := Got.Value;
+          Cursor     := Got.Next;
+        end;
+      end loop;
+      return Result;
+    end;
 
   --------------
   -- Put_Bits --
@@ -27336,19 +27439,30 @@ procedure Turbo_Engine is
          when Plain_Bits   => 1,
          when Counted_Bits => Value + 2 ** Width,
          when Signed_Bits  => (if Value >= 0 then 2 * Value else -2 * Value - 1) + 2 ** Width);
-    Length  : constant Natural := Top_Bit (Shifted);
+    Length  : constant Natural := (if Coding = Plain_Bits then 0 else Top_Bit (Shifted));
     begin
       case Coding is
         when Plain_Bits                 =>
-          if Width > 0 then
-            Put_Bits (Into, Value / 2, Width - 1);
-            if Into.Last < 8 * Into.Data'Length then
-              Into.Data (Into.Last / 8) :=
-                (if Into.Last mod 8 = 0 then 0 else Into.Data (Into.Last / 8))
-                or Byte (Value mod 2) * 2 ** (7 - Into.Last mod 8);
-              Into.Last := Into.Last + 1;
-            end if;
-          end if;
+          declare
+            -- bit K is (Value / 2 ** K) mod 2, which is bit K of abs Value
+            Pattern : constant Word    :=
+              (if Value >= 0 then Word (Value) elsif Value = Long'First then 2 ** 63 else Word (-Value));
+            Left    : Natural          := Width;
+          begin
+            while Left > 0 and then Into.Last < 8 * Into.Data'Length loop
+              declare
+                Room  : constant Natural := 8 - Into.Last mod 8;
+                Take  : constant Natural := Natural'Min (Room, Left);
+                Chunk : constant Word    :=
+                  (if Left - Take >= 64 then 0 else Pattern / 2 ** (Left - Take)) mod 2 ** Take;
+                Kept  : constant Byte    := (if Room = 8 then 0 else Into.Data (Into.Last / 8));
+              begin
+                Into.Data (Into.Last / 8) := Kept or Byte (Chunk * 2 ** (Room - Take));
+                Into.Last                 := Into.Last + Take;
+                Left                      := Left - Take;
+              end;
+            end loop;
+          end;
         when Counted_Bits | Signed_Bits =>
           Put_Bits (Into, 2 ** (Length - Width + 1) - 2, Length - Width + 1);
           Put_Bits (Into, Shifted mod 2 ** Length, Length);
@@ -27533,6 +27647,9 @@ procedure Turbo_Engine is
     (if Field <= 3 and Position_Order (Class) > 0 then (Position_Order (Class), Signed_Bits)
      else (Field_Width (Class, Field), Plain_Bits));
 
+  Field_Rules : constant array (Entity_Class, Field_Values'Range) of Field_Rule :=
+    (for Class in Entity_Class => (for Field in Field_Values'Range => Rule_Of (Class, Field)));
+
   --------------
   -- Shift_Of --
   --------------
@@ -27543,17 +27660,27 @@ procedure Turbo_Engine is
      then 0
      else Entity_Layout (Class) (P + 1).Width + Shift_Of (Class, P + 1));
 
-  ---------------
-  -- Field_Sum --
-  ---------------
+  ----------------
+  -- Field_Sums --
+  ----------------
 
-  function Field_Sum (Class : Entity_Class; Field : Positive; Parts : Part_Values; P : Positive := 1; Sum : Long := 0)
-     return Integer is
-    (declare
-       Row  : Part renames Entity_Layout (Class) (P);
-       Next : constant Long := (if Row.Field /= Field then Sum else Sum * 2 ** Row.Width + Long (Parts (P)) mod 2 ** Row.Width);
-     begin
-       (if P = Part_Values'Last then Integer (Next) else Field_Sum (Class, Field, Parts, P + 1, Next)));
+  Two_To : constant array (0..62) of Long := (for K in 0..62 => 2 ** K);
+
+  function Field_Sums (Class : Entity_Class; Parts : Part_Values) return Field_Values is
+    Sums : array (Field_Values'Range) of Long := (others => 0);
+    begin
+      for P in Part_Values'Range loop
+        declare
+          Row : Part renames Entity_Layout (Class) (P);
+        begin
+          if Row.Field in Sums'Range and Row.Width > 0 then
+            Sums (Row.Field) :=
+              Sums (Row.Field) * Two_To (Row.Width) + Long (Word'Mod (Parts (P)) and Word (Two_To (Row.Width) - 1));
+          end if;
+        end;
+      end loop;
+      return (for F in Field_Values'Range => Integer (Sums (F)));
+    end;
 
   --------------
   -- Parts_Of --
@@ -27578,24 +27705,34 @@ procedure Turbo_Engine is
        when First_Flag ..First_Doll - 1   => Flag_Entity,
        when First_Doll ..Entity_Total - 1 => Doll_Entity);
 
-  -------------
-  -- Bone_Of --
-  -------------
+  --------------
+  -- Bones_Of --
+  --------------
 
-  function Bone_Of (Current : World; Item : Body_Slot; Doll : Natural := Maximum_Ragdolls; Part : Natural := Ragdoll_Parts'Last)
-     return Natural is
-    (if Doll = 0 then 0
-     elsif Part = 0 then Bone_Of (Current, Item, Doll - 1)
-     elsif Current.Ragdolls (Doll).Active
-       and then Current.Ragdolls (Doll).Parts (Part).Item = Item
-     then Part
-     else Bone_Of (Current, Item, Doll, Part - 1));
+  function Bones_Of (Current : World) return Bone_Map is
+    Bones : Bone_Map := (others => 0);
+    begin
+      for Doll in reverse 1..Maximum_Ragdolls loop
+        if Current.Ragdolls (Doll).Active then
+          for Part in reverse Ragdoll_Parts'Range loop
+            declare
+              Item : constant Body_Index := Current.Ragdolls (Doll).Parts (Part).Item;
+            begin
+              if Item in Bone_Map'Range and then Bones (Item) = 0 then
+                Bones (Item) := Part;
+              end if;
+            end;
+          end loop;
+        end if;
+      end loop;
+      return Bones;
+    end;
 
   -------------------
   -- Entity_Row_At --
   -------------------
 
-  function Entity_Row_At (Current : World; Id : Entity_Id) return Entity_State is
+  function Entity_Row_At (Current : World; Id : Entity_Id; Bones : Bone_Map) return Entity_State is
     (declare
        Class : constant Entity_Class := Entity_Class_Of (Id);
        K     : constant Positive     := Id - Entity_First (Class) + 1;
@@ -27653,7 +27790,7 @@ procedure Turbo_Engine is
                          B.Catalogue,
                          Shape_Kind'Pos (B.Shape),
                          Material_Kind'Pos (B.Material),
-                         Bone_Of (Current, Body_Slot (K)),
+                         Bones (Body_Slot (K)),
                          Integer (Clamp (B.Extent (X), 0.0, 255.0)),
                          Integer (Clamp (B.Extent (Y), 0.0, 255.0)),
                          Integer (Clamp (B.Extent (Z), 0.0, 255.0)),
@@ -27677,12 +27814,13 @@ procedure Turbo_Engine is
                  D : Ragdoll renames Current.Ragdolls (K);
                begin
                  (D.Active, Origin, (Boolean'Pos (D.Zombie), D.Figure, Angle_Bits (D.Facing, 10), others => 0))));
+       Sums  : constant Field_Values := Field_Sums (Class, Raw.Parts);
      begin
        (Raw.Present,
         (for F in Field_Values'Range =>
            (if F <= 3 and Position_Order (Class) > 0
             then Integer (Clamp (Raw.Place (Axis'Val (F - 1)), -200_000.0, 200_000.0) * 8.0)
-            else Field_Sum (Class, F, Raw.Parts)))));
+            else Sums (F)))));
 
   -----------------
   -- Snapshot_Of --
@@ -27691,7 +27829,10 @@ procedure Turbo_Engine is
   function Snapshot_Of (Current : World) return Snapshot is
     ((Tick     => Current.Tick,
       Own      => (others => 0),
-      Entities => (for Id in Entity_Id => Entity_Row_At (Current, Id))));
+      Entities => (declare
+                     Bones : constant Bone_Map := Bones_Of (Current);
+                   begin
+                     (for Id in Entity_Id => Entity_Row_At (Current, Id, Bones)))));
 
   ----------------
   -- Same_State --
@@ -27714,7 +27855,7 @@ procedure Turbo_Engine is
      then Entity_Decoded (Data, From + 1, Class, Known, Field + 1)
      else
        (declare
-          Rule  : constant Field_Rule := Rule_Of (Class, Field);
+          Rule  : constant Field_Rule := Field_Rules (Class, Field);
           Got   : constant Bit_Code   := Code_At (Data, From + 1, Rule.Width, Rule.Coding);
           Base  : constant Integer      :=
             (if Rule.Coding = Signed_Bits then Known.Values (Field) else 0);
@@ -28724,18 +28865,23 @@ procedure Turbo_Engine is
     -- Seen --
     ----------
 
-    function Seen (Values : Field_Values) return Boolean is
-      (C.Sees = null
-       or else (declare
-                  Leaf : constant Natural :=
-                    Leaf_Of (Level, Field_Place (Values) + (0.0, 0.0, 8.0));
-                begin
-                  Leaf not in C.Sees'Range or else C.Sees (Leaf)));
+    function Seen (Id : Entity_Id) return Boolean is
+      Leaf : Integer renames Host.Shown_Leaves (Id);
+      begin
+        if C.Sees = null then
+          return True;
+        end if;
+        if Leaf < 0 then
+          Leaf := Leaf_Of (Level, Field_Place (Host.Shown.Entities (Id).Values) + (0.0, 0.0, 8.0));
+        end if;
+        return Leaf not in C.Sees'Range or else C.Sees (Leaf);
+      end;
 
     begin
       if Host.Shown_Tick /= Host.Current.Tick then
-        Host.Shown.all  := Snapshot_Of (Host.Current);
-        Host.Shown_Tick := Host.Current.Tick;
+        Host.Shown.all    := Snapshot_Of (Host.Current);
+        Host.Shown_Tick   := Host.Current.Tick;
+        Host.Shown_Leaves := (others => -1);
       end if;
       if Here /= C.Viewer_Leaf or C.Sees = null then
         Free_Sight (C.Sees);
@@ -28773,7 +28919,7 @@ procedure Turbo_Engine is
             Moves
             and then Fresh.Present
             and then Id /= Natural (C.Slot) - 1
-            and then Seen (Fresh.Values);
+            and then Seen (Id);
           Sent  : constant Entity_State :=
             (if Moves and then not Wants then (False, Fresh.Values) else Fresh);
           Sends : constant Boolean      :=
@@ -28784,7 +28930,7 @@ procedure Turbo_Engine is
                           or else (Wants and then Fresh.Values /= Known.Values),
                         when Body_Entity | Item_Entity     =>
                           (Known.Present and not Fresh.Present)
-                          or else (Fresh.Present and then not Same_State (Fresh, Known) and then Seen (Fresh.Values)),
+                          or else (Fresh.Present and then not Same_State (Fresh, Known) and then Seen (Id)),
                         when Flag_Entity | Doll_Entity     =>
                           not Same_State (Fresh, Known));
         begin
@@ -28798,7 +28944,7 @@ procedure Turbo_Engine is
               Put_Bits (Into, Boolean'Pos (Sent.Values (F) /= Known.Values (F)), 1);
               if Sent.Values (F) /= Known.Values (F) then
                 declare
-                  Rule : constant Field_Rule := Rule_Of (Class, F);
+                  Rule : constant Field_Rule := Field_Rules (Class, F);
                   Base : constant Long       :=
                     (if Rule.Coding = Signed_Bits then Long (Known.Values (F)) else 0);
                 begin
@@ -36739,6 +36885,37 @@ procedure Turbo_Engine is
        when Supply_Cache              => "models/props/ammo_box.md5mb",
        when Heavy_Gun                 => "models/nailgun.md5mb");
 
+  -------------------
+  -- Preload_Horde --
+  -------------------
+
+  -- the dead's every figure, animation and voice, the night's score, and the
+  -- players' own figures (first drawn at a death), read while the level loads
+  -- rather than when the first wave arrives
+  procedure Preload_Horde is
+    begin
+      if Horde_Loaded then
+        return;
+      end if;
+      Horde_Loaded := True;
+      for Figure in Figure_Name loop
+        Need ("characters/" & Figure_Stem (Figure_Name'Pos (Figure)) & ".md5mb", "characters/player");
+      end loop;
+      for Kind in Zombie_Kind loop
+        for Look in 0..Zombie_Looks - 1 loop
+          Need ("characters/" & Undead_Stem (Kind, Look) & ".md5mb",
+                "characters/" & Lower_Case (Zombie_Kind'Image (Kind)));
+        end loop;
+        Load_Family (Growls (Kind).all);
+      end loop;
+      for Called of Horde_Sounds loop
+        Load_Family (Called.all);
+      end loop;
+      for Wave in 1..10 loop
+        Load_Family ("tension_" & (if Wave < 10 then "0" else "") & Image (Long (Wave)));
+      end loop;
+    end;
+
   ----------------
   -- Warm_Level --
   ----------------
@@ -36749,6 +36926,9 @@ procedure Turbo_Engine is
     begin
       if Prepared /= Natural (Current.Level) then
         Prepare_Level (Current.Level);
+      end if;
+      if Current.Mode = Zombie_Survival then
+        Preload_Horde;
       end if;
       if Gathered_Count /= Prepared then
         Splash_Pump;
@@ -38089,7 +38269,7 @@ procedure Turbo_Engine is
        Favoured : constant Positive      := Recents + Liked.Items'Length;
        Bound    : constant Player_Action :=
          Player_Action'Val ((Line - Keys - 1) mod Actions'Length);
-       Heard    : constant Sound_Channel := Sound_Channel'Val ((Line - Bindings - 1) mod 8);
+       Heard    : constant Sound_Channel := Sound_Channel'Val ((Line - Bindings - 1) mod Channel_Labels'Length);
        Said     : constant String        :=
          (if Line <= Keys then
             Setting_Line (Wishes, Setting_Key'Val (Line - 1))
@@ -40525,8 +40705,8 @@ procedure Turbo_Engine is
      * (if Item.At_Ear then 1.0 else Falloff (Item.Kind, Metres_Off (Item.Where), Item.Reach))
      * (0.4 + 0.6 * Item.Clear)
      * (case Bank (Item.Kind).Group is
-          when Voices_Sound | Interface_Sound => 1.0,
-          when Ambience_Sound                 => (1.0 - 0.75 * Deafened) * Gun_Duck,
+          when Voices_Sound | Interface_Sound | Music_Sound => 1.0,
+          when Ambience_Sound                               => (1.0 - 0.75 * Deafened) * Gun_Duck,
           when Master_Sound | Weapons_Sound | Footsteps_Sound | Impacts_Sound | Physics_Sound =>
             1.0 - 0.75 * Deafened));
 
@@ -40868,7 +41048,7 @@ procedure Turbo_Engine is
           if Room_Slot /= 0 then
             alSource3i (Item.Source,
                         AL_AUXILIARY_SEND_FILTER,
-                        (if Row.Group = Interface_Sound then ALint (AL_EFFECTSLOT_NULL) else ALint (Room_Slot)),
+                        (if Row.Group in Interface_Sound | Music_Sound then ALint (AL_EFFECTSLOT_NULL) else ALint (Room_Slot)),
                         0,
                         ALint (AL_FILTER_NULL));
           end if;
@@ -41227,6 +41407,36 @@ procedure Turbo_Engine is
     end;
 
   --------------
+  -- Bed_Gain --
+  --------------
+
+  function Bed_Gain (K : Bed_Kind; S : Positive) return Real is
+    (Volumes (Bed_Mix (K).Group) * Decibels (Bed_Mix (K).Level) * Beds (K).Gains (S)
+     * (if Bed_Mix (K).Group = Voices_Sound then 1.0 else Gun_Duck * (1.0 - 0.75 * Deafened)));
+
+  -------------------
+  -- Apply_Volumes --
+  -------------------
+
+  procedure Apply_Volumes is
+    begin
+      if not Enabled then
+        return;
+      end if;
+      alListenerf (AL_GAIN, ALfloat (Volumes (Master_Sound)));
+      for V of Mixer loop
+        if V.Busy then
+          Apply_Gain (V);
+        end if;
+      end loop;
+      for K in Bed_Kind loop
+        for S in Bed_Pair'Range loop
+          alSourcef (Beds (K).Sources (S), AL_GAIN, ALfloat (Bed_Gain (K, S)));
+        end loop;
+      end loop;
+    end;
+
+  --------------
   -- Set_Beds --
   --------------
 
@@ -41254,8 +41464,6 @@ procedure Turbo_Engine is
           Mix   : Bed_Row renames Bed_Mix (K);
           Index : constant Natural :=
             (if Image (Called (K)) = "" then 0 else Sounded_As (Image (Called (K))));
-          Room  : constant Real    :=
-            (if Mix.Group = Voices_Sound then 1.0 else Gun_Duck * (1.0 - 0.75 * Deafened));
         begin
           if Index /= B.Families (B.Front) then
             B.Front := 3 - B.Front;
@@ -41272,7 +41480,7 @@ procedure Turbo_Engine is
           for S in Bed_Pair'Range loop
             B.Gains (S) := Clamp ((if S = B.Front then B.Target else 0.0),
                                   B.Gains (S) - Seconds / Mix.Lag, B.Gains (S) + Seconds / Mix.Lag);
-            alSourcef (B.Sources (S), AL_GAIN, ALfloat (Volumes (Mix.Group) * Decibels (Mix.Level) * B.Gains (S) * Room));
+            alSourcef (B.Sources (S), AL_GAIN, ALfloat (Bed_Gain (K, S)));
             if S /= B.Front and B.Gains (S) <= 0.0 and B.Families (S) /= 0 then
               alSourceStop (B.Sources (S));
               B.Families (S) := 0;
@@ -41453,7 +41661,7 @@ procedure Turbo_Engine is
       elsif Music_Gain > Music_Target then
         Music_Gain := Real'Max (Music_Target, Music_Gain - Dt / Music_Fade_Out);
       end if;
-      alSourcef (Music_Source, AL_GAIN, ALfloat (Music_Gain));
+      alSourcef (Music_Source, AL_GAIN, ALfloat (Music_Gain * Volumes (Music_Sound)));
     end;
 
   procedure Open_Audio is
@@ -42936,6 +43144,9 @@ procedure Turbo_Engine is
           Load_Progress := 0.45;
         when 3 =>
           Prepare_Level (Arena_Number (Number));
+          if Wanted.Mode = Zombie_Survival then
+            Preload_Horde;
+          end if;
           Load_Status   := To_Name ("Starting the match");
           Load_Progress := 0.7;
         when 4 =>
@@ -43820,14 +44031,15 @@ procedure Turbo_Engine is
   --------------------
 
   procedure Options_Screen is
-    Scale   : constant Real := Menu_Scale;
-    Left    : constant Real := Real (Width) * 0.075;
-    Wide    : constant Real := 760.0 * Scale;
-    Top     : constant Real := Real (Height) - 340.0 * Scale;
-    Wishes  : Profile renames Preferences;
-    Aim     : Reticle renames Preferences.Crosshair;
-    Open    : Positive      := Options_Tab'Pos (Tab_Open) + 1;
-    Picked  : Natural;
+    Scale     : constant Real := Menu_Scale;
+    Left      : constant Real := Real (Width) * 0.075;
+    Wide      : constant Real := 760.0 * Scale;
+    Top       : constant Real := Real (Height) - 340.0 * Scale;
+    Audio_Row : constant Real := 40.0;
+    Wishes    : Profile renames Preferences;
+    Aim       : Reticle renames Preferences.Crosshair;
+    Open      : Positive      := Options_Tab'Pos (Tab_Open) + 1;
+    Picked    : Natural;
 
     ----------
     -- Spot --
@@ -43909,15 +44121,15 @@ procedure Turbo_Engine is
           for Channel in Sound_Channel loop
             Slider_Row (Channel_Labels (Channel).all,
                            Numeral (Integer (Wishes.Volumes (Channel) * 100.0)) & "%",
-                           Spot (Sound_Channel'Pos (Channel)), Wishes.Volumes (Channel), 0.0, 1.0,
+                           Spot (Sound_Channel'Pos (Channel), Audio_Row), Wishes.Volumes (Channel), 0.0, 1.0,
                              0.05);
           end loop;
-          Toggle_Row ("Captions", Spot (8), Wishes.Captions);
-          Toggle_Row ("Menu music", Spot (9), Wishes.Menu_Tunes);
-          Toggle_Row ("Night Shift music", Spot (10), Wishes.Fancy_Music);
-          Voice_Row ("Voice chat", Spot (11), Wishes.Voice);
+          Toggle_Row ("Captions", Spot (Channel_Labels'Length, Audio_Row), Wishes.Captions);
+          Toggle_Row ("Menu music", Spot (Channel_Labels'Length + 1, Audio_Row), Wishes.Menu_Tunes);
+          Toggle_Row ("Night Shift music", Spot (Channel_Labels'Length + 2, Audio_Row), Wishes.Fancy_Music);
+          Voice_Row ("Voice chat", Spot (Channel_Labels'Length + 3, Audio_Row), Wishes.Voice);
           Measure_Input (Wishes.Voice /= Voice_Off);
-          Meter_Row ("Microphone", Spot (12), Input_Level);
+          Meter_Row ("Microphone", Spot (Channel_Labels'Length + 4, Audio_Row), Input_Level);
         when HUD_Tab =>
           Slider_Row ("HUD scale", Numeral (Integer (Wishes.HUD_Scale * 100.0)) & "%",
                       Spot (0, 42.0), Wishes.HUD_Scale, 0.6, 1.6, 0.05);
@@ -45120,7 +45332,7 @@ procedure Turbo_Engine is
           begin
             if Line /= "" and then Line (Line'First) /= '#' and then Script_Count < Script'Last then
               Script_Count          := Script_Count + 1;
-              Script (Script_Count) := To_Name (Line);
+              Script (Script_Count) := To_Path (Line);
             end if;
             First := Place + 1;
           end;
@@ -45305,7 +45517,7 @@ procedure Turbo_Engine is
         when Expect_Step             =>
           Expect (Rest);
         when Shot_Step               =>
-          Shot_Path := To_Name (Rest);
+          Shot_Path := To_Path (Rest);
         when Pace_Step               =>
           Frame_Pace := Number_Or (Rest, 0);
         when Aim_Step                =>
@@ -45382,7 +45594,10 @@ procedure Turbo_Engine is
 
   procedure Apply_Levels is
     begin
-      Volumes := Preferences.Volumes;
+      if Volumes /= Preferences.Volumes then
+        Volumes := Preferences.Volumes;
+        Apply_Volumes;
+      end if;
     end;
 
   ---------------
@@ -45588,10 +45803,10 @@ procedure Turbo_Engine is
           Waits : constant Boolean := Choice.Scene not in Splash_Scene | Menu_Scene | Loading_Scene;
         begin
           Script_Count := Boolean'Pos (Waits);
-          Script (1) := To_Name ("skip " & Numeral (Choice.Ticks));
-          Script (Script_Count + 1) := To_Name ("shot " & Image (Choice.Shot));
-          Script (Script_Count + 2) := To_Name ("wait 1");
-          Script (Script_Count + 3) := To_Name ("quit");
+          Script (1) := To_Path ("skip " & Numeral (Choice.Ticks));
+          Script (Script_Count + 1) := To_Path ("shot " & Image (Choice.Shot));
+          Script (Script_Count + 2) := To_Path ("wait 1");
+          Script (Script_Count + 3) := To_Path ("quit");
           Script_Count := Script_Count + 3;
           if not Waits then
             Clock := Real (Choice.Ticks) / Real (Ticks_Per_Second);
@@ -45677,7 +45892,7 @@ procedure Turbo_Engine is
           if Walking and Image (Choice_Kept.Walk) /= "" then
             Text_IO.Put_Line ("shot " & Image (Shot_Path));
           end if;
-          Shot_Path := To_Name ("");
+          Shot_Path := To_Path ("");
         end if;
         Try (SDL.SDL_GL_SwapWindow (Window_Handle));
       end if;
@@ -45838,9 +46053,9 @@ procedure Turbo_Engine is
         Wide      => Number_After ("--width", 0),
         High      => Number_After ("--height", 0),
         Connect   => To_Name (Argument_After ("--connect")),
-        Shot      => To_Name (Argument_After ("--screenshot")),
-        Walk      => To_Name (Argument_After ("--walk")),
-        Replay    => To_Name (Argument_After ("--replay")),
+        Shot      => To_Path (Argument_After ("--screenshot")),
+        Walk      => To_Path (Argument_After ("--walk")),
+        Replay    => To_Path (Argument_After ("--replay")),
         Scene     =>
           (if Argument_After ("--scene") /= "" then Scene_Named (Argument_After ("--scene"))
            elsif Argument_After ("--screenshot") & Argument_After ("--map") /= ""
