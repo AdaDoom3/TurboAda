@@ -164,7 +164,11 @@ exit /b 0
 
 :prove
 call :version || exit /b 1
-"staging\proof\ta.exe" --version | "%SystemRoot%\System32\findstr.exe" /x /c:"ta %VERSION%" >nul || (
+rem  findstr /x never matches a line without a CRLF ending, and ta writes
+rem  plain LF, so the version is compared with for /f, which strips either.
+set "ANSWERED="
+for /f "delims=" %%L in ('staging\proof\ta.exe --version') do if not defined ANSWERED set "ANSWERED=%%L"
+if not "%ANSWERED%"=="ta %VERSION%" (
     echo The packaged compiler does not answer 'ta %VERSION%'; it answered:
     "staging\proof\ta.exe" --version
     exit /b 1
@@ -181,7 +185,8 @@ pushd staging\proof
     popd
     exit /b 1
 )
-.\hello.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"packaged ta works" >nul || (
+rem  No /x: it never matches ta's LF-ended lines (see :prove's version check).
+.\hello.exe | "%SystemRoot%\System32\findstr.exe" /c:"packaged ta works" >nul || (
     popd
     echo The packaged compiler cannot build and run a program.
     exit /b 1
@@ -199,7 +204,7 @@ pushd staging\proof
     popd
     exit /b 1
 )
-.\legacy.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"legacy units served" >nul || (
+.\legacy.exe | "%SystemRoot%\System32\findstr.exe" /c:"legacy units served" >nul || (
     popd
     echo The packaged compiler cannot serve %LEGACY%.
     exit /b 1
