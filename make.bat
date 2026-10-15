@@ -164,8 +164,6 @@ exit /b 0
 
 :prove
 call :version || exit /b 1
-rem  findstr /x never matches a line without a CRLF ending, and ta writes
-rem  plain LF, so the version is compared with for /f, which strips either.
 set "ANSWERED="
 for /f "delims=" %%L in ('staging\proof\ta.exe --version') do if not defined ANSWERED set "ANSWERED=%%L"
 if not "%ANSWERED%"=="ta %VERSION%" (
@@ -185,7 +183,6 @@ pushd staging\proof
     popd
     exit /b 1
 )
-rem  No /x: it never matches ta's LF-ended lines (see :prove's version check).
 .\hello.exe | "%SystemRoot%\System32\findstr.exe" /c:"packaged ta works" >nul || (
     popd
     echo The packaged compiler cannot build and run a program.
@@ -351,10 +348,13 @@ powershell -NoProfile -Command "%TOOLS% Expand-Zip 'turboada-example-game-assets
     exit /b 1
 )
 echo   building turboada-example-game with the packaged compiler
+set "TA_TARGET_CPU=x86-64-v2"
 "%STAGE%\ta.exe" turboada-example-game.ada -o "%STAGE%\turboada-example-game.exe" || (
+    set "TA_TARGET_CPU="
     echo Cannot build the example game with the packaged compiler.
     exit /b 1
 )
+set "TA_TARGET_CPU="
 del /q "%STAGE%\turboada-example-game.exe.native.ll" "%STAGE%\turboada-example-game.exe.native.ali" >nul 2>nul
 exit /b 0
 

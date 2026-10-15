@@ -34464,9 +34464,6 @@ u64 Component_Alignment (const Component_Info *component) {
   if (Component_Shared_Access (component) == SHARED_ACCESS_ATOMIC and
       Size_Is_Indivisible (bytes))
     return bytes;
-  /* A protected part's header holds an atomically accessed pointer, so the
-     component must sit at the pointer's alignment or the access faults on
-     a strict host (arm64).  */
   if (Type_Has_Protected_Part (type))
     return POINTER_ALLOC_SIZE;
   return Is_Composite (type) and
@@ -58582,8 +58579,6 @@ void Layout_Protected_Components (Node *node, Symbol *type_sym) {
   for (u32 i = 0; i < type->record.component_count; i++)
     type->record.components[i].byte_offset += header;
   type->record.variant_offset += header;
-  /* The size is a whole number of alignments, so an array of these keeps
-     every element's header at the pointer alignment its atomics need.  */
   if (Has_Static_Size (type))
     Set_Static_Size (type, (i128) Round_Up_To ((u64) (type->size + header),
                                                POINTER_ALLOC_SIZE));
@@ -96510,9 +96505,6 @@ I1 Emit_Storage_Overflows (Symbol *object, Type *type, u32 bytes, Rep szt) {
 }
 
 u32 Emit_Record_Copy_Extent (Type *rec, u32 source, Rep szt) {
-  /* A record laid out at run time is also allocated at run time, from its
-     discriminants; a static size here would be the subtype's largest and
-     the copy would overrun the storage the object was actually given.  */
   if (Has_Static_Size (rec) and not Record_Needs_Runtime_Layout (rec))
     return Emit_Int_Const (rec->size, szt).reg;
   u32 instance = source ? Emit_Disc_Record_Instance_Size (rec, source, szt) : 0;
@@ -122119,10 +122111,17 @@ int Native_Backend_Compile (const char *ir_path, const char *const *extra_ir,
                                                        LLVM_TLS_GENERAL_DYNAMIC);
 
   triple   = Native_Backend_Llvm_Api.Default_Triple ();
-  cpu      = Native_Backend_Llvm_Api.Host_Cpu_Name
-               ? Native_Backend_Llvm_Api.Host_Cpu_Name () : NULL;
-  features = Native_Backend_Llvm_Api.Host_Cpu_Features
-               ? Native_Backend_Llvm_Api.Host_Cpu_Features () : NULL;
+  const char *chosen_cpu      = getenv ("TA_TARGET_CPU");
+  const char *chosen_features = NULL;
+  if (chosen_cpu and *chosen_cpu) {
+    chosen_features = getenv ("TA_TARGET_FEATURES");
+  } else {
+    chosen_cpu = NULL;
+    cpu      = Native_Backend_Llvm_Api.Host_Cpu_Name
+                 ? Native_Backend_Llvm_Api.Host_Cpu_Name () : NULL;
+    features = Native_Backend_Llvm_Api.Host_Cpu_Features
+                 ? Native_Backend_Llvm_Api.Host_Cpu_Features () : NULL;
+  }
   const char *emitted_triple = triple;
 #ifdef NATIVE_TARGET_TRIPLE
   emitted_triple = NATIVE_TARGET_TRIPLE;
@@ -122135,8 +122134,10 @@ int Native_Backend_Compile (const char *ir_path, const char *const *extra_ir,
     goto done;
   }
   machine = Native_Backend_Llvm_Api.Create_Target_Machine (target, emitted_triple,
-                                                           cpu ? cpu : "",
-                                                           features ? features : "",
+                                                           chosen_cpu ? chosen_cpu
+                                                             : cpu ? cpu : "",
+                                                           chosen_features ? chosen_features
+                                                             : features ? features : "",
                                                            options->code_generation_level, 2, 0);
   Native_Backend_Llvm_Api.Set_Target (module, emitted_triple);
   void *layout = Native_Backend_Llvm_Api.Create_Target_Data_Layout (machine);
@@ -129292,8 +129293,6 @@ int Project_Build_Library (Project *library, const Driver_Request *request) {
   Push_Grown (leading, leading_count, leading_capacity, "-shared");
   Slice version = Project_Attribute_Text (library, ATTR_LIBRARY_VERSION);
 #if defined(__APPLE__)
-  /* ld64 has no soname; the install name serves, and @rpath lets a client
-     that records an rpath find the library wherever it lands.  */
   {
     const char *leaf = strrchr (file, '/');
     Push_Grown (leading, leading_count, leading_capacity,

@@ -187,11 +187,15 @@ PROVE_RUNS = $(if $(CROSS),echo "$(ARCHIVE) was built for $(TARGET) and cannot r
   { ./apis | grep -q '^zlib 1\.' || \
     { echo "the packaged compiler cannot serve $(APIS) or load zlib"; exit 1; }; })
 
+PORTABLE_CPU_linux = x86-64-v2
+PORTABLE_CPU_macos = generic
+
 BUILD_EXAMPLE = $(if $(CROSS),\
   cp $(ASSET_ARCHIVE) $(BIN_DIR)/ && \
     echo "  cross package: $(EXAMPLE) ships as source and asset zip; the built compiler cannot run here to build it",\
   unzip -qo $(ASSET_ARCHIVE) -d $(BIN_DIR) && \
-  ./$(BIN_DIR)/$(EXECUTABLE) $(EXAMPLE).ada -o $(BIN_DIR)/$(EXAMPLE)$(SUFFIX) && \
+  TA_TARGET_CPU=$(PORTABLE_CPU_$(TARGET)) \
+    ./$(BIN_DIR)/$(EXECUTABLE) $(EXAMPLE).ada -o $(BIN_DIR)/$(EXAMPLE)$(SUFFIX) && \
     rm -f $(BIN_DIR)/$(EXAMPLE)$(SUFFIX).native.ll $(BIN_DIR)/$(EXAMPLE)$(SUFFIX).native.ali)
 
 all: ta provision-llvm
