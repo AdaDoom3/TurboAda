@@ -7,9 +7,11 @@ on:
       - turboada.c
       - turboada-runtime.ada
       - turboada-runtime-legacy.ada
+      - turboada-runtime-apis.ada
       - makefile
       - make.bat
       - test.sh
+      - testing/lib.sh
   workflow_dispatch:
 
 permissions:

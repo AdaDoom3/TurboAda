@@ -5,11 +5,13 @@ cd /d "%~dp0"
 set "SOURCE=turboada.c"
 set "RUNTIME=turboada-runtime.ada"
 set "LEGACY=turboada-runtime-legacy.ada"
+set "APIS=turboada-runtime-apis.ada"
 set "BUNDLE=turboada-extension.html"
 set "MANUAL=turboada-manual.md"
 set "VSIX=turboada.vsix"
 set "ICON=turboada-icon"
 set "LIBRARIES=bin-libraries.zip"
+set "TOOLS=$Text = [IO.File]::ReadAllText('%~f0'); . ([ScriptBlock]::Create($Text.Substring($Text.IndexOf('#' + 'TOOLS' + '#'))));"
 set "STAGE=bin-windows"
 set "ZIG_VERSION=0.16.0"
 set "ZIG_NAME=zig-x86_64-windows-%ZIG_VERSION%"
@@ -38,7 +40,7 @@ set "SHARED_LIBRARIES_windows=*.dll"
 
 call :dispatch %1 %2
 set "RESULT=%errorlevel%"
-echo %cmdcmdline% | "%SystemRoot%\System32\find.exe" /i "/c" >nul && pause
+echo %cmdcmdline% | "%SystemRoot%\System32\find.exe" /i "%~f0" >nul && pause
 exit /b %RESULT%
 
 :dispatch
@@ -75,7 +77,10 @@ echo it names first.
 echo.
 echo LLVM-C.dll, the official Windows build from the llvm-project release, is
 echo unpacked from %LIBRARIES% and must stay with %EXECUTABLE_windows%, which
-echo loads it when it runs; it needs nothing but Windows itself.
+echo loads it when it runs; it needs nothing but Windows itself. The libraries
+echo the API units load (SDL3, OpenAL Soft, zlib, Opus) are unpacked from the
+echo target's folder of %LIBRARIES% beside the compiler, which copies the
+echo ones a program needs beside the program it links.
 exit /b 0
 
 :select
@@ -134,18 +139,18 @@ exit /b 0
 if not exist builds mkdir builds
 set "ARCHIVE=builds\bin-%TARGET%.zip"
 del /q "%ARCHIVE%" >nul 2>nul
-powershell -NoProfile -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%ARCHIVE%' -Force" || (
+powershell -NoProfile -Command "%TOOLS% Compress-Folder '%STAGE%' '%ARCHIVE%' 'packing %ARCHIVE%'" || (
     echo Cannot pack %ARCHIVE%. Making archives needs PowerShell 5 or later.
     exit /b 1
 )
 rmdir /s /q staging\proof >nul 2>nul
-powershell -NoProfile -Command "Expand-Archive -Path '%ARCHIVE%' -DestinationPath 'staging\proof' -Force" || exit /b 1
+powershell -NoProfile -Command "%TOOLS% Expand-Zip '%ARCHIVE%' 'staging\proof' 'unpacking %ARCHIVE% to prove it'" || exit /b 1
 if /i "%TARGET%"=="windows" (
     if not exist "staging\proof\LLVM-C.dll" (
         echo %ARCHIVE% does not carry LLVM-C.dll.
         exit /b 1
     )
-    for %%D in (libwinpthread libgcc_s libstdc++ libiconv libxml2 libzstd zlib1) do if exist "staging\proof\%%D*.dll" (
+    for %%D in (libwinpthread libgcc_s libstdc++ libiconv libxml2 libzstd) do if exist "staging\proof\%%D*.dll" (
         echo %ARCHIVE% carries a MinGW runtime DLL, %%D.
         exit /b 1
     )
@@ -172,11 +177,11 @@ call :version || exit /b 1
     echo end Hello;
 )
 pushd staging\proof
-ta.exe hello.adb -o hello || (
+.\ta.exe hello.adb -o hello || (
     popd
     exit /b 1
 )
-hello.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"packaged ta works" >nul || (
+.\hello.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"packaged ta works" >nul || (
     popd
     echo The packaged compiler cannot build and run a program.
     exit /b 1
@@ -190,13 +195,31 @@ popd
     echo end Legacy;
 )
 pushd staging\proof
-ta.exe legacy.adb -o legacy || (
+.\ta.exe legacy.adb -o legacy || (
     popd
     exit /b 1
 )
-legacy.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"legacy units served" >nul || (
+.\legacy.exe | "%SystemRoot%\System32\findstr.exe" /x /c:"legacy units served" >nul || (
     popd
     echo The packaged compiler cannot serve %LEGACY%.
+    exit /b 1
+)
+popd
+> "staging\proof\apis.adb" (
+    echo with Interfaces.C.Strings, Text_IO, Zlib;
+    echo procedure Apis is
+    echo begin
+    echo   Text_IO.Put_Line ^("zlib " ^& Interfaces.C.Strings.Value ^(Zlib.zlibVersion^)^);
+    echo end Apis;
+)
+pushd staging\proof
+.\ta.exe apis.adb -o apis || (
+    popd
+    exit /b 1
+)
+.\apis.exe | "%SystemRoot%\System32\findstr.exe" /b /c:"zlib 1." >nul || (
+    popd
+    echo The packaged compiler cannot serve %APIS% or load zlib.
     exit /b 1
 )
 popd
@@ -219,6 +242,7 @@ exit /b 1
 call :require %SOURCE%  || exit /b 1
 call :require %RUNTIME% || exit /b 1
 call :require %LEGACY%  || exit /b 1
+call :require %APIS%    || exit /b 1
 call :unpack_llvm       || exit /b 1
 call :compile           || exit /b 1
 "%STAGE%\%EXECUTABLE%" --version >nul 2>nul || (
@@ -231,6 +255,7 @@ exit /b 0
 call :require %SOURCE%  || exit /b 1
 call :require %RUNTIME% || exit /b 1
 call :require %LEGACY%  || exit /b 1
+call :require %APIS%    || exit /b 1
 call :find_zig || (
     echo packaging for %TARGET% needs zig
     exit /b 1
@@ -271,7 +296,7 @@ exit /b 0
 :fatjoin
 echo   joining the %TARGET% slices into a universal binary
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
+    "%TOOLS%" ^
     "$Big = { param($v) [byte[]]@((($v -shr 24) -band 255),(($v -shr 16) -band 255)," ^
     "                             (($v -shr 8) -band 255),($v -band 255)) };" ^
     "$Names = '%SLICES%'.Trim() -split '\s+';" ^
@@ -297,7 +322,45 @@ exit /b 0
 :stage
 copy /y "%RUNTIME%" "%STAGE%\" >nul
 copy /y "%LEGACY%" "%STAGE%\" >nul
+copy /y "%APIS%" "%STAGE%\" >nul
+call :unpack_payload
+call :example || exit /b 1
 if defined LAUNCHER call :launcher
+exit /b 0
+
+:example
+echo   copying the example game source into %STAGE%
+copy /y "turboada-example-game.ada" "%STAGE%\" >nul
+if not exist "turboada-example-game-assets.zip" (
+    echo turboada-example-game-assets.zip is missing.
+    exit /b 1
+)
+if /i not "%TARGET%"=="windows" (
+    echo   cross package: turboada-example-game ships as source and asset zip; the built compiler cannot run here to build it
+    copy /y "turboada-example-game-assets.zip" "%STAGE%\" >nul
+    exit /b 0
+)
+echo   unzipping the game assets into %STAGE%
+powershell -NoProfile -Command "%TOOLS% Expand-Zip 'turboada-example-game-assets.zip' '%STAGE%' 'unzipping the game assets'" || (
+    echo Cannot unzip the game assets. Making archives needs PowerShell 5 or later.
+    exit /b 1
+)
+echo   building turboada-example-game with the packaged compiler
+"%STAGE%\ta.exe" turboada-example-game.ada -o "%STAGE%\turboada-example-game.exe" || (
+    echo Cannot build the example game with the packaged compiler.
+    exit /b 1
+)
+del /q "%STAGE%\turboada-example-game.exe.native.ll" "%STAGE%\turboada-example-game.exe.native.ali" >nul 2>nul
+exit /b 0
+
+:unpack_payload
+if not exist "%LIBRARIES%" exit /b 0
+echo   unpacking the %TARGET% libraries programs load into %STAGE%
+powershell -NoProfile -Command ^
+    "%TOOLS%" ^
+    "Expand-Zip '%LIBRARIES%' 'staging\payload' 'unpacking %LIBRARIES%';" ^
+    "if (Test-Path 'staging\payload\%TARGET%') { Copy-Item 'staging\payload\%TARGET%\*' '%STAGE%' -Force }"
+rmdir /s /q staging\payload >nul 2>nul
 exit /b 0
 
 :icons
@@ -305,7 +368,7 @@ if not exist "%ICON_SOURCE%" exit /b 1
 if not exist "%STAGE%" mkdir "%STAGE%"
 echo   building the %TARGET% icons
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
+    "%TOOLS%" ^
     "$Png = [IO.File]::ReadAllBytes((Join-Path $PWD '%ICON_SOURCE%'));" ^
     "$Big = { param($v) [byte[]]@((($v -shr 24) -band 255),(($v -shr 16) -band 255)," ^
     "                             (($v -shr 8) -band 255),($v -band 255)) };" ^
@@ -343,7 +406,7 @@ exit /b 1
 
 :launcher
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
+    "%TOOLS%" ^
     "$Entry = '[Desktop Entry]','Type=Application','Name=Ada 83'," ^
     "         'Comment=Ada 83 compiler','Exec=ta %%F','Icon=%ICON%'," ^
     "         'Terminal=true','Categories=Development;Building;';" ^
@@ -370,9 +433,8 @@ echo   splitting %BUNDLE%
 call :split
 echo   packing %VSIX%
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
-    "$Parts = Get-ChildItem -LiteralPath 'staging\vsix' -Force | ForEach-Object FullName;" ^
-    "Compress-Archive -LiteralPath $Parts -DestinationPath 'staging\vsix.zip' -Force;" ^
+    "%TOOLS%" ^
+    "Compress-Folder 'staging\vsix' 'staging\vsix.zip' 'packing %VSIX%';" ^
     "Move-Item 'staging\vsix.zip' '%STAGE%\%VSIX%' -Force"
 rmdir /s /q staging\vsix >nul 2>nul
 if not exist "%STAGE%\%VSIX%" (
@@ -425,8 +487,8 @@ if not exist "%LIBRARIES%" (
 )
 echo   unpacking LLVM-C.dll into %STAGE%
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
-    "Expand-Archive -LiteralPath '%LIBRARIES%' -DestinationPath 'staging\llvm' -Force;" ^
+    "%TOOLS%" ^
+    "Expand-Zip '%LIBRARIES%' 'staging\llvm' 'unpacking LLVM-C.dll';" ^
     "Move-Item 'staging\llvm\*.dll' '%STAGE%' -Force"
 rmdir /s /q staging\llvm >nul 2>nul
 if exist "%STAGE%\LLVM-C.dll" exit /b 0
@@ -435,7 +497,7 @@ exit /b 1
 
 :compile
 set "TOOLCHAIN=GCC"
-set "COMPILER=gcc"
+set "COMPILER=gcc -flto=auto"
 where gcc >nul 2>nul && goto build
 set "TOOLCHAIN=Clang"
 set "COMPILER=clang --target=x86_64-w64-windows-gnu"
@@ -447,18 +509,25 @@ set "COMPILER=%ZIG% cc -target x86_64-windows-gnu"
 :build
 call :resource
 echo   compiling turboada.c with %TOOLCHAIN%
-%COMPILER% %COMPILER_FLAGS% %SOURCE% %RESOURCE% -o "%STAGE%\%EXECUTABLE%" %LINK_LIBRARIES%
-exit /b %errorlevel%
+%COMPILER% %COMPILER_FLAGS% %SOURCE% %RESOURCE% -o "%STAGE%\%EXECUTABLE%" %LINK_LIBRARIES% 2>compile.log
+set "RC=%errorlevel%"
+%SystemRoot%\System32\findstr.exe /v /c:" (ignored)" compile.log 1>&2
+del /q compile.log >nul 2>nul
+exit /b %RC%
 
 :compile_windows_native
 set "RESDIR="
-for /f "delims=" %%R in ('clang-cl -print-resource-dir 2^>nul') do set "RESDIR=%%R"
+for /f "delims=" %%R in ('clang-cl /clang:-print-resource-dir 2^>nul') do set "RESDIR=%%R"
 if not defined RESDIR exit /b 1
 set "BUILTINS=%RESDIR%\lib\windows\clang_rt.builtins-x86_64.lib"
+if not exist "%BUILTINS%" set "BUILTINS=%RESDIR%\lib\x86_64-pc-windows-msvc\clang_rt.builtins.lib"
 if not exist "%BUILTINS%" exit /b 1
+set "SYSROOT="
+if exist ".xwin\crt\include" if exist ".xwin\sdk\Include" ^
+set "SYSROOT=/vctoolsdir .xwin\crt /winsdkdir .xwin\sdk"
 call :resource
 echo   compiling turboada.c with clang-cl (windows-native)
-clang-cl /nologo /O2 /clang:-std=gnu2x -fuse-ld=lld /Fe:"%STAGE%\%EXECUTABLE%" ^
+clang-cl /nologo /O2 /clang:-std=gnu2x -fuse-ld=lld %SYSROOT% /Fe:"%STAGE%\%EXECUTABLE%" ^
     %SOURCE% %RESOURCE% "%BUILTINS%"
 set "RC=%errorlevel%"
 del /q ta.obj >nul 2>nul
@@ -497,9 +566,9 @@ if /i not "%REPLY%"=="y" (
     exit /b 1
 )
 powershell -NoProfile -Command ^
-    "$ErrorActionPreference='Stop';" ^
-    "Invoke-WebRequest '%ZIG_URL%' -OutFile 'zig.zip';" ^
-    "Expand-Archive 'zig.zip' '.' -Force;" ^
+    "%TOOLS%" ^
+    "Get-File '%ZIG_URL%' 'zig.zip' 'downloading Zig %ZIG_VERSION%';" ^
+    "Expand-Zip 'zig.zip' '.' 'unpacking Zig %ZIG_VERSION%';" ^
     "Move-Item '%ZIG_NAME%' 'zig' -Force;" ^
     "Remove-Item 'zig.zip'"
 set "ZIG=zig\zig.exe"
@@ -507,3 +576,127 @@ if exist "%ZIG%" exit /b 0
 set "ZIG="
 echo Cannot download Zig. Install MinGW-w64 GCC or Clang and try again.
 exit /b 1
+
+#TOOLS#
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol =
+  [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$Drawn   = -not [Console]::IsOutputRedirected -and $env:NO_ANIMATE -ne '1'
+$Esc     = [string][char]27
+$Dim     = if ($Drawn -and $env:NO_COLOUR -ne '1') { "$Esc[2m" } else { '' }
+$Off     = if ($Dim) { "$Esc[0m" } else { '' }
+$Full    = [string][char]0x2588
+$Empty   = [string][char]0x00B7
+$Eighths = @('') + (0x258F, 0x258E, 0x258D, 0x258C, 0x258B, 0x258A, 0x2589 | ForEach-Object { [string][char]$_ })
+$Pulses  = 0x25E6, 0x25CC, 0x25CD, 0x25CE | ForEach-Object { [string][char]$_ }
+$Clock   = [Diagnostics.Stopwatch]::StartNew()
+$global:Drew = -1000
+if ($Drawn) { [Console]::OutputEncoding = [Text.Encoding]::UTF8 }
+
+function Resolve-Here ([string] $Path) {
+  if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
+  [IO.Path]::GetFullPath((Join-Path $PWD $Path))
+}
+
+function Write-Frame ([string] $Text) { [Console]::Out.Write("`r$Esc[2K$Text") }
+
+function Show-Pulse ([string] $Label) {
+  if (-not $Drawn) { return }
+  $Now = $Clock.ElapsedMilliseconds
+  if ($Now - $global:Drew -lt 120) { return }
+  $global:Drew = $Now
+  Write-Frame ("  $Dim" + $Pulses[[int][Math]::Floor($Now / 240) % 4] + " $Label$Off")
+}
+
+function Show-Bar ([double] $Done, [double] $Total, [string] $Label) {
+  if (-not $Drawn) { return }
+  if ($Total -le 0) { Show-Pulse $Label; return }
+  $Now = $Clock.ElapsedMilliseconds
+  if ($Done -lt $Total -and $Now - $global:Drew -lt 40) { return }
+  $global:Drew = $Now
+  $Fill  = [Math]::Min($Done / $Total, 1.0) * 32
+  $Whole = [int][Math]::Floor($Fill)
+  $Part  = [int][Math]::Floor(($Fill - $Whole) * 8)
+  $Cells = $Full * $Whole
+  if ($Whole -lt 32 -and $Part -gt 0) { $Cells += $Eighths[$Part]; $Whole++ }
+  $Cells += $Empty * (32 - $Whole)
+  $Percent = [int][Math]::Floor([Math]::Min($Done / $Total, 1.0) * 100)
+  Write-Frame ("  $Dim$Cells$Off " + ('{0,3}' -f $Percent) + "%  $Dim$Label$Off")
+}
+
+function Start-Step { if ($Drawn) { [Console]::Out.Write("$Esc[?25l") }; $global:Drew = -1000 }
+function Stop-Step  { if ($Drawn) { [Console]::Out.Write("`r$Esc[2K$Esc[?25h") } }
+
+function Get-File ([string] $Url, [string] $Out, [string] $Label) {
+  Add-Type -AssemblyName System.Net.Http
+  $Client = New-Object Net.Http.HttpClient
+  Start-Step
+  try {
+    $Response = $Client.GetAsync($Url, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+    [void] $Response.EnsureSuccessStatusCode()
+    $Total  = $Response.Content.Headers.ContentLength
+    if ($null -eq $Total) { $Total = 0 }
+    $Source = $Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+    $Target = [IO.File]::Create((Resolve-Here $Out))
+    try {
+      $Buffer = New-Object byte[] 65536
+      $Done   = 0
+      while (($Read = $Source.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+        $Target.Write($Buffer, 0, $Read)
+        $Done += $Read
+        Show-Bar $Done $Total $Label
+      }
+    } finally { $Target.Dispose(); $Source.Dispose() }
+  } finally { $Client.Dispose(); Stop-Step }
+}
+
+function Expand-Zip ([string] $Zip, [string] $Destination, [string] $Label) {
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $Root    = (Resolve-Here $Destination).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+  $Archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Here $Zip))
+  Start-Step
+  try {
+    $Count = $Archive.Entries.Count
+    $Done  = 0
+    foreach ($Entry in $Archive.Entries) {
+      $Path = [IO.Path]::GetFullPath((Join-Path $Root $Entry.FullName))
+      if (-not $Path.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$($Entry.FullName) would land outside $Destination"
+      }
+      if ($Entry.FullName.EndsWith('/') -or $Entry.FullName.EndsWith('\')) {
+        [void] [IO.Directory]::CreateDirectory($Path)
+      } else {
+        [void] [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($Entry, $Path, $true)
+      }
+      $Done++
+      Show-Bar $Done $Count $Label
+    }
+  } finally { $Archive.Dispose(); Stop-Step }
+}
+
+function Compress-Folder ([string] $Folder, [string] $Zip, [string] $Label) {
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $Root  = (Resolve-Here $Folder).TrimEnd('\', '/')
+  $Files = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File)
+  $Bare  = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -Directory |
+             Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) })
+  $Out   = Resolve-Here $Zip
+  if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Force }
+  $Archive = [IO.Compression.ZipFile]::Open($Out, [IO.Compression.ZipArchiveMode]::Create)
+  Start-Step
+  try {
+    $Done = 0
+    foreach ($File in $Files) {
+      $Name = $File.FullName.Substring($Root.Length + 1).Replace('\', '/')
+      [void] [IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+        $Archive, $File.FullName, $Name, [IO.Compression.CompressionLevel]::Optimal)
+      $Done++
+      Show-Bar $Done $Files.Count $Label
+    }
+    foreach ($Directory in $Bare) {
+      [void] $Archive.CreateEntry($Directory.FullName.Substring($Root.Length + 1).Replace('\', '/') + '/')
+    }
+  } finally { $Archive.Dispose(); Stop-Step }
+}

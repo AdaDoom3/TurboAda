@@ -6,13 +6,45 @@
   <img src="turboada-logo.png" alt="logo" width="300">
 </p>
 
+## News
+
+### Turbo Ada v1.6
+
+*Notable Changes since last version:*
+
+- Optimized runtime
+- Task safe containers
+- C ABI compatibility
+- Third party library bindings
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=w_wKRh1dwT0">
+    <img src="readme-images/video-thumb.png" alt="example-game" width="640">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AdaDoom3/TurboAda/releases/latest">
+    <img src="readme-images/download-button.svg" alt="Download Game" width="200">
+  </a>
+</p>
+
+An example FPS game engine in also included in this release - contributions welcome
+
+*Art Credits:*
+
+- Map is original work using procedural generation based on ".kkrieger"
+- Music by artist "Filmmaker" and distributed with his express permission : ) - please buy his album "DATA BOMBING EP" (https://filmmaker.bandcamp.com)
+- Enemies and models remixed from "FPS Creator Classic" (https://darkbasic.com/)
+
+---
 
 ![Demo program](readme-images/shot-mars-rover.png)
 
 | | |
 |---|---|
 | Compiler | `turboada.c`, 113k lines, no generated code, no third-party source |
-| Runtime | `turboada-runtime.ada`, 3k lines of Ada; `turboada-runtime-legacy.ada`, 14k lines of strings and containers |
+| Runtime | `turboada-runtime.ada`, 3k lines of Ada; `turboada-runtime-legacy.ada`, 14k lines of strings, containers and `Interfaces.C`; `turboada-runtime-apis.ada`, bindings to SDL 3, OpenAL, Vulkan, OpenGL, DirectX, zlib, Opus, Metal and BSD sockets |
 | Language | all of MIL-STD-1815A: tasking, generics, fixed point, representation clauses |
 | Additional features | protected types, controlled types, child units, general and anonymous access, contracts and more; `-ada83` turns them off |
 | Conformance | 3561 / 3561, ACATS 1.11; 234 / 234 of the post-83 tests |
@@ -60,10 +92,15 @@ unpacked it.
 Every script writes into `bin-<target>/` - `bin-linux/ta`,
 `bin-macos/ta`, `bin-windows\ta.exe` alongside `LLVM-C.dll`. 
 
-`turboada-runtime.ada` holds the standard library, and
+`turboada-runtime.ada` holds the standard library,
 `turboada-runtime-legacy.ada` the predefined string and container packages
 of the later standards (`Ada.Strings.Unbounded`, `Ada.Containers.Vectors`
-and the rest).
+and the rest) and `Interfaces.C`, and `turboada-runtime-apis.ada` the
+bindings `with SDL;`, `with Vulkan;` and the others name. The libraries
+those bindings load that an operating system lacks (SDL 3, OpenAL Soft,
+zlib, Opus) ship in `bin-libraries.zip`, one folder per target; the
+scripts unpack the target's beside the compiler, which copies the ones a
+program's units name beside the program it links.
 
 | Platform | Command | Produces |
 | -------- | ------- | -------- |
@@ -71,9 +108,17 @@ and the rest).
 | macOS    | `osascript make.applescript package` | `builds/bin-macos.zip`, both slices together |
 | Windows  | `make.bat package` | `builds/bin-windows.zip`, `LLVM-C.dll` included |
 
-## Conformance
+Each archive carries the target's folder of `bin-libraries.zip` beside the
+compiler.
 
-Under ACATS 1.11 all 3561 tests pass
+To build the game simply use the compiled `ta` executable:
+
+```sh
+./bin-linux/ta -O3 turboada-example-game.ada
+./turboada-example-game
+```
+
+## Conformance
 
 | Suite | Category | Passed | Completion |
 |:-----:|----------|-------:|-----------:|
@@ -87,35 +132,29 @@ Under ACATS 1.11 all 3561 tests pass
 
 The post-83 features have a suite of their own, `acats-bonus/`: ACATS 4.2
 tests for each feature, cut down to Ada 83 plus the feature under test.
-All 234 pass. A B-test passes only when every line it marks draws a
-diagnostic.
 
 ## Additional features
-
-These constructs from later standards are admitted by default, each
-checked by its own tests. `-ada83` restricts the compiler to
-ANSI/MIL-STD-1815A, and refuses them.
 
 | Area | What is there |
 |------|---------------|
 | Concurrency | protected types, objects and entries, with timed and conditional entry calls and `requeue`; `delay until`; asynchronous select (`select ... then abort`); access to protected operations; task discriminants |
-| Types | controlled types (`Ada.Finalization`) without tagged types; general access types, `aliased`, `'Access`; anonymous access types, access discriminants and their accessibility checks; access-to-subprogram types; subtype predicates |
+| Types | controlled types (`Ada.Finalization`) without tagged types; general access types, `aliased`, `'Access`; anonymous access types, access discriminants and their accessibility checks; access-to-subprogram types; subtype predicates; discriminants of an unconstrained type (`Name : String`); record definitions with no component list (`is null record`, `is record;`) |
 | Program structure | child units, public and private, with their visibility rules; `Ada.`-prefixed names for the predefined units; a context-clause `use` that implies its `with` (as GNAT admits under `-gnatX`); prefixed (dot) calls |
 | Expressions | if, case, quantified and declare expressions; raise expressions; expression functions; null procedures; user-defined literals; delta aggregates for records and arrays; iterated component associations with a choice list or `for ... of` |
 | Contracts | `Pre`, `Post`, `Assert` and `Predicate`, with the aspects that carry them |
 | Iteration | `for ... of` over arrays and containers; user-defined iterators; generalized references and indexing |
-| Statements | `continue`, `goto ... when`, `raise ... with` and `Ada.Exceptions` |
+| Statements | `continue`, `goto ... when`, `raise ... with` and `Ada.Exceptions`; extended return statements (`return X : T do ... end return;`) |
 | Generics | defaults for generic formals |
 | Input-output | streams: `'Read`, `'Write`, `Stream_Size`, user streams, `Stream_IO` |
 | Systems | `Volatile` and `Atomic` (RM C.6) |
+| Interfacing | `Interfaces`, `Interfaces.C` and `Interfaces.C.Strings`; `pragma Dynamic_Library` and `pragma Dynamic_Library_Resolver`, which bind a package's imported subprograms and objects at their first use from the shared libraries it names, raising `Program_Error` for a symbol none provides; the units `SDL`, `OpenAL`, `Vulkan`, `OpenGL`, `DirectX`, `Zlib`, `Opus`, `Metal` and `Sockets`, written that way, so `with SDL;` works on any platform |
 
-Note: Tagged types and dispatching are deliberately excluded from the subset.
+Note: Tagged types and dispatching are *deliberately* excluded from the subset.
 
 ## Benchmarks
 
 Run time of the generated code at `-O2`, against GNAT 13.3.0 (GCC
-`13.3.0-6ubuntu2~24.04.1`), on Linux x86_64 with 4 cpus (Intel Xeon @ 2.80 GHz),
-measured on 2026-09-28.
+`13.3.0-6ubuntu2~24.04.1`), on Linux x86_64 with 4 cpus (Intel Xeon @ 2.80 GHz).
 
 | Program | Stresses | ta (s) | gnat (s) | Ratio | Result |
 |---------|----------|----------:|---------:|------:|-------:|
@@ -248,18 +287,21 @@ $1 = (depth => 3, label => "climb")
 
 ## Tests
 
-The ACATS tests along with the additional testing are in `tests.zip`.
+The ACATS conformance tests are in `tests.zip`; every other suite lives in
+the tree. One engine runs them all in one pool of workers and reports them
+in one table.
 
 ```sh
-bash test.sh         # Every test: ACATS, extensions, projects, bonus, debug, reproducers
-bash test.sh run c   # One class
-bash test.sh run c45 # One group
-bash test.sh check   # Run, then diff against the baseline
-bash test.sh bonus   # The post-83 features
-bash test.sh repro   # The reproducers, judged by the headers in each file
-bash test.sh fuzz    # The 6,003 generated feature-matrix tests; every one must pass
-bash test.sh bench   # Measure instead of test
-bash test.sh help
+bash test.sh                # Every test: ACATS, extensions, projects, bonus, debug, reproducers, fuzz
+bash test.sh run c          # One class
+bash test.sh run c45        # One group
+bash test.sh check          # Run, then diff against the baseline
+bash test.sh bonus          # The post-83 features (bonus FEATURE for one)
+bash test.sh repro          # The reproducers, judged by the headers in each file (repro NAME for one)
+bash test.sh fuzz           # The 6,003 generated feature-matrix tests; every one must pass
+bash test.sh project gpr    # One corpus of project-file cases
+bash test.sh bench          # Measure instead of test
+bash test.sh help           # Every command, and every suite's conventions
 ```
 
 ## Release Workflow

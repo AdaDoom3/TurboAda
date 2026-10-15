@@ -37,15 +37,25 @@
 /zig/
 /zig.zip
 
-# The conformance suite, unpacked from tests.zip by test.sh and test-bench.sh,
-# and the extension tests, unpacked from the same archive by test-extensions.sh.
+# The test corpus, unpacked from tests.zip through a scratch directory.
+# acats/ is checksum-stamped and re-unpacked whenever the archive changes;
+# the other suites are unpacked only when absent.  All of them live in
+# tests.zip, so none belong in the tree.
 /acats/
 /extensions/
+/project/
+/acats-bonus/
 /debug/
+/repro/
 /fuzz/
+/gameplay/
+/.tests-unpack.*/
 
-# What a test run produces: one directory per run under each of these, plus
-# the compiled report package.
+# The game's assets, unpacked from their zip by the game scenario.
+/turboada-example-game-assets/
+
+# What a test run produces: one directory per run, results and logs together.
+# acats_logs/ is where runs kept their logs before that.
 /test_results/
 /acats_logs/
 
@@ -68,3 +78,6 @@ gmon.out
 __pycache__/
 acats-bonus/acats42/
 /builds/
+
+# craft keeps every copy's logs, pids, pictures and simulation tables here.
+/.craft/

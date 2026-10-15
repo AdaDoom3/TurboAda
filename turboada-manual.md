@@ -1623,6 +1623,32 @@ type Special_Key is new Key_Manager.Key; -- See 7.4.2
 > element, at any depth) whose type does. A type derived from
 > `LIMITED_CONTROLLED` is limited.
 >
+> An aggregate of a type declared with a record extension part may be
+> written as an extension aggregate:
+>
+> ```ebnf
+> extension_aggregate ::= (ancestor_part with record_component_association_list)
+> ancestor_part       ::= expression | subtype_mark
+> ```
+>
+> The ancestor part names a type the aggregate's type is derived from,
+> directly or through intermediate derivations, or is an expression of such
+> a type; the type itself is not its own ancestor. The association list
+> gives the remaining components — those of the aggregate's type that are
+> not components of the ancestor type — under the rules of a record
+> aggregate: each once, positionally or by name, `others` for whatever is
+> left; naming a component of the ancestor type there is an error, as is
+> leaving an extension component without a value. When the ancestor part
+> is a subtype mark, the ancestor's components are initialized as a
+> declared object of that type would be: their default values, then the
+> ancestor type's `INITIALIZE`, parent part first; a type whose
+> discriminants have no defaults cannot be named there. When the ancestor
+> part is an expression, its value is copied into the ancestor part and
+> adjusted as a copy, or, when it is a function call or an aggregate,
+> adopted without adjustment as such a value always is. Under `-ada83` an
+> extension aggregate is refused: "an extension aggregate is not allowed in
+> strict mode".
+>
 > The operations of a controlled type are the procedures `INITIALIZE`,
 > `ADJUST` and `FINALIZE`, each with exactly one parameter of mode **in out**
 > of the type, declared in the same declarative region as the type. None is
@@ -1720,9 +1746,9 @@ type Special_Key is new Key_Manager.Key; -- See 7.4.2
 > abandoned by an exception. The result of a function returning an
 > unconstrained array whose elements need finalization is not treated as an
 > anonymous object. Refused by name: class-wide types and dispatching,
-> `'CLASS` and `'TAG`, abstract types, extension aggregates (`(PARENT with
-> ...)`), a controlled actual for a generic formal tagged type (there are
-> none), abort-deferred finalization (there is no abort), a per-object
+> `'CLASS` and `'TAG`, abstract types, a controlled actual for a generic
+> formal tagged type (there are none), abort-deferred finalization (there
+> is no abort), a per-object
 > expression that names a discriminant as anything but a name by itself, and
 > `UNCHECKED_DEALLOCATION` of an object
 > whose collection has already been finalized, which is erroneous and is not
@@ -2001,9 +2027,13 @@ subtype Buffer_Size is Integer range 0..Max;
 > A type conversion to a modular type of a value outside 0 .. modulus - 1
 > raises Constraint_Error; it does not reduce. `T'Succ (T'Last)` and
 > `T'Pred (0)` raise Constraint_Error, as for any discrete type; `'Image`,
-> `'Value`, `'Width`, `'Pos` and `'Val` are those of an integer type, and
-> an instance of Text_IO.Integer_IO may take a modular type, writing values
-> up to 2**128 - 1.
+> `'Value`, `'Width`, `'Pos` and `'Val` are those of an integer type.  A
+> modular type is read and written by an instance of Text_IO.Modular_IO
+> ([14.3.7](#1437-input-output-for-integer-types)), up to 2**128 - 1; the
+> formal type of Text_IO.Integer_IO is a signed integer type, which a
+> modular type is not.  A generic formal type `type T is mod <>;` takes
+> only a modular type as its actual, and `type T is range <>;` only a
+> signed integer type.
 >
 > ```ada
 > type Byte is mod 256;
@@ -3058,6 +3088,38 @@ A, B, C : Complex;
 > Unlike the components of an array, the components of a record need not be of the
 > same type.
 
+> **Extension — a record definition with no component list (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A record definition may leave out its component list:
+>
+> ```ebnf
+> record_type_definition ::=
+>      record component_list end record
+>    | null record
+>    | record
+> ```
+>
+> `null record` declares a record type with no components, exactly as
+> `record null; end record` does. So does a bare `record`, whose semicolon
+> closes the type declaration where `end record;` would; it suits a record
+> that consists of its discriminants alone, a discriminant of an
+> unconstrained type (3.7.1) included:
+>
+> ```ada
+> type Example (Name : String) is record;
+> E : Example ("hello");
+> F : constant Example := (Name => "world");
+> ```
+>
+> Either form may also follow `with` in a record extension. Under `-ada83`
+> they are refused as "a null record definition" and "an empty record
+> definition".
+
 #### 3.7.1 Discriminants
 
 A discriminant part specifies the discriminants of a type. A discriminant of a
@@ -3145,15 +3207,28 @@ type Item (Number : Positive) is record
 ```
 
 > **Extension — a discriminant of an unconstrained type (off under `-ada83`).**
-> A discriminant may be written with an unconstrained composite type mark,
-> `S : STRING`, and then holds a value of that type rather than a discrete
-> one. It is sugar over the coextension: the discriminant is carried as an
-> `access STRING`, the value written for it becomes the anonymous allocator
-> that defines it — a coextension of the object, allocated with it and
-> reclaimed with the master that holds it — and every mention of the
-> discriminant is implicitly dereferenced, so the program sees a `STRING`
-> and never a pointer. `X.S`, `X.S'LENGTH`, `X.S (I)`, `X.S (1 .. 3)` and
-> `X.S = "world"` all read as they look.
+> A discriminant may be written with the type mark of a nonlimited
+> unconstrained array type, `S : STRING`, or of a nonlimited record type
+> with discriminants, `INNER : NAMED`, and then holds a value of that type
+> rather than a discrete one. It is sugar over the coextension: the
+> discriminant is carried as an `access STRING`, the value written for it
+> becomes the anonymous allocator that defines it — a coextension of the
+> object, allocated with it and reclaimed with the master that holds it —
+> and every mention of the discriminant is implicitly dereferenced, so the
+> program sees a `STRING` and never a pointer. `X.S`, `X.S'LENGTH`,
+> `X.S (I)`, `X.S (1 .. 3)`, `X.S = "world"` and `X.INNER.S` all read as
+> they look, and so does the direct name `S` inside the type's own
+> declaration — in a default expression, or in a per-object constraint
+> `C : NAMED (S)`, which gives the component a copy of its own — and
+> inside the body of a protected type. `X.S'SIZE` is the size of the
+> value; `--describe` and the editor's hover name the value's type, and
+> under `-g` a debugger prints the value. A private type is admitted
+> where its full declaration is visible, as for a discrete discriminant.
+> The discriminants of a task type stay discrete or access discriminants:
+> "the type of a task type's discriminant must be discrete or an access
+> type". Any other type is refused: "the type of a discriminant must be
+> discrete, an access type, or a nonlimited unconstrained array or record
+> type".
 >
 > Carrying the value out of line, rather than laying it out inside the
 > record, keeps the record a **constant size**: a type with such a
@@ -3162,26 +3237,37 @@ type Item (Number : Positive) is record
 >
 > The discriminant of a constrained object is a constant, so `X.S` may not
 > be assigned to, indexed into as a target, or passed as an `in out` or
-> `out` actual. `null` is not a value of the discriminant's type and is
-> refused.
+> `out` actual. A value is written for it, never the pointer that carries
+> it: `null` and an allocator are refused. An assignment to a variable
+> whose discriminants it may change replaces the value and frees the old
+> one, so the value of such a variable's discriminant, or a part of it,
+> may not be renamed or iterated over with `of`, as a component that
+> depends on such a discriminant may not.
 >
 > Two objects match when their discriminants are **equal as values**, not
 > when they designate one array: `Y := X` between two objects of
 > `NAMED ("world")` is allowed and raises Constraint_Error for
-> `NAMED ("worlds")`, exactly as a discrete discriminant would.
+> `NAMED ("worlds")`, exactly as a discrete discriminant would. The values
+> are compared by the predefined equality of their type, in that check and
+> in the predefined `=` of the record.
 >
 > A default is allowed, and makes objects of the type mutable as it does
 > for a discrete discriminant: `X : NAMED;` takes the default, and a
-> whole-record assignment may give it a value of any length. Nothing is
-> ever shared between two objects. A constrained target keeps the
-> coextension it already had, the check having proved the two values
-> equal; a mutable target adopts the storage an aggregate or a function
-> result had already allocated, or clones the value of a named source
-> into storage of its own, and in both cases returns what it was holding.
-> Each object's coextension is reclaimed from its own discriminant field
-> when the master holding the object is left, so an object that changes
-> its discriminant many times occupies what its current value needs and
-> no more.
+> whole-record assignment may give it a value of any length. In an
+> aggregate a box, `S => <>` or `others => <>`, gives a discriminant its
+> default, and a box for a discriminant that has none, of whatever type,
+> is refused. Nothing is ever shared between two objects. A constrained
+> target keeps the coextension it already had, the check having proved
+> the two values equal; a mutable target adopts the storage an aggregate
+> or a function result had already allocated, or clones the value of a
+> named source into storage of its own, and in both cases returns what it
+> was holding. A clone is deep: controlled elements or components of the
+> value are adjusted in it, and finalized when it is reclaimed. Each
+> object's coextension is reclaimed from its own discriminant field when
+> the master holding the object is left, so an object that changes its
+> discriminant many times occupies what its current value needs and no
+> more. A stream transfers the value, not the pointer, as the extension on
+> streams at the head of chapter 14 describes.
 
 #### 3.7.2 Discriminant Constraints
 
@@ -4182,8 +4268,11 @@ Standard.Boolean -- The name of a predefined type (see 8.6 and C)
 > - the prefix denotes an object — a variable, a constant, a record
 >   component, an array element, an object designated by an access value,
 >   or a formal parameter — or a value, such as the result of a function
->   call. If the type of the prefix is an access type, the prefix is
->   implicitly dereferenced, as it is for the forms (a) to (c) above;
+>   call. If the type of the prefix is an access type, the last condition
+>   is tried first with that access type as the type of the prefix, and
+>   only when no subprogram satisfies it is the prefix implicitly
+>   dereferenced, as it is for the forms (a) to (c) above, and the
+>   condition tried again with the designated type;
 >
 > - the selected component is not of any of the forms (a) to (f) above: those
 >   are tried first, so a discriminant, a component, an entry or a protected
@@ -4960,7 +5049,12 @@ A**(B**C) -- Expression (parentheses are required)
 > a component that finalization has already run on, whatever the type:
 > a record, an array of a controlled component type, or a value with
 > bounds. The copy is then finalized with the temporaries of the enclosing
-> statement.
+> statement. The accessibility level a value carries out of the expression
+> — an access discriminant, an anonymous access value — is that of the body
+> expression's value, as the value of a conditional expression carries the
+> level of the arm taken: a declare expression that yields an aggregate
+> built from `X'Unchecked_Access` can be returned wherever that aggregate
+> written bare could be, whatever the expression declares beside it.
 >
 > A declare expression is a static expression when it has no statements,
 > when every declarative item declares a constant of a static subtype whose
@@ -5621,6 +5715,27 @@ of a convertible universal operand is applied if and only if the innermost
 complete context (see [8.7](#87-the-context-of-overload-resolution)) determines a unique (numeric) target type for the
 implicit conversion, and there is no legal interpretation of this context
 without this conversion.
+
+> [!IMPORTANT]
+> **Extension — implicit conversion of a universal expression (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> Any expression of type universal_integer or universal_real, not only a
+> convertible universal operand, is implicitly converted to the numeric
+> type its context determines. The predefined operators of the universal
+> types are always directly visible, so such an expression needs no use
+> clause for that type: with `procedure Clear (Mask : P.Unsigned_32)`, the
+> call `Clear (A + B)` of two named numbers is legal where the operators
+> of `P.Unsigned_32` are not directly visible. No logical operator is
+> defined for universal_integer: `A and B`, `A or B`, `A xor B` and
+> `not A` of universal operands are the operators of the modular type the
+> context determines, which must therefore be directly visible, and an
+> arithmetic operator applied to such an expression is read in that
+> modular type as well.
 
 > [!NOTE]
 > The rules for implicit conversions imply that no implicit conversion is ever
@@ -6435,9 +6550,9 @@ end loop;
 >
 > **Arrays.** In `for E of A loop`, `A` is an array object — a variable,
 > a constant, a formal parameter, a function result, a slice, a dereference,
-> of one or more dimensions — and never a type mark or a scalar; a packed
-> array is refused, as is a subcomponent that depends on the discriminants
-> of an object whose nominal subtype is unconstrained. `A` is evaluated
+> of one or more dimensions — and never a type mark or a scalar; a
+> subcomponent that depends on the discriminants of an object whose nominal
+> subtype is unconstrained is refused. `A` is evaluated
 > once, when the loop starts. The loop parameter `E` denotes each component
 > in turn, in index order with the last index varying fastest, or in the
 > opposite order with `reverse`: it is a variable view when `A` is a
@@ -6445,6 +6560,10 @@ end loop;
 > are aliased, and has the accessibility level of the array. Its subtype
 > may be named after a colon and must then statically match the component
 > subtype. `E` denotes nothing within its own iterator specification.
+> When `A` is a bit-packed array, `E` denotes each element as a renaming of
+> an element of a packed array does: it is read, assigned and passed as an
+> actual through the packed element, and like such a renaming it has no
+> address, so `E'Address` is refused.
 >
 > **Iterators.** The generic package `Ada.Iterator_Interfaces (Cursor,
 > Has_Element)`, named in a with clause, declares the types
@@ -7420,6 +7539,79 @@ function Dot_Product (Left, Right : Vector) return Real is
 > the pragma, the code generator is free to follow or to ignore the
 > recommendation.
 
+> [!IMPORTANT]
+> **Extension — extended return statements (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A function may name the object it returns and build it with statements:
+>
+> ```ebnf
+> extended_return_statement ::=
+>     return identifier : [aliased] [constant] return_subtype_indication
+>       [:= expression]
+>     [do
+>        sequence_of_statements
+>      [exception
+>        exception_handler
+>       {exception_handler}]
+>      end return];
+>
+> return_subtype_indication ::= subtype_indication | access_definition
+> ```
+>
+> The statement declares the return object as an object declaration with
+> the same identifier, subtype indication and initial value would: the
+> object is initialized by the expression if one is given, and by default
+> otherwise; it is a constant if the reserved word constant appears, and
+> the expression is then required. The sequence of statements is executed
+> next, and its handlers may handle an exception it raises; when it (or a
+> handler) completes, the function returns the object. The object is
+> visible from its declaration to the end of the statement.
+>
+> A return statement within the sequence of statements or the handlers,
+> and not within a body or an accept statement nested in them, applies to
+> the extended return statement: it must not include an expression, and
+> it returns the object at once. An extended return statement must apply
+> to the body of a function, so it is not allowed in a procedure, in an
+> accept statement, or within another extended return statement. The
+> return object must be of the result type of the function; when that type
+> is a scalar or an access type, the subtype of the object must statically
+> match the result subtype. The object is checked against the result
+> subtype as the value of a return statement is (see
+> [5.8](#58-return-statements)) when it is returned.
+>
+> No assignment that the program can observe carries the object to the
+> caller: a controlled return object is neither adjusted nor finalized by
+> the function, the object that receives the result being finalized in its
+> place, and the return object of a limited result is built in the space
+> the caller provides for the result (when a body nested in the statement
+> names the object, or its size is known only at run time, it is built in
+> the function's frame and moved there). The tasks of such an object belong
+> to the master of the caller, not to the function: the function neither
+> activates nor awaits them, and the caller activates them after the
+> return, as for an object declaration that the call initializes — at the
+> end of the declarative part for a declared object, and at once for the
+> result of a call used as a value. A return statement whose expression is
+> a call of another such function hands that call's object, and its tasks,
+> on to its own caller in the same way. For the same reason an object of a
+> type with a task component may be declared with a function call as its
+> initial value.
+>
+> ```ada
+> function Squares (N : Natural) return Vector is
+> begin
+>   return V : Vector (1 .. N) do
+>     for J in V'Range loop
+>       V (J) := Real (J) ** 2;
+>     end loop;
+>   end return;
+> end Squares;
+> ```
+
 ### 6.6 Parameter and Result Type Profile - Overloading of Subprograms
 
 Two formal parts are said to have the same parameter type profile if and only if
@@ -7768,7 +7960,10 @@ deferred_constant_declaration ::=
 > declaration in the private part must be a record extension of the same
 > parent, which the compiler checks. The parent must be a record type, and
 > a record extension part is itself allowed only on a controlled parent (see
-> [3.4](#34-derived-types)).
+> [3.4](#34-derived-types)). Where the full type is visible, an aggregate of
+> it may be an extension aggregate whose ancestor part is the parent type or
+> a value of the parent type (see [3.4](#34-derived-types)); a client, which
+> sees only the partial view, writes no aggregate of the type at all.
 
 A private type declaration is only allowed as a declarative item of the visible
 part of a package, or as the generic parameter declaration for a generic formal
@@ -7819,6 +8014,24 @@ an unconstrained type with discriminants. The full type must not be an
 unconstrained array type. A limited type (in particular a task type) is allowed
 for the full type only if the reserved word limited appears in the private type
 declaration (see [7.4.4](#744-limited-types)).
+
+> **Extension — a record extension completes a private type with discriminants (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> Where the full declaration of a private type with a discriminant part must
+> be a record type definition, a record extension of a controlled type (see
+> [3.4](#34-derived-types)) with a conforming discriminant part also serves:
+> the extension is a record type that declares the discriminants, as the
+> rule asks, and the controlled parent has no components of its own to
+> dispute them. A `Holder (Size : Positive)` declared private may thus be
+> completed by `new Controlled with record ... end record`, and its
+> Initialize, Adjust and Finalize are those of any controlled type. Any
+> other type definition — an array, a derived type without an extension
+> part — is still refused, as before.
 
 Within the specification of the package that declares a private type and before
 the end of the corresponding full type declaration, a restriction applies to the
@@ -8652,6 +8865,38 @@ The elaboration of a use clause has no other effect.
 >     use P; use P, P;
 > ```
 
+> [!IMPORTANT]
+> **Extension — use type clauses (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> ```ada
+> use_clause ::= use package_name {, package_name}
+>              | use type type_mark {, type_mark};
+> ```
+>
+> A use type clause makes directly visible the operators declared with
+> the base type of each type mark — its predefined operators and the
+> operators declared in the same visible part whose profile mentions it —
+> and nothing else. Its scope is that of a use clause in the same place: a
+> use type clause may be a declarative item, or an item of a context
+> clause, where a with clause of the same context clause must name the
+> library unit within whose visible part the type mark is declared,
+> directly or in a nested package.
+>
+> ```ada
+> with Interfaces; use type Interfaces.Unsigned_32;
+> package GL is
+>   COLOR_BUFFER_BIT : constant := 16#4000#;
+>   DEPTH_BUFFER_BIT : constant := 16#0100#;
+>   Both : constant Interfaces.Unsigned_32 :=
+>     COLOR_BUFFER_BIT or DEPTH_BUFFER_BIT;   -- the "or" of Unsigned_32
+> end GL;
+> ```
+
 **Example of conflicting names in two packages:**
 
 ```ada
@@ -8863,6 +9108,42 @@ function Minimum (L : Link := Head) return Cell renames Min_Cell; -- See 6.1
 > must name the base type of the renamed object; the renaming takes the
 > subtype of the result, so a renamed result of an unconstrained array type
 > has the bounds the call produced.
+
+> [!IMPORTANT]
+> **Extension — generic renaming declarations (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A generic unit may be renamed. The renaming declaration is written with
+> the reserved word generic before the kind of unit, and names the generic
+> unit after renames; it has no generic formal part of its own.
+>
+> ```ebnf
+> generic_renaming_declaration ::=
+>      generic package identifier renames generic_package_name;
+>    | generic procedure identifier renames generic_procedure_name;
+>    | generic function identifier renames generic_function_name;
+> ```
+>
+> The new name denotes the renamed generic unit: it may be instantiated,
+> and the instance is an instance of the renamed unit, with that unit's
+> generic formal part. The kind of unit written must be the kind of the
+> renamed unit; a generic package cannot be renamed as a generic function.
+> The renamed name may be an expanded name, so a generic unit declared in
+> the visible part of a package, or of an instance, may be given a name
+> where it is used:
+>
+> ```ada
+>     generic package Keys renames Core.Generic_Keys;
+>     package Integer_Keys is new Keys (Integer, Key_Of, "<");
+> ```
+>
+> A generic renaming declaration is a basic declaration and may appear
+> wherever one may; the renaming does not make a library unit of the
+> generic unit it renames.
 
 ### 8.6 The Package Standard
 
@@ -9086,11 +9367,17 @@ task_body ::=
 > converting it to a named access type inside the body raises Program_Error
 > when it would outlive what it designates.
 >
-> Three uses are refused rather than lowered: an entry declaration may not
-> name a discriminant, because entries are declared once with the type; a
-> discriminant is not visible from outside the task, as a protected unit's
-> components are not; and the discriminant of a task component of a record
-> may not be given by a discriminant of that record.
+> Outside the body a discriminant is read as a component of the task
+> object, `Hand.Id`, through an access value as well, and an entry
+> declaration may name one: in the discrete range of a family, which is
+> checked against its index subtype as each object is created, and in a
+> default expression, which a call evaluates for the task it calls. The
+> values are kept with the task's control block, so they stay readable for
+> as long as the task object exists. The discriminant of a task component
+> of a record may be given by a discriminant of that record,
+> `Inner : Worker (N, Shared'Access)`: such a task is created once the
+> record's discriminants are stored, so it takes the values the record
+> holds, whether they come from a constraint or from defaults.
 
 The simple name at the start of a task body must repeat the task unit
 identifier. Similarly if a simple name appears at the end of the task
@@ -9574,30 +9861,44 @@ end;
 > legal Ada 83 program.
 >
 > A requeue statement hands the entry call being served on to another
-> entry of the same protected unit (see the protected types extension of
-> [9.11](#911-shared-variables)).
+> entry, of a task or of a protected object (see the protected types
+> extension of [9.11](#911-shared-variables)).
 >
 > ```ebnf
-> requeue_statement ::= requeue entry_simple_name [with abort];
+> requeue_statement ::= requeue entry_name [with abort];
 > ```
 >
 > `requeue` is not a reserved word: it opens a statement only where a
 > statement can start and an identifier follows, and stays an ordinary
-> identifier elsewhere. The statement is allowed only in the body of a
-> protected entry, and names, by its simple name alone — no prefix, no
-> family index — an entry of the protected unit the body belongs to;
-> neither entry may have parameters. A requeue in an accept statement, in
-> a protected subprogram, in ordinary statements, or to an entry of
-> another unit is refused, each refusal saying which limit it met. `with
-> abort` is accepted and has no further effect.
+> identifier elsewhere. The statement is allowed in an entry body or an
+> accept statement that is the innermost body or callable construct
+> around it. It names an entry: one of the same unit by its simple name,
+> one of any task or protected object through a prefix, and a member of a
+> family with one index, `requeue Lane (I + 1)`. The entry named has no
+> parameters, or a profile subtype conformant with that of the entry being
+> served, and the statement passes none of its own. A requeue in a
+> protected subprogram or in ordinary statements, of something that is
+> not an entry, or to an entry whose profile does not conform, is refused.
 >
-> For the execution, the call being served is taken out of the entry body
-> running it and put back on the object's queue under the entry named,
-> within the same protected action; the entry body's remaining statements
-> are not executed. The call is not complete: the service loop offers it
-> to the new entry's barrier — at once if the barrier is open, or when a
-> later protected action opens it — and the caller returns only when that
-> entry's body has run for it.
+> For the execution, the entry name is evaluated, the out and in out
+> parameters the body has assigned are passed back to the call, and the
+> call is taken out of the entry body or accept statement serving it,
+> whose remaining statements are not executed. The call is not complete;
+> it keeps its parameters and is queued on the entry named — within the
+> same protected action for an entry of the same object, which the service
+> loop offers it to at once if the barrier is open; for an entry of
+> another protected object, on that object's queue as soon as the action
+> ends, the object then being served; for a task's entry, on that task's
+> queue. The caller returns only when that entry completes the call. A
+> task that has completed gives the caller Tasking_Error, and a finalized
+> protected object Program_Error. A call requeued with abort can still be
+> cancelled, wherever it is now queued: a timed or conditional call keeps
+> its expiration time and is withdrawn when that time comes, and an abort
+> of the caller withdraws it. One whose expiration time has passed when it
+> is requeued is withdrawn at once unless the entry named takes it: a task
+> offering that entry, or a protected object serving it in the action that
+> queues it. A call requeued without abort can no longer be withdrawn by
+> a timeout or an abort; it waits until the entry named completes it.
 >
 > ```ada
 > entry Request when True is
@@ -10370,7 +10671,16 @@ implemented as an indivisible operation.
 >     end [entry_identifier];
 >
 > entry_index_specification ::= for identifier in discrete_subtype_definition
+>
+> body_stub ::= ... | protected body protected_simple_name is separate;
 > ```
+>
+> **Subunits.** A protected body may be given as a body stub, wherever a
+> task body stub may be ([10.2](#102-subunits-of-compilation-units)), and
+> completed by a subunit `separate (parent_name) protected body P is ... end
+> P;`. The stub completes the protected declaration, and its elaboration is
+> the elaboration of the body: from then on the protected operations may be
+> called.
 >
 > **Components.** A component may be declared only in the private part; a
 > component declaration written in the visible part is illegal, and so is a
@@ -10467,7 +10777,13 @@ implemented as an indivisible operation.
 > call is made, with the actual parameters, before the call is queued —
 > the place RM 6.1.1 puts a subprogram's, and the only place an entry's
 > can be evaluated at all, since a barrier cannot name the entry's formals.
-> `Post` on an entry is rejected.
+> `Post` may be given on an entry too. It is checked where the accept
+> statement or the entry body completes, at its end or at a return
+> statement, but not where a requeue hands the call on: inside the
+> rendezvous or the protected action, with the formals as the body left
+> them and `'Old` taken as the body began. A failure is an exception of
+> the rendezvous, raised in the caller and, for an accept statement, in
+> the server as well.
 >
 > **pragma Atomic** may name a protected type or a protected object. Every
 > read and every update of the object's state happens inside a protected
@@ -10476,14 +10792,12 @@ implemented as an indivisible operation.
 > ordinary atomic object does not apply.
 >
 > **Requeue.** A `requeue` statement in an entry body takes the call out of
-> the body running it and puts it back on the object's queue under the entry
-> it names, still within the same protected action; the call is not complete,
-> so the service loop offers it to the new entry's barrier and the caller
-> returns only when that entry has run. This implementation requeues only to
-> a single entry of the protected unit the statement appears in, named on its
-> own, and only where neither entry has parameters; `with abort` is accepted
-> and has no further effect. A requeue out of an accept statement is
-> rejected.
+> the body running it and queues it on the entry it names, which may belong
+> to this object, another protected object or a task, and may be a member
+> of a family; to an entry of this object it is queued again within the
+> same protected action, so the service loop offers it to the new entry's
+> barrier, and the caller returns only when that entry has run. The rules
+> are those of the requeue statement extension in 9.5.
 >
 > **What is not supported.** Protected procedures as interrupt
 > handlers (`pragma Attach_Handler`, `pragma Interrupt_Handler`), priority
@@ -10697,14 +11011,24 @@ clause.
 > `Ada.Float_Text_IO` and `Ada.Long_Float_Text_IO` have no package to rename;
 > they are supplied as instances of TEXT_IO.INTEGER_IO and TEXT_IO.FLOAT_IO
 > for INTEGER, FLOAT and LONG_FLOAT, declared once per program when first
-> named.
+> named. A child of such a unit that the table lists is served through the
+> analogue: `Ada.Text_IO.Unbounded_IO` and `Ada.Text_IO.Bounded_IO` name the
+> child units TEXT_IO.UNBOUNDED_IO and TEXT_IO.BOUNDED_IO of the legacy
+> library ([F.7](#f7-the-legacy-library)), which see the declarations of
+> TEXT_IO as their parent's. Such a with clause is accepted with the same
+> warning, has the effect of a with clause naming the child (and so its
+> parent), and the expanded name denotes the child thereafter:
+> `Ada.Text_IO.Unbounded_IO.Put_Line (Item)` calls the child's procedure, and
+> `package BIO is new Ada.Text_IO.Bounded_IO (B);` instantiates the generic
+> child.
 >
 > *The semantics exist without a unit.* `Ada.Finalization` is accepted with a
 > warning and binds no unit: its `Controlled` and `Limited_Controlled` denote
 > the predefined types of the controlled-type extension.
 >
 > *The unit is in the legacy library.* `Ada.Characters`, `Ada.Strings` and
-> `Ada.Containers` and their children are library units of
+> `Ada.Containers` and their children, and `Interfaces`, `Interfaces.C` and
+> `Interfaces.C.Strings`, are library units of
 > `turboada-runtime-legacy.ada`, a second library file found beside the
 > compiler as `turboada-runtime.ada` is ([F.7](#f7-the-legacy-library) lists
 > what it holds). Such a with clause is accepted without a warning and names
@@ -10712,18 +11036,19 @@ clause.
 > generic children — the containers, the array sorts, and the generic
 > functions `Ada.Strings.Bounded.Hash`, `Hash_Case_Insensitive`,
 > `Equal_Case_Insensitive` and `Less_Case_Insensitive` — are declared inside
-> their parent package, since a generic child unit is not accepted: a with
-> clause naming one of them is a with clause naming the parent, and the
-> expanded name denotes the generic declared there. The file is read only
-> when a with clause names one of its units, so a program naming none
-> compiles exactly as it would without the file; while the file is missing,
+> their parent package: a with clause naming one of them is a with clause
+> naming the parent, and the expanded name denotes the generic declared
+> there; `Ada.Text_IO.Bounded_IO` alone is a generic child unit, as the
+> standard declares it. The file is read only when a with clause names one
+> of its units, so a program naming none compiles exactly as it would
+> without the file; while the file is missing,
 > each such with clause is an error saying which file the unit is looked
 > for in.
 >
 > *Nothing exists.* Every other name of the table — `Ada.Exceptions`,
 > `Ada.Numerics`, `Ada.Streams`, `Ada.Tags`, `Ada.Real_Time`,
 > `Ada.Task_Identification`, `Ada.Interrupts`, `Ada.Wide_Text_IO`,
-> `Interfaces` and its children, `System.Storage_Elements`,
+> `Interfaces.Fortran`, `Interfaces.COBOL`, `System.Storage_Elements`,
 > `System.Address_To_Access_Conversions` — is an error, since a with clause
 > that cannot be satisfied would only cascade; the message says what the unit
 > is and what Ada 83 offers instead. A child of a listed unit that is not
@@ -10840,6 +11165,23 @@ clause of Quadratic_Equation since these elementary operations are not directly
 called within its body.
 
 > [!IMPORTANT]
+> **Extension — a renaming declaration as a library unit (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`, at the unit, by name; a program that
+> relies on it is not a legal Ada 83 program.
+>
+> A subprogram renaming declaration or a package renaming declaration may
+> be a compilation unit, and is then a library unit that stands for the
+> unit it renames: `function Ada.Strings.Fixed.Hash (Key : String) return
+> Ada.Containers.Hash_Type renames Ada.Strings.Hash;` is such a unit, and
+> `package IO renames Ada.Text_IO;` is another. The renaming is its own
+> completion, so no body is looked for. It is found as any library unit is:
+> by its unit name, in the file named for it on the search path or in the
+> library file the compiler carries beside itself ([F.7](#f7-the-legacy-library)),
+> as well as in a file given on the command line.
+
 > **Extension — child units (with clauses naming them off under `-ada83`).**
 >
 > This paragraph describes a language extension. It is admitted by default
@@ -10863,10 +11205,12 @@ called within its body.
 >
 > The parent is a library package that has been compiled before the child;
 > a package declared inside a library unit cannot be a parent. A child may
-> be a package, a procedure or a function, and a child subprogram may be
-> given as a body that is its own declaration; a generic child unit is not
-> accepted, and the predefined generic units that are children elsewhere,
-> such as `Ada.Containers.Vectors`, are declared inside their parent package
+> be a package, a procedure or a function, generic or not, and a child
+> subprogram may be given as a body that is its own declaration; a generic
+> child is instantiated by its expanded name, `package S is new
+> Shapes.Stack (Integer, 4);`, and `Ada.Text_IO.Bounded_IO` is one. The
+> predefined generic units that are children elsewhere, such as
+> `Ada.Containers.Vectors`, are declared inside their parent package
 > ([F.7](#f7-the-legacy-library)). `private` before the declaration makes a private child; it
 > may not be written on a body, nor on a unit that is not a child. A
 > child's body, and the subunits of that body, are found through the
@@ -12222,6 +12566,24 @@ subtype indication depends on the class of the type as for a nonformal type.
 The only form of discrete range that is allowed within the declaration of a
 generic formal (constrained) array type is a type mark.
 
+> **Extension — constrained constituents of formal array and access types
+> (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> An index of a generic formal constrained array type may be any discrete
+> subtype definition — `array (1 .. 3) of Item` or
+> `array (Integer range 2 .. 4) of Item` — and the component subtype of a
+> formal array type, like the designated subtype of a formal access type,
+> may be any subtype indication: `array (Index) of String (1 .. 3)`,
+> `access String (1 .. 3)`, or a constrained subtype of an earlier formal
+> type, `array (Index) of Elem (1 .. 3)`. The actual is matched as
+> [12.3.4](#1234-matching-rules-for-formal-array-types) and
+> [12.3.5](#1235-matching-rules-for-formal-access-types) state.
+
 The discriminant part of a generic formal private type must not include a
 default expression for a discriminant. (Consequently, a variable that is
 declared by an object declaration must be constrained if its type is a generic
@@ -12738,6 +13100,23 @@ same for the actual array type as for the formal array type, and likewise that
 for any given index position the index subtypes or the discrete ranges have the
 same bounds. The exception Constraint_Error is raised if this check fails.
 
+> **Extension — static matching of formal array constituents (off under
+> `-ada83`).**
+>
+> This paragraph describes a rule of the language extensions. Under
+> `-ada83` it does not apply, and the check on elaboration stated above is
+> the only one made.
+>
+> Where the index subtypes, the index ranges, the component subtypes or the
+> designated subtypes of a formal and its actual both have static bounds or
+> discriminant values, and these differ, the instantiation is illegal
+> instead of raising Constraint_Error: "component subtype of the actual for
+> formal array type 'Names' does not statically match the formal's", "index
+> range 1 of the actual ...", "index subtype 1 of the actual ...",
+> "designated subtype of the actual for formal access type ...". A
+> constraint that is not static is still checked when the instantiation is
+> elaborated, as above.
+
 **Example:**
 
 ```ada
@@ -13183,6 +13562,67 @@ is not accepted by the implementation is ignored).
 > the pragma argument it corresponds to is not implemented; and
 > `Elaborate_Body`, `Unsuppress`, `Interrupt_Priority`, `No_Return` and the
 > other Ada 95 and later aspects, which have no Ada 83 construct at all.
+>
+> **Predicate.** Besides the aspects above, each of which stands for a
+> pragma or a clause, `Predicate => condition` may be written on a type
+> or subtype declaration. It gives the subtype a predicate: a BOOLEAN
+> condition in which the name of the subtype stands for the value being
+> checked, as in
+> `subtype Even is Integer with Predicate => Even mod 2 = 0;`.
+> A value that becomes a value of the subtype is checked against it — the
+> initial value of an object, a value assigned to one, an actual parameter
+> passed in and a parameter copied back, a function result, a type
+> conversion, a qualified expression and an allocator — and
+> ASSERTION_ERROR is raised when the condition is FALSE. A membership test
+> against the subtype tests the condition as well, and `'VALID` is FALSE
+> for an object whose value fails it. A subtype declared from a subtype
+> with a predicate, and a type derived from one, keep that predicate, and
+> every predicate a subtype carries must hold. The check is an assertion
+> of the kind `Predicate`: the predicate of a subtype declared where
+> `pragma Assertion_Policy (Predicate => Ignore)` applies, or in a
+> compilation started with `--ignore-assertions`, is not checked. The
+> aspect is given on the partial view of a private type, not on its full
+> declaration, and not on an incomplete type, a generic formal type or a
+> protected type. The condition may not name a subtype to which the same
+> predicate applies. Its names are resolved at the declaration, or, when
+> it names something declared later in the same declaration list, at the
+> end of that list.
+>
+> A predicate is static when its subtype is a static discrete subtype, its
+> condition names nothing declared after the subtype, and the condition
+> is a static BOOLEAN expression, compares the name of the subtype with a
+> static expression by `=`, `/=`, `<`, `<=`, `>` or `>=`, tests the name
+> of the subtype for membership in static choices, or is a case
+> expression over the name of the subtype whose choices and dependent
+> expressions are static — or joins such conditions with `not`, `and`,
+> `or`, `xor`, `and then` and `or else`. A subtype whose predicates are
+> all static may be a choice of a case statement, a case expression, a
+> variant part or an array aggregate, and a for loop may iterate over it;
+> each takes only the values that satisfy the predicates, and
+> `'FIRST_VALID` and `'LAST_VALID` give the least and the greatest of
+> them. A subtype with any predicate cannot be an index subtype, nor the
+> range of an index constraint or of a slice, and `'FIRST`, `'LAST` and
+> `'RANGE` are not allowed for it.
+>
+> **Static_Predicate and Dynamic_Predicate.** These aspect marks are
+> accepted as deprecated spellings of `Predicate`, and mean exactly what
+> it means: the same check, the same assertion policy (the kind
+> `Predicate`, which pragma Assertion_Policy also accepts under either of
+> these names), and the same treatment of the subtype, which is static or
+> not by the rule above whichever spelling is written. Each use draws a
+> warning of the class `deprecated-aspect`, silenced by
+> `-Wno-deprecated-aspect`, which reads
+> `'Static_Predicate' is deprecated: write 'Predicate', which means the same`,
+> and the editor offers the replacement as a quick fix.
+> `Static_Predicate` keeps the one rule its name states: its predicate
+> must be static. A `Static_Predicate` whose predicate is not static is an
+> error that says why and suggests `Predicate`, which accepts the same
+> condition without that rule. Writing both deprecated spellings, or
+> either one beside `Predicate`, in one aspect specification specifies
+> `Predicate` more than once. `Dynamic_Predicate` carries no rule of its
+> own: one whose condition happens to be static makes a static subtype,
+> exactly as `Predicate` does. Under `-ada83` every aspect specification
+> is refused, these included.
 
 ### 13.2 Length Clauses
 
@@ -13925,6 +14365,29 @@ end;
 >
 > The pragma Interface is not defined for generic subprograms.
 
+> [!IMPORTANT]
+> **Extension — libraries bound at run time (off under `-ada83`).**
+>
+> This paragraph describes a language extension. It is admitted by
+> default but is not part of ANSI/MIL-STD-1815A, and is rejected when the
+> compiler is invoked with `-ada83`; a program that relies on it is not a
+> legal Ada 83 program.
+>
+> A package may name the shared libraries its imported subprograms and
+> objects come from, with `pragma Dynamic_Library ("libz.so.1",
+> "zlib1.dll", "libz.1.dylib");` in its declarations. Nothing it imports
+> is then linked: each subprogram is bound to its symbol on its first
+> call, and each object on its first use, from the first of the named
+> libraries that provides the symbol, and a symbol none provides raises
+> PROGRAM_ERROR there, with a message naming the symbol and the libraries.
+> `pragma Dynamic_Library_Resolver` adds functions that look a symbol up
+> by name, as OpenGL's do. The predefined units `SDL`, `OpenAL`, `Vulkan`,
+> `OpenGL`, `DirectX`, `Zlib`, `Opus`, `Metal` and `Sockets` are written this way;
+> [F.1](#f1-implementation-dependent-pragmas) states the two pragmas and
+> [F.8](#f8-the-api-library) the units, the search order and the libraries
+> that ship with the compiler. In a program's own units, `-ada83` refuses
+> both pragmas, as it does every extension.
+
 ### 13.10 Unchecked Programming
 
 The predefined generic library subprograms Unchecked_Deallocation and
@@ -14115,10 +14578,26 @@ devices.
 > than the first subtype's size and at most 64. The default operations of
 > a record transfer its components, and those of an array its elements,
 > in order, each by its own default; an array's bounds are not
-> transferred, and the default is unavailable — the attribute is refused —
-> when a component or element type has a specified operation of the same
-> direction, or is a task, a protected object or a bit-packed array.
-> Neither `'Input` and `'Output` nor class-wide forms exist.
+> transferred, and a record's discriminants travel, ahead of its
+> components, only when they have defaults. A discriminant of an
+> unconstrained type (3.7.1) travels as its value: an array value as its
+> bounds and then its elements, a record value as its discriminants and
+> then its components. `'Read` of a record whose discriminants travel
+> reads them first and checks them before it changes the item:
+> Constraint_Error is raised when a discriminant or a bound read is
+> outside its subtype, or when the item is constrained and the
+> discriminants read are not its own, and Storage_Error when assigning a
+> value with them to the item would raise it. A constrained item then
+> keeps its own; a mutable one is finalized, takes the discriminants read
+> and is initialized again for them, as an allocator initializes an
+> object, and its components are read. A value read for a discriminant of
+> an unconstrained type is made the same way, for the bounds or the
+> discriminants read, before its elements or components are read into
+> it. The default is unavailable — the attribute is refused — when a
+> component or element type, or the type of a value that travels, has a
+> specified operation of the same direction, or is a task, a protected
+> object or a bit-packed array. Neither `'Input` and `'Output` nor
+> class-wide forms exist.
 >
 > **Specified operations.** An attribute definition clause
 >
@@ -15339,6 +15818,28 @@ Put (126);                            -- "b126"
 Put (-126, 7);                        -- "bbb-126"
 Put (126, Width => 13, Base => 2);    -- "bbb2#1111110#"
 ```
+
+> **Extension — Modular_IO (off under `-ada83`).**
+>
+> Text_IO also declares the generic package Modular_IO, for modular types
+> ([3.5.4](#354-integer-types)):
+>
+> ```ada
+> generic
+>   type Num is mod <>;
+> package Modular_IO is
+>   Default_Width : Field := Num'Width;
+>   Default_Base  : Number_Base := 10;
+>   -- Get and Put as in Integer_IO
+> end Modular_IO;
+> ```
+>
+> Its Get and Put procedures have the profiles and the rules of those of
+> Integer_IO, with Num a modular type: a value is never negative, so it is
+> written without a sign, and a sign or a value of the modulus or more read
+> by Get raises Data_Error.  The formal type of Integer_IO is a signed
+> integer type, so a modular type is an actual of Modular_IO only.  Under
+> `-ada83` no modular type can be declared, so no instance can be made.
 
 #### 14.3.8 Input-Output for Real Types
 
@@ -18188,29 +18689,32 @@ The following restrictions are checked at the construct:
 | `NO_IO` | with clauses naming `TEXT_IO`, `SEQUENTIAL_IO` or `DIRECT_IO` |
 | `NO_ENUMERATION_MAPS` | `'IMAGE`, `'VALUE` and `'WIDTH` of enumeration types |
 | `NO_IMPLICIT_HEAP_ALLOCATIONS` | the constructs for which this compiler allocates heap storage of its own accord: objects too large for the stack, library-level objects whose size is not static, and task objects (their control blocks) |
+| `NO_NESTED_FINALIZATION` | objects with controlled parts, and access types designating a type with controlled parts, within a subprogram, entry or task body |
+| `NO_STREAMS` | the stream attributes `'READ` and `'WRITE`, and objects and allocators of a stream type |
+| `NO_STANDARD_STORAGE_POOLS` | allocators: this implementation has no user-defined storage pools, so every allocator draws on the standard one |
 
 The following take a value and are checked against it:
 
 | Restriction | Constructs rejected |
 |---|---|
 | `MAX_TASKS => 0` | task objects and task allocators; a positive limit is accepted but not checked, with a warning |
+| `MAX_ASYNCHRONOUS_SELECT_NESTING => 0` | asynchronous selects; a positive limit is accepted but not checked, with a warning |
 | `MAX_SELECT_ALTERNATIVES => N` | selective waits with more than N alternatives |
 | `MAX_TASK_ENTRIES => N` | task units declaring more than N entries |
 | `MAX_PROTECTED_ENTRIES => N` | protected units declaring more than N entries |
 
 The following need whole-program or run-time analysis and are accepted
 with a warning that they are not enforced: `NO_RECURSION`, `NO_REENTRANCY`,
-`NO_NESTED_FINALIZATION`, `NO_ELABORATION_CODE`, `NO_TASK_TERMINATION`,
+`NO_ELABORATION_CODE`, `NO_TASK_TERMINATION`,
 `NO_IMPLEMENTATION_ATTRIBUTES`, `NO_IMPLEMENTATION_PRAGMAS`,
 `NO_OBSOLESCENT_FEATURES`, `MAX_ENTRY_QUEUE_LENGTH`,
 `MAX_STORAGE_AT_BLOCKING`.
 
 The following restrict features this implementation does not have, so
 every program respects them; they are accepted silently:
-`IMMEDIATE_RECLAMATION`, `MAX_ASYNCHRONOUS_SELECT_NESTING`,
-`NO_ASYNCHRONOUS_CONTROL`, `NO_DISPATCH`, `NO_DYNAMIC_ATTACHMENT`,
-`NO_DYNAMIC_PRIORITIES`, `NO_IMPLEMENTATION_RESTRICTIONS`,
-`NO_STANDARD_STORAGE_POOLS`, `NO_STREAMS`, `NO_TASK_ATTRIBUTES_PACKAGE`,
+`IMMEDIATE_RECLAMATION`, `NO_ASYNCHRONOUS_CONTROL`, `NO_DISPATCH`,
+`NO_DYNAMIC_ATTACHMENT`, `NO_DYNAMIC_PRIORITIES`,
+`NO_IMPLEMENTATION_RESTRICTIONS`, `NO_TASK_ATTRIBUTES_PACKAGE`,
 `NO_WIDE_CHARACTERS`.
 
 An identifier that is none of these is ignored, and a warning is issued. A
@@ -18256,6 +18760,56 @@ The body of each named unit, and the body of every unit reachable from it
 through with clauses, is elaborated before the unit to which the context
 clause belongs. Pragma ELABORATE of Annex B requires the same of each named
 unit alone, without the units reachable from it.
+
+#### Pragma DYNAMIC_LIBRARY, Pragma DYNAMIC_LIBRARY_RESOLVER
+
+```
+pragma DYNAMIC_LIBRARY (string_literal {, string_literal});
+pragma DYNAMIC_LIBRARY_RESOLVER (string_literal {, string_literal});
+```
+
+Allowed only among the declarations of a package, visible or private, and
+applying to that package and to every package declared in it or a child of
+it that names no libraries of its own. Each argument is a nonempty string
+literal; anything else is an error. A second pragma of the same name in
+the same package adds its arguments after the first's. Under `-ada83` both
+pragmas are refused in a program's own units, and accepted in the library
+files beside the compiler.
+
+The literals of DYNAMIC_LIBRARY name shared library files: `"libSDL3.so.0"`,
+`"SDL3.dll"`, `"/System/Library/Frameworks/OpenAL.framework/OpenAL"`. A
+subprogram or object that pragma IMPORT names in such a package is not
+presented to the linker. A call of the subprogram calls instead a routine
+of the program's own, one per declaration, that binds the symbol the first
+time it runs and then calls it with the subprogram's own parameter and
+result profile, so two declarations may import one symbol under different
+profiles. A use of the object, reading, assignment or `'ADDRESS`, goes
+through the address its symbol has in the library, bound on its first use
+the same way. The symbol is the `EXTERNAL_NAME` of the pragma IMPORT, or
+the entity's name in lower case.
+
+The package's libraries are opened at the first such call or use of any
+of its imports, once per program, under a lock that makes two tasks
+arriving together open them once; all of them are opened, in the order
+named: a name with no directory is tried first in
+the directory that holds the executable and then where the system looks
+for shared libraries, and a name that does not load is passed over. The
+symbol is looked up in each opened library in that order, and, if none has
+it, through each function DYNAMIC_LIBRARY_RESOLVER names, found in the same
+libraries and called with the symbol's name, a C function taking a
+`const char *` and returning a `void *` (`"wglGetProcAddress"`,
+`"glXGetProcAddressARB"`). A symbol that none of these provides raises
+PROGRAM_ERROR at the call or use, with the message
+`symbol is in none of the libraries file, file, ...`; nothing is kept, so
+each later call raises again, and the package's other imports bind as
+before. A program that never calls such a subprogram never opens a
+library, and so compiles, links and runs on a platform that has none.
+
+When the compiler links a program that names such a package in a with
+clause, directly or through the units it names, it copies each library the
+package names without a directory that is present in the compiler's own
+directory, and absent from the program's, beside the program
+([F.8](#f8-the-api-library)).
 
 ### F.2 Language-defined pragmas
 
@@ -18378,12 +18932,23 @@ that schedules cooperatively must arrange its own preemption.
 
 The `-P` option reads a GNAT project file (`.gpr`) or a Green Hills project
 file (`.gpj`), enumerates the sources it names, compiles the stale ones in
-dependency order, binds, and links its mains; `-n` prints the plan that
-would be built and stops, and `-X NAME=VALUE` defines an external that wins
-over the project's own. The Ada it compiles is the language of this manual.
-This section states what the reader records beyond that: the language of
-every source, what is done with the ones that are not Ada, the `IDE`
-package, and the rows the plan prints for them.
+dependency order, binds, builds its libraries and links its mains; `-n`
+prints the plan that would be built and stops, and `-X NAME=VALUE` defines
+an external that wins over the project's own. `-P name` without a suffix
+means `name.gpr`. The Ada it compiles is the language of this manual. This
+section states what each format's reader understands and what the builder
+does with it: the language of every source, what is done with the ones that
+are not Ada, the switches each compile and link is given, libraries,
+aggregates, and the queries an editor asks.
+
+Nothing a project file says is refused for being something this builder
+does not do. An attribute, a package, a switch or a setting that has no
+effect here — `Target`, a `Prove` or `Install` package, the binder switch
+`-E`, a `:preexec` setting — is read, kept in the model, printed by `-n` and
+`--plan-json`, and named once in a warning: `attribute 'Target' is recorded
+and not acted on`. Every such warning belongs to the class
+`project-recorded`, so `-Wno-project-recorded` silences them all and
+nothing else.
 
 #### Languages
 
@@ -18432,10 +18997,11 @@ A driver that cannot be started (exit status 127) yields to the next; when
 none can, the build stops with `no C compiler found to compile 'x.c' (set
 CC, or install cc/clang/gcc)`. Each compile is `<driver> -c <source> -o
 <object>`, then `-I<dir>` for every source directory of every project in
-the tree and every object directory, then the source's switches:
-`Compiler'Switches ("<file>")` when the project gives them, else
-`Compiler'Default_Switches ("<language>")` — in a `.gpj`, the option lines
-under the entry, else the project's. Each switch is read in the project's
+the tree and every object directory, then the source's switches (see
+*Switches* below for which ones a source is given). `Compiler'Driver
+("<language>")` names the driver instead of the search, and a driver the
+project names that cannot be started stops the build. Each switch is read in
+the project's
 dialect, GNAT for a `.gpr` and Green Hills for a `.gpj`, through the table
 of [F.6](#f6-dialect-compatibility---gnat---greenhills): a mapped switch
 with a native spelling is passed as that spelling (`-G` as `-g`, `-Ospeed`
@@ -18462,8 +19028,13 @@ one.
 
 `-n` prints, for each project of the tree, `project <name>` and one aligned
 row per attribute — the key and its value, a list value continuing on the
-following lines — then the `external` rows for the `-X` definitions and the
-`command line` row. When a project holds at least one source that is not
+following lines — then a row for each edge it has (`import`, `limited
+import`, `extends`, `extends all`, `aggregate`), the `library file` a library
+project writes and the `output` a `.gpj` names, then the `external` rows and
+the `command line` row. The `external` rows list every external the tree
+consulted, each with where its value came from: `command line`,
+`environment`, `project` (an aggregate's `External`, or a `.gpj` `macro`),
+`default`, or `not defined`. When a project holds at least one source that is not
 Ada, four rows follow its plain attributes; an Ada-only project prints none
 of them, so its plan is what it was before languages were recorded.
 
@@ -18501,6 +19072,409 @@ analysed with while the extension's `turboada.compilerPath` setting is unset;
 a set value always wins. `Debugger_Command` is run as the debug command
 line, quotes honored, while `turboada.debugAdapterPath` is empty; a set value
 replaces it. The remaining eleven are shown in the project's tooltip.
+
+#### Reading a `.gpr`
+
+Every production of the format is read: `with` and `limited with` clauses
+over a list of files; the qualifiers `standard`, `abstract`, `library`,
+`aggregate`, `aggregate library` and `configuration`; `extends` and
+`extends all`; string types; typed and untyped variables, at the top and
+inside packages; `case` constructions, nested, at the top and inside
+packages; attribute declarations with an index (a language, a file, a file
+pattern such as `"*.adb"`, or `others`) and with `at N` after a file name;
+packages that `renames` or `extends` a package of another project; and
+`null;`. Values are strings and lists joined by `&`, where a list may
+follow a list or begin the expression but never follow a string (`"a" &
+("b")` is an error saying which side has to change). A reference names a
+variable, `Project'Name`, `Project'Project_Dir`, an attribute of this
+project, of an imported or extended one (`Base'Object_Dir`), or of one of
+their packages with its index (`Base.Compiler'Switches ("Ada")`); a
+reference to an attribute not yet written answers with its default.
+
+The built-in functions:
+
+| Function | Result |
+|---|---|
+| `external ("NAME" [, default])` | the scenario value named `NAME`, from `-X`, an aggregate's `External`, the environment, or the default; with none of these, an error |
+| `external_as_list ("NAME", "SEPARATORS")` | the scenario value split at every separator, empty items inside kept; an undefined name is the empty list |
+| `split ("TEXT", "SEPARATORS")` | the text cut at every separator, empty items dropped |
+| `lower (VALUE)`, `upper (VALUE)` | a string, or every item of a list, in that case |
+| `default (VALUE, OTHER)` | `VALUE` unless it is empty, then `OTHER` |
+| `alternative (VALUE, OTHER)` | `OTHER` unless `VALUE` is empty, then empty |
+| `item_at (LIST, "N")` | the `N`th item, counting back from the end when `N` is negative |
+| `remove_prefix (VALUE, "P")`, `remove_suffix (VALUE, "S")` | the value, or every item, without the leading or trailing text |
+| `match (VALUE, "PATTERN" [, "REPLACEMENT"])` | when the regular expression matches: the replacement with `\1` … `\9` filled in, else the expression's one group, else the pattern itself; empty when it does not match; over a list, the results of the items that match |
+| `filter_out (LIST, "PATTERN")` | the items the regular expression does not match whole |
+| `file_as_list ("FILE")` | the lines of a file, read beside the project |
+
+A call is checked against its row: the number of arguments, whether its
+first argument is a string or a list, an empty separator, an item past the
+end, a pattern that is not a regular expression. The regular expressions
+take `.`, `*`, `+`, `?`, `{m,n}`, `|`, groups, classes `[a-z]`, `^`, `$`
+and escapes.
+
+A typed `case` is checked against its type — a choice the type does not
+have, or a choice written twice, is an error, and so is a type that lists
+one value twice — and a variable keeps the kind it was first given. An
+attribute is checked against its row in the registry: whether it takes an
+index and of what kind, whether `others` is allowed there, and its value,
+so an empty `Library_Name`, a `Library_Kind` that is not one of `static`,
+`static-pic`, `dynamic` and `relocatable`, a `Main` that names a directory,
+are each refused alone and the rest of the file is still read.
+
+#### Finding a project
+
+A project named in a `with` clause is looked for beside the file that names
+it, `.gpr` added when it has no suffix. When it is not there, and for `-P`
+with a name that is not found as given, the project search path is tried
+in order: every `-aP<dir>` of the command line, each line of the file
+`GPR_PROJECT_PATH_FILE` names, the directories of `GPR_PROJECT_PATH`, then of
+`ADA_PROJECT_PATH`, then `share/gpr` and `lib/gnat` beside the directory
+the compiler is installed in. An aggregate's `Project_Path` adds to the
+path its aggregated projects' imports use. A project is read once however
+many times it is reached; a cycle of `with` clauses is an error unless a
+`limited with` closes it, and nothing a `limited with` brings in can be
+referenced.
+
+#### Kinds, defaults and inheritance
+
+A project that writes no qualifier is what its attributes make it: a
+library when it gives `Library_Name` and `Library_Dir`, abstract when it
+declares that it has no sources (an empty `Source_Dirs`, `Source_Files` or
+`Languages`), standard otherwise. A qualifier that contradicts the
+attributes is an error (`a standard project cannot be a library project`),
+and an attribute or package that does not apply to the kind is warned
+about where it is written: an aggregate has no sources, an abstract project
+compiles nothing. After a project is read, the defaults GPR2 defines are
+materialized for the attributes it did not write: `Object_Dir` `"."`,
+`Exec_Dir` its `Object_Dir`, `Source_Dirs` `(".")`, `Languages` `("Ada")`
+for a project with sources, `Library_Kind` `"static"`, `Library_ALI_Dir`
+its `Library_Dir`, and `Externally_Built` `"false"`; a reference to a
+`Naming` suffix the project did not write answers with the language's
+default. `Warning_Message` is printed as a warning when the project is
+read.
+
+An extending project inherits what it does not redeclare: every package it
+does not declare is the extended project's, whole, and every attribute the
+format marks as inherited reads through to the extended project. What is
+not inherited is the project's own: its source directories, source lists
+and exclusions, `Object_Dir`, `Exec_Dir`, `Externally_Built`, the library
+attributes but `Library_Name` and `Library_Dir`, `Linker'Linker_Options`,
+`Project_Files`, `Project_Path`, `Disable_Linking` and the toolchain
+description attributes. A source of the extending project replaces the extended
+project's source of the same file name, and its unit replaces the unit, so
+every unit of the extended project that is not replaced is compiled into
+the extending project's `Object_Dir`, and the extended project's objects
+are never written. `extends all` does the same for every project the
+extended one imports.
+
+#### Sources
+
+The sources of a project are the files of its `Source_Dirs` whose names end
+in a suffix of a language `Languages` names; a directory written with a
+trailing `/**` is searched with all its subdirectories, each directory's
+files before its subdirectories. `Source_Files` or the lines of
+`Source_List_File` name the sources instead. A file is then dropped when it
+is named by `Excluded_Source_Files` (or its old name
+`Locally_Removed_Files`) or by a line of `Excluded_Source_List_File`, when it
+lies in one of the `Excluded_Source_Dirs`, or in a subdirectory whose name
+matches an `Ignore_Source_Sub_Dirs` pattern. When two directories hold a
+file of the same name, the first in search order is the source.
+
+The `Naming` package decides languages and units: `Spec_Suffix`,
+`Body_Suffix` and `Separate_Suffix` per language, `Spec ("unit")` and
+`Body ("unit")` naming a unit's file, `Specification_Exceptions` and
+`Implementation_Exceptions` listing files of a language whatever their
+suffix. `Casing` and `Dot_Replacement` are read and checked; a unit is found
+by reading its file, so a file whose name does not follow them is still the
+unit it holds.
+
+A file may hold several units. `for Spec ("Pkg") use "all.ada" at 1;` and
+`for Body ("Pkg") use "all.ada" at 2;` place each of them by its position,
+counted from 1, and each such unit is a source of its own: it is compiled
+alone, as `--unit-index=<n>` compiles the `<n>`th unit of a file, into an
+object named after the unit, and a main among them is named after its unit
+too. A file holding several units that no `at` places is refused, as is an
+index past the file's last unit or a unit that is not the one the `Naming`
+package places there. When any unit's file is not named after the unit —
+a unit of such a file, or a specification or body that `Spec`, `Body` or the
+exception lists give any other name — the build writes `ada83.units` in the
+root project's `Object_Dir`, one line `<unit>%s <path>` or `<unit>%b <path>`
+for each, and every compile reads it (`--unit-map`), so a body finds its
+specification and a client its unit whatever their files are called.
+
+The same `at <n>` names that unit wherever a project file names a file. A
+`Main` item `"all.ada" at 3` — written in the list, kept by a variable or
+joined with `&` — builds unit 3 of the file as a main, an executable named
+after the unit; `--plan-json` names such a main by its unit, which is also
+how the command line names it (`-P p.gpr Show`). An attribute index
+`("all.ada" at 3)` gives what it holds to that unit alone, ahead of any entry
+for the whole file: `Compiler'Switches` for its compile, and for a main
+`Builder'Executable`, `Builder'Switches`, `Binder'Switches`,
+`Linker'Switches`, `Leading_Switches`, `Trailing_Switches` and `Roots`. An
+`at` after a language, a pattern or any other index, or on a value that is
+not a `Main` item or a `Naming` placement, is recorded.
+
+#### Switches
+
+The switches a source is compiled with are looked up in its project's
+`Compiler` package — the extended project's when this one does not declare
+the package — with `Switches` and `Default_Switches` read as one attribute,
+as GPR2 reads them. The first of these that the package declares decides:
+
+1. for a unit of a multi-unit file, its own place in the file,
+   `Switches ("all.ada" at 3)`;
+2. the source's own file name, `Switches ("main.adb")`;
+3. a file pattern that matches it, `Switches ("*_fast.adb")`; when several
+   match, the one written last;
+4. its language, `Switches ("Ada")` or `Default_Switches ("Ada")`, the one
+   written last when both are;
+5. `Switches (others)`.
+
+Around them, in this order: `Leading_Required_Switches` and
+`Required_Switches` of the language, the switches chosen above,
+`Builder'Global_Compilation_Switches` of the language from the main project,
+the compile words of `Builder'Switches`, the switches the configuration
+pragmas mean, `-g` when the build is asked for debug information, the
+compile switches of the command line, then `Trailing_Required_Switches`. A
+`.gpj` adds up the levels instead of choosing one: its options for every
+language, then the language's, then the file's own.
+
+`Builder'Global_Configuration_Pragmas` (or `Global_Config_File`) of the main
+project and `Compiler'Local_Configuration_Pragmas` (or `Local_Config_File
+("Ada")`) of each project name files of configuration pragmas. Each pragma
+there reaches the compiles of its scope as the switch it means:
+
+| Pragma | Switch |
+|---|---|
+| `Suppress (All_Checks)` | `-p` |
+| `Suppress (<check>)` | `--suppress=<check>` |
+| `Warnings (Off)` | `-w` |
+| `Ada_83` | `-ada83` |
+| `Assertion_Policy (Ignore)` | `--ignore-assertions` |
+
+`Warnings (On)` and `Assertion_Policy (Check)` are the defaults and change
+nothing; any other pragma there is recorded.
+
+`Builder'Switches` of the main project (with `Default_Switches`, its other
+name) is chosen as gprbuild chooses it: when one main is built, its entry
+for that main's place in a multi-unit file, else for its file, else for its
+unit; else, when the mains share a
+language (or, with no main, the project has one language), its entry for
+that language; else `Switches (others)`. With several mains and none of
+these, it is not applied, and a warning says so. The entry chosen is read as
+a builder command line: after `-cargs` (or `-cargs:<language>`) the words
+are compile switches, after `-largs` link switches, after `-bargs` binder
+switches (below); `-gargs` or `-margs` returns to builder switches, of which
+`-g` asks for debug information everywhere. A command line given with
+`--gnat` divides the same way.
+
+#### Binder switches
+
+The binder here is part of the compile of a main: it is that compile that
+reads the closure's library files, orders the elaboration and writes the
+program's entry point. The binder switches of a main — `Binder'Switches`
+for its place in a multi-unit file, else its file, else its language, else
+`others`, with `Default_Switches`, then
+the `-bargs` words of `Builder'Switches` and of the command line — reach that
+compile where they have a meaning, and the main is compiled again whenever it
+has any:
+
+| Switch | Effect |
+|---|---|
+| `-l` | the elaboration order is printed, `ELABORATION ORDER` and a line `   <unit> (spec)` or `(body)` for each unit (`--elaboration-order`) |
+| `-M<name>` | the entry point is `<name>` instead of `main`, for a program a C or C++ main starts (`--entry-point=<name>`) |
+| `-aO<dir>`, `-aI<dir>`, `-I<dir>` | the directory is searched for library files and sources (`-I`), read from the project's directory |
+| `-static`, `-x` | what is done anyway: the run time is part of every program, and consistency is checked against library files |
+
+Any other binder switch is recorded and named once: from the `Binder`
+package as `binder switch '-E' is recorded and not acted on`, in the
+`project-recorded` class; from `-bargs` on the command line as a GNAT
+binder flag that is skipped.
+
+#### Mains and linking
+
+The mains are `Main` of the projects the build starts from — the root, or
+every project an aggregate names — and a main may be given on the command
+line after the project. Each is bound and linked with every unit its
+closure needs, the units `Roots ("<main>")` (or `Roots ("*")`) adds even
+when nothing withs them, and every C and C++ object of the tree. A main
+written in C or C++ is compiled by its driver and linked by it.
+
+The program is named `Builder'Executable ("<main>")`, else the main's file
+name without its suffix — for a unit of a multi-unit file,
+`Builder'Executable ("<file>" at <n>)`, else the unit's name — with
+`Builder'Executable_Suffix`, and is written
+to the project's `Exec_Dir`. The link is given, in this order:
+`Linker'Leading_Switches` of the main; the objects, with the C and C++
+objects of the tree and the files of the externally built libraries it
+reaches; the `Linker'Linker_Options` of every project the main's closure
+reaches except the main's own project, as the format says; the main's
+`Linker'Switches` through the same ladder as the compiler's; the `-largs`
+words of the builder switches and of the command line;
+`Linker'Required_Switches`; then `Linker'Trailing_Switches`.
+`Linker'Driver` names the program that links in place of the C driver.
+`Disable_Linking` set to `"true"` compiles a project's mains and links none
+of them. A program is optimized once, when it is linked, at the `-O` level
+its main's link or compile switches ask for; a unit of its closure that
+asks for another level is warned about.
+
+#### Libraries
+
+A library project — `Library_Name` and `Library_Dir` — is compiled into its
+`Object_Dir` and then built as a library in `Library_Dir`:
+
+| `Library_Kind` | File | Built as |
+|---|---|---|
+| `static`, `static-pic` | `lib<name>.a` | one object of all its units, archived with `$AR` (else `ar`, `llvm-ar`, `gcc-ar`) together with its C and C++ objects and `Library_Options` files |
+| `dynamic`, `relocatable` | `lib<name>.so` (`.dylib`, `.dll`) | linked `-shared`, with `Leading_Library_Options` before the objects and `Library_Options` after them; thread-local data is made fit for a shared object |
+
+`Library_Version` names the shared library's file (`libname.so.1`), which
+is also its `soname`, and the plain name beside it is made a symbolic link
+to it. `Archive_Prefix`/`Archive_Suffix` and
+`Shared_Library_Prefix`/`Shared_Library_Suffix` replace the parts of the
+file name.
+
+`Library_Interface` (unit names) or `Interfaces` (file names) list the units
+other projects may with: a unit of another project that withs a unit the
+library does not list is an error before anything is compiled — `'main.adb'
+withs 'hidden', which project 'Lib' does not list among its interfaces`.
+
+A standalone library (`Library_Standalone` `"standard"` or
+`"encapsulated"`, or a `Library_Interface` with no `Library_Standalone`) has
+an initialization routine `<name>init` that elaborates its units in order,
+once however often it is called, and a finalization `<name>final` for
+clients that call one; unless `Library_Auto_Init` is `"false"` the
+initialization runs on its own when the library is loaded or the program
+starts, so a C main that knows nothing of elaboration may call into it.
+`Library_Src_Dir` receives the specifications of its interface units, and
+`Library_ALI_Dir` their `.ali` files, copied in dependency order.
+`Library_Encapsulated_Options` join an encapsulated library's link.
+
+A library that says `Externally_Built` `"true"` is never compiled or
+rebuilt: its sources are read for their specifications and its `.ali`
+files, and a main that needs it links its library file. A standalone
+library that initializes itself when it is loaded elaborates its units
+itself, before any main runs, so the copies of its `.ali` files in
+`Library_ALI_Dir` say `SL` on their unit lines, and a main bound against
+them elaborates every unit of its closure except those: each unit is
+elaborated once. When `Library_ALI_Dir` is the library's own `Object_Dir`
+(as it is when `Library_Dir` is and `Library_ALI_Dir` is not given), the
+files there stay unmarked for the library's own tree, and the marked copies
+go to `<Object_Dir>/client-ali`, which a main using the library as
+externally built searches before any other directory. The marks only
+confirm what the client's project file says: when it calls a library
+externally built, standalone and self-initializing, the builder hands the
+library's `.ali` directory and object directory to every compile
+(`--elaborated-by-library=<dir>`), and a main bound against them leaves each
+unit whose `.ali` file is there to the library, even when the library was
+built by another tool and its files carry no mark. When the client's project
+file says an externally built project does not initialize itself — a
+library with `Library_Auto_Init` `"false"`, one that is not standalone, or
+no library at all — its directories go as `--elaborated-by-main=<dir>`, and
+the main elaborates those units whatever marks their files carry, stale ones
+from an earlier build or another tool's included. A library built with
+`Library_Auto_Init` `"false"` leaves its copies unmarked, and the main
+elaborates its units. Within one build, a main that withs a library
+project's units is linked with those units directly; the library file is
+the product for clients outside the tree.
+
+#### Aggregate projects
+
+An `aggregate` project names other projects in `Project_Files` — files or
+patterns (`"agg/*.gpr"`, `"**/*.gpr"`), `.gpr` or `.gpj` — and builds each
+of them as if it had been named by `-P`, all in one build: every aggregated
+project's mains are linked. `External ("NAME")` gives every aggregated
+project a scenario value, below a `-X` definition and above the
+environment. An `aggregate library` project builds one library from the
+units of every project it aggregates, with the library attributes above. A
+configuration project is read like any other and its toolchain attributes
+are recorded.
+
+#### Reading a `.gpj`
+
+A `.gpj` begins with `#!gbuild`. Every other line is a directive, an option
+line, a setting, or an entry, and `#` begins a comment at the start of a
+line or after a blank, outside quotes. Words may be quoted with `"` or `'`, and a backslash separates
+directories as `/` does.
+
+The tag of the file (its first `[Tag]` line) gives the project's kind, and
+the tag after an entry gives the entry's role:
+
+| Tag | Project | Entry |
+|---|---|---|
+| `[Project]`, `[Subproject]`, `[Reference]` | standard | a source, or the subproject a `.gpj` entry names |
+| `[Program]` | standard, its main found among its sources when no entry is tagged `[Program]` | a main |
+| `[Library]` | a static library | a source |
+| `[Shared Object]` | a dynamic library | a source |
+| `[Ada]`, `[C]`, `[C++]` | — | a source of that language |
+| `[Text]`, `[Documentation]` | — | listed, never compiled |
+| `[Custom Target]`, `[INTEGRITY Application]` | — | recorded |
+
+An entry ending in `.gpj` is a subproject, read with the options of the
+project that names it: every option line above it in the parent applies to
+the child before the child's own, and the parent's object directory is the
+child's unless the child writes one. The option lines that follow a
+subproject entry belong to that reference alone; a reference with its own
+`-o` is another instance of the same file, built a second time with its own
+options into its own library file and object subdirectory.
+
+The option lines:
+
+| Option | Meaning |
+|---|---|
+| `-object_dir=<dir>` | the object directory |
+| `-I<dir>` | a directory searched for sources and headers |
+| `-o <name>` | the program or library the project builds |
+| `-l<name>`, `-L<dir>`, `-e <symbol>`, `-map`, `-Wl,<…>` | link options |
+| `-O…`, `-g` | the optimization level and debug information, every language |
+| `-D…`, `-U…`, `-W…` | compile options for C and C++ |
+| `-f…`, `-m…`, `-language=<name>` | options of the target toolchain, recorded |
+
+Any other option line is read through the Green Hills table of
+[F.6](#f6-dialect-compatibility---gnat---greenhills); one it does not know
+is a compiler switch. An option under a source entry is that file's own.
+
+The settings, written `:name=value` on an option line: `:sourceDir` is the
+directory the entries are named from; `:outputDir` and `:outputDirRelative`
+the object directory; `:binDir` and `:binDirRelative` where the program goes
+(or the library); `:optionsFile` a file of option lines read in place. The
+settings of custom build steps — `:depends`, `:outputName`,
+`:extraOutputFile`, `:preexec`, `:preexecShell`, `:postexec`,
+`:postexecShell` — are recorded.
+
+The directives: `macro NAME=VALUE` defines a macro, below a `-X` definition
+of the same name; `import NAME` names an environment variable the project
+relies on; `defineConfig ("Name" "ABBREV" "file")` names a build
+configuration whose file of option lines applies to the whole project, the
+first one written being the default and `-X cfg=<Name>` choosing another;
+`primaryTarget` and `customization` are recorded.
+
+`$(NAME)` and `${NAME}` read a macro, a `-X` definition or an environment
+variable, in every kind of line; a name none of them defines is an error.
+`${%option_value(-opt)}` is the value the project's option `-opt` has so far,
+an inherited one included, and `${%expand_path(dir)}` that directory
+resolved from the project's.
+A line may begin with a condition in braces, and counts only when the
+condition holds: `{isdefined(NAME)}`, `{"$(A)" == "x"}`, `!=`, `!`, `&&`,
+`||` and parentheses; `{comment}` never counts and `{optional}` counts when
+the file exists. An entry that does not count takes its option lines with
+it.
+
+#### Editor queries
+
+`--plan-json` prints the plan as JSON: every project with its file,
+qualifier, kind, attributes and the recorded ones, packages, edges, library
+(file, kind, interface, standalone, auto-init, directories), mains (with the
+executable each links), and the externals with their origins. `--externals`
+prints only the externals, with the values a typed one may take.
+`--project-stdin` reads the text of the `-P` file from standard input,
+so an editor can have an unsaved buffer diagnosed at its own lines while
+its imports are still found beside the file on disk. `--project-schema`
+prints the registry as JSON — every package, every attribute with its
+package, index, value kind, values, default and meaning, every built-in,
+and every `.gpj` tag, option, setting and directive — which is what an
+editor's completion and hover are built from.
 
 ### F.6 Dialect compatibility (--gnat, --greenhills)
 
@@ -18549,15 +19523,18 @@ skipped.
 
 `-cargs`, `-bargs` and `-largs` divide a GNAT command line into compiler,
 binder and linker arguments. After `-largs`, every word up to the next
-marker is passed to the linker; after `-bargs`, the words are read and set
-aside, with one warning that `'-bargs' binder arguments are accepted and
-not acted on`; `-cargs` returns to compiler options.
+marker is passed to the linker; after `-bargs`, every word is a binder flag,
+acted on as [F.5](#f5-project-files--p) states under *Binder switches* —
+`-l`, `-M<name>`, `-aO`, `-aI` and `-I` act, `-static` and `-x` are what is
+done anyway — and any other warns, `'-shared' is a GNAT binder flag this
+compiler does not support; skipped`; `-cargs` returns to compiler options.
 
 ### F.7 The legacy library
 
 `turboada-runtime-legacy.ada` holds the predefined string and container
 packages of the current standard's annex A (ISO/IEC 8652:2023, A.3, A.4
-and A.18), written in the language of this manual. It is the second
+and A.18) and the two children of `Ada.Text_IO` that take them (A.10.11
+and A.10.12), written in the language of this manual. It is the second
 library file of this implementation, found beside the compiler's
 executable exactly as `turboada-runtime.ada` is, and its units are served
 the same way, one at a time, as the with clauses of a program reach them
@@ -18585,26 +19562,33 @@ The units it provides, and what each leaves out:
 | `Ada.Strings.Bounded` | `Generic_Bounded_Length`, and the generic functions `Hash`, `Hash_Case_Insensitive`, `Equal_Case_Insensitive`, `Less_Case_Insensitive` | — |
 | `Ada.Strings.Unbounded` | every operation of A.4.5; `Unbounded_String` is a controlled type, so assignment copies the value and finalization frees it | — |
 | `Ada.Strings.Hash`, `Ada.Strings.Hash_Case_Insensitive`, `Ada.Strings.Equal_Case_Insensitive`, `Ada.Strings.Less_Case_Insensitive`, and the same four as children of `Fixed` and of `Unbounded` | the library functions of A.4.9, A.4.10 and A.4.11 | — |
-| `Ada.Containers` | `Hash_Type`, `Count_Type`, `Capacity_Error` | — |
+| `Ada.Containers` | `Hash_Type`, `Count_Type`, `Capacity_Error`; `Object_Lock`, the protected type that is the lock of a `Task_Safe` container; the generic packages `Vector_Core`, `List_Core` and `Holder_Core` that the three forms of the sequence containers are made from, and the storage packages `Direct_Storage` and `Indirect_Storage` they take | — |
 | `Ada.Containers.Generic_Array_Sort`, `Generic_Constrained_Array_Sort`, `Generic_Sort` | the sorts of A.18.26 | — |
 | `Ada.Containers.Vectors`, `Doubly_Linked_Lists`, `Ordered_Maps`, `Ordered_Sets`, `Hashed_Maps`, `Hashed_Sets` | the containers of A.18.2 to A.18.9, with `Generic_Sorting` and `Generic_Keys` | the nested `Stable` packages |
 | the `Indefinite_` form of each of the six | A.18.11 to A.18.16 | as for the definite form |
 | the `Bounded_` form of each of the six | A.18.19 to A.18.24 | as for the definite form |
 | `Ada.Containers.Indefinite_Holders`, `Ada.Containers.Bounded_Indefinite_Holders` | A.18.18 and A.18.32 | — |
+| `Ada.Text_IO.Unbounded_IO` | `Put`, `Put_Line` and `Get_Line` of A.10.12 for `Unbounded_String`, with and without a file; `Ada.Text_IO` is another name for TEXT_IO, so the unit is the child `Text_IO.Unbounded_IO` of that package, and `with Ada.Text_IO.Unbounded_IO;` names it ([10.1.1](#1011-context-clauses---with-clauses)) | — |
+| `Ada.Text_IO.Bounded_IO` | the same of A.10.11 for the `Bounded_String` of its formal package, an instance of `Generic_Bounded_Length`; a generic child `Text_IO.Bounded_IO`, instantiated as `package BIO is new Ada.Text_IO.Bounded_IO (B);` | — |
+| `Interfaces` | B.2: `Integer_8` to `Integer_64`, `Unsigned_8` to `Unsigned_64` with their sizes given, `Shift_Left`, `Shift_Right`, `Shift_Right_Arithmetic`, `Rotate_Left` and `Rotate_Right` for each unsigned type, `IEEE_Float_32` and `IEEE_Float_64` | the shifts are ordinary functions, not intrinsic ones |
+| `Interfaces.C` | B.3: `int`, `short`, `long`, `long_long`, `signed_char`, `unsigned`, `unsigned_short`, `unsigned_long`, `unsigned_long_long`, `unsigned_char`, `plain_char`, `ptrdiff_t`, `size_t`, `C_float`, `double`, `long_double`, `C_bool` (a byte), `char`, `nul`, `char_array`, `Is_Nul_Terminated`, the `To_C` and `To_Ada` functions and procedures, `Terminator_Error`; `long` and `unsigned_long` are `SYSTEM.C_LONG_BITS` wide, 32 bits on Windows and 64 elsewhere | `wchar_t`, `char16_t`, `char32_t` and their arrays; `char` is derived from CHARACTER, so a byte above 127 reads as `'?'` |
+| `Interfaces.C.Strings` | B.3.1: `chars_ptr` (one address wide), `chars_ptr_array`, `char_array_access`, `Null_Ptr`, `To_Chars_Ptr`, `New_Char_Array`, `New_String`, `Free`, `Value` (four forms), `Strlen`, `Update` (two forms) and the three exceptions; strings are allocated with C's `malloc` and freed with its `free` | — |
+
+`Interfaces.Fortran` and `Interfaces.COBOL` are not provided, and
+`Interfaces.C.Pointers` neither; a with clause naming one is refused with
+the reason. The generated SYSTEM declares `C_LONG_BITS`, the width of the
+target's C `long`, which `Interfaces.C` is written in terms of.
 
 Nothing else of annex A is provided: no `Wide_` or `Wide_Wide_` form of
 any string unit, no `Ada.Strings.UTF_Encoding`, `Ada.Strings.Text_Buffers`
 or `Ada.Characters.Conversions`, no synchronized queues, no multiway
-trees, and no `Ada.Text_IO.Unbounded_IO` or `Ada.Text_IO.Bounded_IO`:
-`Ada.Text_IO` is another name for TEXT_IO, a package of this compiler's
-own library that cannot take a child, so a program writes
-`Put_Line (To_String (Item))`. A with clause naming any of these is
-refused with the reason.
+trees, and no other child of `Ada.Text_IO`. A with clause naming any of
+these is refused with the reason.
 
 **How the units are named.** The generic units that the standard declares
 as generic children — the containers, the three sorts, and the four
 generic functions of `Ada.Strings.Bounded` — are declared inside their
-parent package, because a generic child unit is not accepted
+parent package; `Ada.Text_IO.Bounded_IO` alone is a generic child unit
 ([10.1.1](#1011-context-clauses---with-clauses)). A with clause names them
 as the standard does, `with Ada.Containers.Vectors;`, and is a with clause
 naming the parent; `package Integer_Vectors is new
@@ -18656,34 +19640,233 @@ rest follows from that:
   arrives, and grows to 2N + 1 buckets when its length reaches their
   number N; iteration visits the buckets in order, so the order in which
   a hashed container yields its elements follows their hash values and
-  the container's history.
+  the container's history. `Assign` and a copy reproduce the source's
+  buckets rather than rehash into the target's.
+- The twelve map and set units are instantiations of four cores declared
+  in the package `Ada.Containers.Balanced_Trees`: `Maps` and `Sets` over
+  one height-balanced tree, `Hashed_Maps` and `Hashed_Sets` over one
+  bucket table, each taking its key and element storage from a policy
+  (`Definite`, which keeps the value in the node, or `Indefinite`, which
+  keeps it on the heap). An instance of `Ordered_Maps` and the others
+  therefore holds visible packages `Keys`, `Elements` and `Core`, and its
+  `Map` or `Set` is a subtype of the core's; the operations are renamings
+  of the core's. The core type of an ordered container carries a
+  `Capacity` discriminant, `Count_Type'Last` for the unbounded forms, so
+  `M.Capacity` is defined on them too; the core type of a hashed container
+  carries a `Limit` discriminant with the same meaning (`Capacity` being
+  its bucket count), which the unbounded forms fix at `Count_Type'Last`
+  and whose `Empty`, `Copy` and `To_Set` are expression functions over the
+  core's rather than renamings. `Bounded_Hashed_Maps` and
+  `Bounded_Hashed_Sets` are records with the discriminants the standard
+  gives, holding the core constrained to their `Capacity`, so the core
+  itself refuses the element that would exceed it.
+- Every formal of the twelve map and set units but `Key_Type` and
+  `Element_Type` has a default: `"<"` and `"="` are `is <>`,
+  `Equivalent_Keys` and `Equivalent_Elements` are `is "="`, the equality
+  of the actual type (its own `"="` where it declares one, as
+  `Unbounded_String` does, the predefined one otherwise), `Hash` is
+  `is <>`, so a visible `Hash` for the key type is taken, and
+  `Task_Safe` is `False`. The `Generic_Keys` of a set unit defaults its
+  `"<"`, `Hash` and `Equivalent_Keys` the same way. An ordered map
+  therefore needs only its two types,
+  `package Counts is new Ada.Containers.Ordered_Maps (String, Natural);`,
+  and so does a hashed map keyed by `Unbounded_String` once
+  `Ada.Strings.Unbounded.Hash` is withed and its parent used.
+- Each of the twelve map and set units takes a last formal
+  `Task_Safe : Boolean := False`. With `Task_Safe => True` every operation
+  of a map or set is atomic with respect to every other operation on the
+  same object from any task: the operation seizes the object's lock on
+  entry and releases it on every exit, exceptions included. The lock is
+  one heap object per container, allocated when the container is
+  initialized, freed when it is finalized, and fresh (not shared) after
+  assignment. Operations that only read (`Length`, `Find`, `Contains`,
+  `Element`, `First`, `Next`, `"="`, ...) share the lock with one another
+  and exclude every operation that writes; `Iterate` with a procedure,
+  `Reverse_Iterate` and `Query_Element` hold the lock for the whole walk
+  or call, during which a reading operation of the same container — from
+  the callback or from another task — is admitted and a writing one
+  waits, so a callback that writes to the container it is walking
+  deadlocks. `Update_Element` and `Update_Element_Preserving_Key` hold
+  the lock exclusively. An operation on two objects (`Assign`, `Move`,
+  `Union` and the other set operations, `"="`) locks both, always in the
+  same order, so two tasks calling them in opposite directions do not
+  deadlock. `First`, `Next` and `Element` on a cursor each lock for their
+  own duration, and the body of a `for` loop runs unlocked. The lock does
+  not cover what is not an operation of the container: assignment with
+  `:=` locks only the source while it is copied, a `Reference` or
+  `Constant_Reference` is used after its lock is released, and a
+  `Bounded_Hashed_` record's own discriminants are read unlocked. An
+  instance that leaves `Task_Safe` at `False` takes every lock behind
+  `if Task_Safe then` folded at instantiation, and runs as before.
 - `Hash_Type` is `mod 2**32` and `Count_Type` is `range 0 .. 2**31 - 1`.
   `Ada.Strings.Hash` is the 32-bit FNV-1a function of the characters'
   positions; the case-insensitive forms hash the value `To_Lower` gives.
-- `Generic_Array_Sort`, `Generic_Constrained_Array_Sort` and the
-  `Generic_Sorting.Sort` of a vector are heapsorts, which take N log N
-  comparisons at worst and are not stable; `Generic_Sort` is a heapsort
-  through `Before` and `Swap`. The `Sort` of a list is a merge sort that
-  relinks the nodes and is stable.
+- `Generic_Sort` is a heapsort through `Before` and `Swap`, which takes
+  N log N comparisons at worst and is not stable; `Generic_Array_Sort`,
+  `Generic_Constrained_Array_Sort` and the `Generic_Sorting.Sort` of a
+  vector are instances of it over the array or the vector's storage, so
+  they compare and exchange the elements in place and allocate nothing.
+  The `Merge` of a vector walks both vectors from the back into the
+  target's own storage. The `Sort` of a list is a merge sort that relinks
+  the nodes and is stable.
 - The ordered forms keep their elements in a height-balanced tree, so
   every operation that finds, inserts or deletes by key takes log N
   comparisons.
-- A `Bounded_` container is a record whose discriminant is its capacity,
-  holding the unbounded form of the same container: it raises
-  Capacity_Error rather than grow, as the standard says, and assignment
-  between two of different capacities raises Constraint_Error, but its
-  storage comes from the heap, not from the object itself.
+- `Vectors`, `Indefinite_Vectors` and `Bounded_Vectors` are three
+  instances of the one generic `Vector_Core`, as the three list forms are
+  of `List_Core` and the two holders of `Holder_Core`: each public form
+  instantiates the core in its visible part, with `Direct_Storage` (the
+  element itself in the container's storage) or `Indirect_Storage` (a
+  pointer to a copy of the element on the heap, so that insertion and
+  deletion move pointers and never copy an element), and declares its
+  own type as a subtype of the core's, and every operation as a renaming
+  of the core's. The instance therefore holds two nested packages,
+  `Storage` and `Core`, that the standard does not name. A vector grows
+  by doubling, and inserts and deletes by moving the tail as a block.
+- A sequence container's type carries the discriminant `Bound : Count_Type := 0`,
+  which is the capacity of a `Bounded_` container and 0 for the other
+  forms; it is named `Bound`, not `Capacity`, so that `V.Capacity` is the
+  function in every form. A `Bounded_` container is therefore declared
+  `V : Vector (5)`, and `L.Capacity` of a bounded list is a function this
+  library adds. A `Bounded_` container raises Capacity_Error rather than
+  grow, before it has changed anything, as the standard says; assignment
+  between two of different capacities raises Constraint_Error; and its
+  storage comes from the heap, not from the object itself. An unbounded
+  container declared with a constraint, or allocated with `new`, keeps
+  the discriminant 0 and grows as any other.
 - The formal object `Max_Element_Size_in_Storage_Elements` of
   `Bounded_Indefinite_Holders` is of type `Count_Type`, since
   `System.Storage_Elements` does not exist; storing an element whose
   `'Size` exceeds that many storage units raises Program_Error, and the
   element is held on the heap.
+- The generic formals have defaults wherever a sensible one exists, in
+  the forms of the generic-formal-defaults extension
+  ([12.1](#121-generic-declarations)): `Index_Type` of `Vectors`,
+  `Indefinite_Vectors`, `Bounded_Vectors`, `Generic_Array_Sort` and
+  `Generic_Sort` is `range <> or use Positive` (or `(<>) or use Positive`
+  for the sorts), every `"="` and `"<"` formal is `is <>`, and
+  `Task_Safe` below is `:= False`; `Element_Type` and
+  `Max_Element_Size_in_Storage_Elements` have no default. An
+  instantiation therefore names only what it must:
+  `package Integer_Vectors is new Ada.Containers.Vectors (Element_Type => Integer);`
+  is complete, and so is `new Ada.Containers.Generic_Array_Sort
+  (Element_Type => Integer, Array_Type => Integer_Array)` for an array
+  indexed by Positive.
+- Every sequence container generic — `Vectors`, `Doubly_Linked_Lists`,
+  `Indefinite_Holders`, and their `Indefinite_` and `Bounded_` forms —
+  takes one more formal, last, `Task_Safe : Boolean := False`. With
+  `Task_Safe => True` every operation of the instance is atomic with
+  respect to every other operation on the same object from any task:
+  each operation seizes the object's lock on entry and releases it on
+  every exit, an exception included. The lock is one protected object
+  per container, allocated when the container is initialized, freed when
+  it is finalized, and fresh, not shared, after an assignment or a
+  `Copy`; `Move` exchanges the contents of the two containers and leaves
+  each its own lock. An operation on two containers — `"="`, `"&"`,
+  `Assign`, `Move`, `Insert_Vector`, `Splice`, `Merge`, a holder's
+  `Swap` — seizes both locks in one fixed order, so two tasks running
+  such operations against each other cannot deadlock. `First`, `Next`,
+  `Element`, `Has_Element` and the other operations on a cursor each
+  lock for their own duration, and the body of a `for` loop runs
+  unlocked, as it must. The callback forms — `Query_Element`,
+  `Update_Element`, `Iterate` and `Reverse_Iterate` — take the lock to
+  raise and to lower the tampering counters but do not hold it while
+  `Process` runs: the lock is not reentrant, since one task cannot be
+  told from another, and `Process` must be free to call `Element`,
+  `Length` or any other operation of the same container, which it
+  could not under a held lock. A change of the container's structure
+  attempted by another task during a walk is therefore refused with
+  Program_Error, as tampering is, rather than delayed, while reads and
+  element replacements from other tasks interleave with the walk, one
+  at a time. An instance that leaves `Task_Safe` False takes no lock
+  and allocates none: every operation is the unlocked body behind a
+  test of the formal, and the locking bodies sit in a nested package of
+  their own that such an instance never enters. The compiler folds a
+  formal object whose actual is static to its value, through every
+  instance that passes its own formal down, so the test and the locking
+  bodies vanish from a default instance; what remains is one forwarding
+  function and its prologue per operation, measurable only on the
+  tightest loops over a vector of Integer.
 
 A program may use the library without any of this in view: the
 reproducers in `repro/` named `the_legacy_library_*` exercise what a user
 relies on — the string operations, a vector growing, iterating, indexing
 and deleting, an ordered map in key order, hashed set membership,
-indefinite vectors of String, the sorts, and the bounded forms.
+indefinite vectors of String, the sorts, and the bounded forms — and
+those named `the_legacy_*` what the implementation had to get right: a
+vector of strings moving its elements, the bounded forms refusing before
+they change, `Merge` in place, the locks released when a callback
+raises, a vector inserted into itself, four tasks hammering `Task_Safe`
+sequences and four more hammering `Task_Safe` maps and sets, and
+instantiations that name only `Element_Type`.
+
+### F.8 The API library
+
+`turboada-runtime-apis.ada` holds bindings to the C interfaces of eight
+libraries: `SDL` (SDL 3), `OpenAL`, `Vulkan`, `OpenGL`, `DirectX` with its
+children `DirectX.DXGI`, `DirectX.D3D12`, `DirectX.D3D11` and
+`DirectX.D3DCompiler`, `Zlib`, `Opus`, `Metal` and `Sockets`. It is the third library
+file of this implementation, found beside the compiler's executable as
+`turboada-runtime.ada` is, read only when a with clause names a unit whose
+first name is one of these eight, and served one unit at a time as the
+legacy library's are ([F.7](#f7-the-legacy-library)). A with clause naming
+such a unit while the file is missing, or a unit the file does not hold, is
+an error with a note saying where the unit is looked for. A program that
+declares a library unit of the same name in its own sources keeps its own.
+
+The bindings keep the C names: `SDL_Init`, `SDL_WINDOW_VULKAN`,
+`VkInstanceCreateInfo`, `vkCreateInstance`, `alGenSources`, `glDrawArrays`,
+`deflateInit2_`, `opus_encode`. An opaque handle or `void *` is
+`System.Address`; a C integer, floating or character type is the type of
+`Interfaces` or `Interfaces.C` of the same width; `const char *` is
+`Interfaces.C.Strings.chars_ptr`; a struct is a record of convention C; an
+enumeration is a subtype of its C integer type with one constant per
+enumerator; a callback is an access-to-subprogram type of convention C; a
+C macro that computes a value is a constant or an expression function. A
+name that differs from another only in case, or that is a reserved word,
+is renamed consistently. Variadic C functions are left out.
+
+Each package names its libraries with pragma DYNAMIC_LIBRARY
+([F.1](#f1-implementation-dependent-pragmas)), so a program that names one
+of these units is linked without any of them and binds each function the
+first time it calls it:
+
+| Unit | Libraries, in the order tried |
+|---|---|
+| `SDL` | `libSDL3.so.0`, `libSDL3.so`, `SDL3.dll`, `libSDL3.0.dylib`, `libSDL3.dylib`, `SDL3.framework/SDL3` |
+| `OpenAL` | `libopenal.so.1`, `libopenal.so`, `OpenAL32.dll`, `soft_oal.dll`, `libopenal.1.dylib`, `libopenal.dylib`, the system's `OpenAL.framework` |
+| `Vulkan` | `libvulkan.so.1`, `libvulkan.so`, `vulkan-1.dll`, `libvulkan.1.dylib`, `libvulkan.dylib`, `libMoltenVK.dylib` |
+| `OpenGL` | `libGL.so.1`, `libGL.so`, `libOpenGL.so.0`, `opengl32.dll`, the system's `OpenGL.framework`; then the resolvers `wglGetProcAddress`, `glXGetProcAddressARB`, `glXGetProcAddress` |
+| `DirectX` | `dxgi.dll`, `d3d12.dll`, `d3d11.dll`, `d3dcompiler_47.dll`, each child naming its own |
+| `Zlib` | `libz.so.1`, `libz.so`, `zlib1.dll`, `libz.1.dylib`, `libz.dylib` |
+| `Opus` | `libopus.so.0`, `libopus.so`, `opus.dll`, `libopus-0.dll`, `libopus.0.dylib`, `libopus.dylib` |
+| `Metal` | the system's `libobjc.A.dylib`, `Metal.framework`, `QuartzCore.framework` and `Foundation.framework` |
+
+A program that names a unit whose library its platform does not have —
+`DirectX` off Windows, `Metal` off macOS, or a library not installed —
+compiles, links and runs, and raises PROGRAM_ERROR at its first call of a
+function no library provides, with a message naming the function and the
+files looked in.
+
+**The libraries that ship with the compiler.** The libraries that are not
+part of an operating system come with the compiler, in the archive
+`bin-libraries.zip`, one folder per target: SDL 3, OpenAL Soft, zlib and
+Opus. The build scripts unpack the target's folder beside the compiler and
+`make package` ships it. When the compiler links a program, it copies
+beside the program each file that a package the program names, directly or
+through the units it names, lists in pragma DYNAMIC_LIBRARY, that is
+present beside the compiler, and that is not already beside the program;
+the program looks in its own directory
+first, so it runs where it was built and in any folder it is copied to
+with those files. A library that does not load there, built for a newer
+system than the one running the program, is passed over for the system's
+own.
+
+| Target | Shipped beside the compiler |
+|---|---|
+| Windows | `SDL3.dll` and `soft_oal.dll`, the projects' own release builds; `zlib1.dll` and `opus.dll`, built from their releases |
+| Linux | `libSDL3.so.0`, `libopenal.so.1`, `libz.so.1` and `libopus.so.0`, built from their releases |
+| macOS | `libSDL3.0.dylib`, from the SDL release; `libopus.0.dylib`, built from its release; zlib and OpenAL are the system's |
 
 ---
 

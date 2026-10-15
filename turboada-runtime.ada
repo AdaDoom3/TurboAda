@@ -126,6 +126,18 @@ package Text_IO is
     procedure Put (To : out String; Item : Number; Base : Number_Base := Default_Base);
   end;
   generic
+    type Number is mod<>;
+  package Modular_IO is
+    Default_Width : Field       := Number'Width;
+    Default_Base  : Number_Base := 10;
+    procedure Get (File : File_Type; Item : out Number; Width : Field := 0);
+    procedure Get (From : String; Item : out Number; Last : out Positive);
+    procedure Get (Item : out Number; Width : Field := 0);
+    procedure Put (File : File_Type; Item : Number; Width : Field := Default_Width; Base : Number_Base := Default_Base);
+    procedure Put (Item : Number; Width : Field := Default_Width; Base : Number_Base := Default_Base);
+    procedure Put (To : out String; Item : Number; Base : Number_Base := Default_Base);
+  end;
+  generic
     type Number is digits<>;
   package Float_IO is
     Default_Fore : Field := 2;
@@ -178,6 +190,8 @@ private
 end;
 with System;
 package body Text_IO is
+  type C_Size is range 0 .. 2 ** 63 - 1;
+  type C_Long is range -(2 ** (System.C_Long_Bits - 1)) .. 2 ** (System.C_Long_Bits - 1) - 1;
   type Long_Real is digits 15;
 
   function C_Fopen (Name : System.Address; Mode : System.Address) return System.Address;
@@ -192,8 +206,9 @@ package body Text_IO is
   function C_Fgetc (Stream : System.Address) return Integer;
   pragma Import (C, C_Fgetc, "fgetc");
 
+  function C_Fwrite_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fwrite_Raw, "fwrite");
   function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fwrite, "fwrite");
 
   function C_Fflush (Stream : System.Address) return Integer;
   pragma Import (C, C_Fflush, "fflush");
@@ -201,22 +216,35 @@ package body Text_IO is
   function C_Remove (Name : System.Address) return Integer;
   pragma Import (C, C_Remove, "remove");
 
+  function C_Ftell_Raw (Stream : System.Address) return C_Long;
+  pragma Import (C, C_Ftell_Raw, "ftell");
   function C_Ftell (Stream : System.Address) return Integer;
-  pragma Import (C, C_Ftell, "ftell");
 
+  function C_Fseek_Raw (Stream : System.Address; Offset : C_Long; Whence : Integer) return Integer;
+  pragma Import (C, C_Fseek_Raw, "fseek");
   function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer;
-  pragma Import (C, C_Fseek, "fseek");
 
   function C_Tmpfile return System.Address;
   pragma Import (C, C_Tmpfile, "tmpfile");
 
+  function C_Getenv (Name : System.Address) return System.Address;
+  pragma Import (C, C_Getenv, "getenv");
+
+  function C_Getpid return Integer;
+  pragma Import (C, C_Getpid, "getpid");
+
+  function C_Memcpy (Target : System.Address; Source : System.Address; Length : C_Size) return System.Address;
+  pragma Import (C, C_Memcpy, "memcpy");
+
   function C_Fgets (Buffer : System.Address; Size : Integer; Stream : System.Address) return System.Address;
   pragma Import (C, C_Fgets, "fgets");
 
+  function C_Memchr_Raw (Buffer : System.Address; Value : Integer; Length : C_Size) return System.Address;
+  pragma Import (C, C_Memchr_Raw, "memchr");
   function C_Memchr (Buffer : System.Address; Value : Integer; Length : Integer) return System.Address;
-  pragma Import (C, C_Memchr, "memchr");
+  function C_Strlen_Raw (Buffer : System.Address) return C_Size;
+  pragma Import (C, C_Strlen_Raw, "strlen");
   function C_Strlen (Buffer : System.Address) return Integer;
-  pragma Import (C, C_Strlen, "strlen");
 
   function C_Stdin return System.Address;
   pragma Import (C, C_Stdin, "__ada_stdin");
@@ -255,10 +283,36 @@ package body Text_IO is
   Current_Output_Slot   :          Integer        := 2;
   Current_Error_Slot    :          Integer        := 3;
   Next_FCB              :          Integer        := 4;
+  Temporary_Serial      :          Integer        := 0;
   Null_Address          : constant System.Address := System.Null_Address;
   Put_Line_Buffer_Limit : constant Integer        := 4096;
   Get_Line_Chunk        : constant Integer        := 512;
 
+
+  function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fwrite_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fwrite;
+
+  function C_Ftell (Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Ftell_Raw (Stream));
+  end C_Ftell;
+
+  function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer is
+  begin
+    return C_Fseek_Raw (Stream, C_Long (Offset), Whence);
+  end C_Fseek;
+
+  function C_Memchr (Buffer : System.Address; Value : Integer; Length : Integer) return System.Address is
+  begin
+    return C_Memchr_Raw (Buffer, Value, C_Size (Length));
+  end C_Memchr;
+
+  function C_Strlen (Buffer : System.Address) return Integer is
+  begin
+    return Integer (C_Strlen_Raw (Buffer));
+  end C_Strlen;
 
   procedure To_C_String (S : String; Buffer : out String) is
     J : Integer := 1;
@@ -345,6 +399,72 @@ package body Text_IO is
         end if;
       end loop;
     end;
+  function Open_Temporary return System.Address is
+    Mode_Text   : constant String         := 'w' & '+' & 'b' & 'D' & Character'Val (0);
+    TMP_Name    : constant String         := "TMP" & Character'Val (0);
+    TEMP_Name   : constant String         := "TEMP" & Character'Val (0);
+    TMPDIR_Name : constant String         := "TMPDIR" & Character'Val (0);
+    Prefix      : constant String         := "ta_tmp_";
+    Stream      :          System.Address := C_Tmpfile;
+    Pointer     :          System.Address;
+    Name_Buffer :          String (1..1100);
+    Last        :          Integer        := 0;
+    Length      :          Integer;
+    Ignore      :          Integer;
+    Scratch     :          System.Address;
+    procedure Append_Number (Value : Integer) is
+      Digits_Text :          String (1..12);
+      Remaining   :          Integer       := Value;
+      Count       :          Integer       := 0;
+      begin
+        if Remaining < 0 then Remaining := 0; end if;
+        loop
+          Count := Count + 1;
+          Digits_Text (Count) := Character'Val (Character'Pos ('0') + Remaining mod 10);
+          Remaining := Remaining / 10;
+          exit when Remaining = 0;
+        end loop;
+        for I in reverse 1..Count loop
+          Last := Last + 1;
+          Name_Buffer (Last) := Digits_Text (I);
+        end loop;
+      end;
+    begin
+      if Stream /= Null_Address then
+        return Stream;
+      end if;
+      Pointer := C_Getenv (TMP_Name'Address);
+      if Pointer = Null_Address then Pointer := C_Getenv (TEMP_Name'Address); end if;
+      if Pointer = Null_Address then Pointer := C_Getenv (TMPDIR_Name'Address); end if;
+      if Pointer /= Null_Address then
+        Length := C_Strlen (Pointer);
+        if Length > 0 and then Length <= 1000 then
+          Scratch := C_Memcpy (Name_Buffer'Address, Pointer, C_Size (Length));
+          Last := Length;
+        end if;
+      end if;
+      if Last = 0 then
+        Name_Buffer (1) := '.';
+        Last := 1;
+      end if;
+      Last := Last + 1;
+      Name_Buffer (Last) := '/';
+      for I in Prefix'Range loop
+        Last := Last + 1;
+        Name_Buffer (Last) := Prefix (I);
+      end loop;
+      Append_Number (C_Getpid);
+      Last := Last + 1;
+      Name_Buffer (Last) := '_';
+      Temporary_Serial := Temporary_Serial + 1;
+      Append_Number (Temporary_Serial);
+      Name_Buffer (Last + 1) := Character'Val (0);
+      Stream := C_Fopen (Name_Buffer'Address, Mode_Text'Address);
+      if Stream /= Null_Address then
+        Ignore := C_Remove (Name_Buffer'Address);
+      end if;
+      return Stream;
+    end;
   procedure Create (File : in out File_Type; Mode : File_Mode := Out_File; Name : String := ""; Form : String := "") is
     Table_Slot  :          Integer;
     Mode_Text   : constant String := Open_Mode_String (Mode);
@@ -368,7 +488,7 @@ package body Text_IO is
         File_Control_Blocks (Table_Slot).Name_Length := Name'Length;
         File_Control_Blocks (Table_Slot).Name (1..Name'Length) := Name;
       else
-        File_Control_Blocks (Table_Slot).Stream := C_Tmpfile;
+        File_Control_Blocks (Table_Slot).Stream := Open_Temporary;
         if File_Control_Blocks (Table_Slot).Stream = Null_Address then
           Next_FCB := Next_FCB - 1;
           raise Use_Error;
@@ -2020,6 +2140,99 @@ package body Text_IO is
         To (To'Last - Img'Length + 1..To'Last) := Img;
       end;
   end;
+  package body Modular_IO is
+    function Image_In_Base (Item : Number; Base : Number_Base) return String is
+      Digit_Set : constant String  := "0123456789ABCDEF";
+      Temporary :          String (1..130);
+      T         :          Integer := 0;
+      W         :          Number  := Item;
+      Radix     :          Number  := Number'First;
+      Fits      :          Boolean := True;
+      begin
+        if Base = 10 then
+          return Without_Leading_Blank (Number'Image (Item));
+        end if;
+        for I in 1..Integer (Base) loop
+          if Radix = Number'Last then Fits := False; exit; end if;
+          Radix := Number'Succ (Radix);
+        end loop;
+        if not Fits then
+          T := 1; Temporary (1) := Digit_Set (Integer (Item) + 1);
+        elsif W = Number'First then
+          T := 1; Temporary (1) := '0';
+        else
+          while W /= Number'First loop
+            T := T + 1;
+            Temporary (T) := Digit_Set (Integer (W mod Radix) + 1);
+            W := W / Radix;
+          end loop;
+        end if;
+        declare
+          Base_Img : constant String := Without_Leading_Blank (Integer'Image (Integer (Base)));
+          Result   :          String (1..Base_Img'Length + 2 + T);
+          P        :          Integer := 1;
+          begin
+            for I in Base_Img'Range loop
+              Result (P) := Base_Img (I); P := P + 1;
+            end loop;
+            Result (P) := '#'; P := P + 1;
+            for I in reverse 1..T loop
+              Result (P) := Temporary (I); P := P + 1;
+            end loop;
+            Result (P) := '#';
+            return Result;
+          end;
+      end;
+    procedure Get (File : File_Type; Item : out Number; Width : Field := 0) is
+      Table_Slot  : Integer := File.Handle;
+      Scratch     : String (1..256);
+      Text_Length : Integer;
+      begin
+        Require_Open (Table_Slot);
+        if File_Control_Blocks (Table_Slot).Mode /= In_File then raise Mode_Error; end if;
+        Read_Number_Token (Table_Slot, Integer (Width), False, Scratch, Text_Length);
+        if Text_Length = 0 then
+          if Raw_Peek (Table_Slot) < 0 then raise End_Error; else raise Data_Error; end if;
+        end if;
+        begin
+          Item := Number'Value (Scratch (1..Text_Length));
+        exception when others => raise Data_Error;
+        end;
+      end;
+    procedure Get (Item : out Number; Width : Field := 0) is
+      begin
+        Get (File_Type'(Handle => Current_Input_Slot), Item, Width);
+      end;
+    procedure Put (File : File_Type; Item : Number; Width : Field := Default_Width; Base : Number_Base := Default_Base) is
+      begin
+        Require_Open (File.Handle);
+        if File_Control_Blocks (File.Handle).Mode = In_File then raise Mode_Error; end if;
+        Put_Right_Justified (File, Image_In_Base (Item, Base), Integer (Width));
+      end;
+    procedure Put (Item : Number; Width : Field := Default_Width; Base : Number_Base := Default_Base) is
+      begin
+        Put ((Handle => Current_Output_Slot), Item, Width, Base);
+      end;
+    procedure Get (From : String; Item : out Number; Last : out Positive) is
+      Token_Start : constant Integer := First_Nonblank (From);
+      Token_End   :          Integer;
+      begin
+        if Token_Start > From'Last then raise End_Error; end if;
+        Token_End := Scan_String_Number (From, Token_Start, False);
+        begin
+          Item := Number'Value (From (Token_Start..Token_End));
+        exception when others => raise Data_Error;
+        end;
+        Last := Token_End;
+      end;
+    procedure Put (To : out String; Item : Number; Base : Number_Base := Default_Base) is
+      Img : constant String := Image_In_Base (Item, Base);
+      begin
+        if Img'Length > To'Length then raise Layout_Error; end if;
+        for I in To'Range loop To (I) := ' '; end loop;
+        To (To'Last - Img'Length + 1..To'Last) := Img;
+      end;
+  end;
   package body Float_IO is
     procedure Get (File : File_Type; Item : out Number; Width : Field := 0) is
       Table_Slot  : Integer := File.Handle;
@@ -2463,24 +2676,38 @@ private
 end;
 with System;
 package body Direct_IO is
+  type C_Size is range 0 .. 2 ** 63 - 1;
+  type C_Long is range -(2 ** (System.C_Long_Bits - 1)) .. 2 ** (System.C_Long_Bits - 1) - 1;
   function C_Fopen (Name : System.Address; Mode : System.Address) return System.Address;
   pragma Import (C, C_Fopen, "fopen");
   function C_Fclose (Stream : System.Address) return Integer;
   pragma Import (C, C_Fclose, "fclose");
+  function C_Fread_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fread_Raw, "fread");
   function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fread, "fread");
+  function C_Fwrite_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fwrite_Raw, "fwrite");
   function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fwrite, "fwrite");
   function C_Remove (Name : System.Address) return Integer;
   pragma Import (C, C_Remove, "remove");
+  function C_Fseek_Raw (Stream : System.Address; Offset : C_Long; Whence : Integer) return Integer;
+  pragma Import (C, C_Fseek_Raw, "fseek");
   function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer;
-  pragma Import (C, C_Fseek, "fseek");
+  function C_Ftell_Raw (Stream : System.Address) return C_Long;
+  pragma Import (C, C_Ftell_Raw, "ftell");
   function C_Ftell (Stream : System.Address) return Integer;
-  pragma Import (C, C_Ftell, "ftell");
   function C_Fflush (Stream : System.Address) return Integer;
   pragma Import (C, C_Fflush, "fflush");
   function C_Tmpfile return System.Address;
   pragma Import (C, C_Tmpfile, "tmpfile");
+  function C_Getenv (Name : System.Address) return System.Address;
+  pragma Import (C, C_Getenv, "getenv");
+  function C_Getpid return Integer;
+  pragma Import (C, C_Getpid, "getpid");
+  function C_Memcpy (Target : System.Address; Source : System.Address; Length : C_Size) return System.Address;
+  pragma Import (C, C_Memcpy, "memcpy");
+  function C_Strlen_Raw (Buffer : System.Address) return C_Size;
+  pragma Import (C, C_Strlen_Raw, "strlen");
   Null_Address : constant System.Address := System.Null_Address;
   Seek_Set     : constant Integer        := 0;
   Seek_End     : constant Integer        := 2;
@@ -2495,6 +2722,27 @@ package body Direct_IO is
       Name        : String (1..1024);
     end record;
   File_Control_Blocks : array (1..99) of Control_Block;
+  Temporary_Serial    : Integer := 0;
+  function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fread_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fread;
+
+  function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fwrite_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fwrite;
+
+  function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer is
+  begin
+    return C_Fseek_Raw (Stream, C_Long (Offset), Whence);
+  end C_Fseek;
+
+  function C_Ftell (Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Ftell_Raw (Stream));
+  end C_Ftell;
+
   function Is_Open_Index (Table_Slot : Integer) return Boolean is
     begin
       return Table_Slot >= 1 and then Table_Slot <= 99 and then File_Control_Blocks (Table_Slot).Is_Open;
@@ -2554,6 +2802,72 @@ package body Direct_IO is
         File_Control_Blocks (Table_Slot).Slot := Header;
       end if;
     end;
+  function Open_Temporary return System.Address is
+    Mode_Text   : constant String         := 'w' & '+' & 'b' & 'D' & Character'Val (0);
+    TMP_Name    : constant String         := "TMP" & Character'Val (0);
+    TEMP_Name   : constant String         := "TEMP" & Character'Val (0);
+    TMPDIR_Name : constant String         := "TMPDIR" & Character'Val (0);
+    Prefix      : constant String         := "ta_tmp_";
+    Stream      :          System.Address := C_Tmpfile;
+    Pointer     :          System.Address;
+    Name_Buffer :          String (1..1100);
+    Last        :          Integer        := 0;
+    Length      :          Integer;
+    Ignore      :          Integer;
+    Scratch     :          System.Address;
+    procedure Append_Number (Value : Integer) is
+      Digits_Text :          String (1..12);
+      Remaining   :          Integer       := Value;
+      Count       :          Integer       := 0;
+      begin
+        if Remaining < 0 then Remaining := 0; end if;
+        loop
+          Count := Count + 1;
+          Digits_Text (Count) := Character'Val (Character'Pos ('0') + Remaining mod 10);
+          Remaining := Remaining / 10;
+          exit when Remaining = 0;
+        end loop;
+        for I in reverse 1..Count loop
+          Last := Last + 1;
+          Name_Buffer (Last) := Digits_Text (I);
+        end loop;
+      end;
+    begin
+      if Stream /= Null_Address then
+        return Stream;
+      end if;
+      Pointer := C_Getenv (TMP_Name'Address);
+      if Pointer = Null_Address then Pointer := C_Getenv (TEMP_Name'Address); end if;
+      if Pointer = Null_Address then Pointer := C_Getenv (TMPDIR_Name'Address); end if;
+      if Pointer /= Null_Address then
+        Length := Integer (C_Strlen_Raw (Pointer));
+        if Length > 0 and then Length <= 1000 then
+          Scratch := C_Memcpy (Name_Buffer'Address, Pointer, C_Size (Length));
+          Last := Length;
+        end if;
+      end if;
+      if Last = 0 then
+        Name_Buffer (1) := '.';
+        Last := 1;
+      end if;
+      Last := Last + 1;
+      Name_Buffer (Last) := '/';
+      for I in Prefix'Range loop
+        Last := Last + 1;
+        Name_Buffer (Last) := Prefix (I);
+      end loop;
+      Append_Number (C_Getpid);
+      Last := Last + 1;
+      Name_Buffer (Last) := '_';
+      Temporary_Serial := Temporary_Serial + 1;
+      Append_Number (Temporary_Serial);
+      Name_Buffer (Last + 1) := Character'Val (0);
+      Stream := C_Fopen (Name_Buffer'Address, Mode_Text'Address);
+      if Stream /= Null_Address then
+        Ignore := C_Remove (Name_Buffer'Address);
+      end if;
+      return Stream;
+    end;
   procedure Attach (File : in out File_Type; Mode : File_Mode; Name : String; Creating : Boolean) is
     Table_Slot  : Integer;
     Name_Buffer : String (1..1026);
@@ -2582,7 +2896,7 @@ package body Direct_IO is
         File_Control_Blocks (Table_Slot).Name_Length := Name'Length;
         File_Control_Blocks (Table_Slot).Name (1..Name'Length) := Name;
       else
-        File_Control_Blocks (Table_Slot).Stream := C_Tmpfile;
+        File_Control_Blocks (Table_Slot).Stream := Open_Temporary;
         if File_Control_Blocks (Table_Slot).Stream = Null_Address then raise Use_Error; end if;
         File_Control_Blocks (Table_Slot).Name_Length := 0;
       end if;
@@ -2767,18 +3081,23 @@ private
 end;
 with System;
 package body Sequential_IO is
+  type C_Size is range 0 .. 2 ** 63 - 1;
+  type C_Long is range -(2 ** (System.C_Long_Bits - 1)) .. 2 ** (System.C_Long_Bits - 1) - 1;
   function C_Fopen (Name : System.Address; Mode : System.Address) return System.Address;
   pragma Import (C, C_Fopen, "fopen");
   function C_Fclose (Stream : System.Address) return Integer;
   pragma Import (C, C_Fclose, "fclose");
+  function C_Fread_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fread_Raw, "fread");
   function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fread, "fread");
+  function C_Fwrite_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fwrite_Raw, "fwrite");
   function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fwrite, "fwrite");
   function C_Remove (Name : System.Address) return Integer;
   pragma Import (C, C_Remove, "remove");
+  function C_Fseek_Raw (Stream : System.Address; Offset : C_Long; Whence : Integer) return Integer;
+  pragma Import (C, C_Fseek_Raw, "fseek");
   function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer;
-  pragma Import (C, C_Fseek, "fseek");
   function C_Fflush (Stream : System.Address) return Integer;
   pragma Import (C, C_Fflush, "fflush");
   function C_Fgetc (Stream : System.Address) return Integer;
@@ -2787,6 +3106,14 @@ package body Sequential_IO is
   pragma Import (C, C_Ungetc, "ungetc");
   function C_Tmpfile return System.Address;
   pragma Import (C, C_Tmpfile, "tmpfile");
+  function C_Getenv (Name : System.Address) return System.Address;
+  pragma Import (C, C_Getenv, "getenv");
+  function C_Getpid return Integer;
+  pragma Import (C, C_Getpid, "getpid");
+  function C_Memcpy (Target : System.Address; Source : System.Address; Length : C_Size) return System.Address;
+  pragma Import (C, C_Memcpy, "memcpy");
+  function C_Strlen_Raw (Buffer : System.Address) return C_Size;
+  pragma Import (C, C_Strlen_Raw, "strlen");
   Null_Address : constant System.Address := System.Null_Address;
   Seek_Set     : constant Integer        := 0;
   type Control_Block is record
@@ -2797,6 +3124,22 @@ package body Sequential_IO is
       Name        : String (1..1024);
     end record;
   File_Control_Blocks : array (1..99) of Control_Block;
+  Temporary_Serial    : Integer := 0;
+  function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fread_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fread;
+
+  function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fwrite_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fwrite;
+
+  function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer is
+  begin
+    return C_Fseek_Raw (Stream, C_Long (Offset), Whence);
+  end C_Fseek;
+
   function Is_Open_Index (Table_Slot : Integer) return Boolean is
     begin
       return Table_Slot >= 1 and then Table_Slot <= 99 and then File_Control_Blocks (Table_Slot).Is_Open;
@@ -2815,6 +3158,72 @@ package body Sequential_IO is
         J := J + 1;
       end loop;
       Buffer (J) := Character'Val (0);
+    end;
+  function Open_Temporary return System.Address is
+    Mode_Text   : constant String         := 'w' & '+' & 'b' & 'D' & Character'Val (0);
+    TMP_Name    : constant String         := "TMP" & Character'Val (0);
+    TEMP_Name   : constant String         := "TEMP" & Character'Val (0);
+    TMPDIR_Name : constant String         := "TMPDIR" & Character'Val (0);
+    Prefix      : constant String         := "ta_tmp_";
+    Stream      :          System.Address := C_Tmpfile;
+    Pointer     :          System.Address;
+    Name_Buffer :          String (1..1100);
+    Last        :          Integer        := 0;
+    Length      :          Integer;
+    Ignore      :          Integer;
+    Scratch     :          System.Address;
+    procedure Append_Number (Value : Integer) is
+      Digits_Text :          String (1..12);
+      Remaining   :          Integer       := Value;
+      Count       :          Integer       := 0;
+      begin
+        if Remaining < 0 then Remaining := 0; end if;
+        loop
+          Count := Count + 1;
+          Digits_Text (Count) := Character'Val (Character'Pos ('0') + Remaining mod 10);
+          Remaining := Remaining / 10;
+          exit when Remaining = 0;
+        end loop;
+        for I in reverse 1..Count loop
+          Last := Last + 1;
+          Name_Buffer (Last) := Digits_Text (I);
+        end loop;
+      end;
+    begin
+      if Stream /= Null_Address then
+        return Stream;
+      end if;
+      Pointer := C_Getenv (TMP_Name'Address);
+      if Pointer = Null_Address then Pointer := C_Getenv (TEMP_Name'Address); end if;
+      if Pointer = Null_Address then Pointer := C_Getenv (TMPDIR_Name'Address); end if;
+      if Pointer /= Null_Address then
+        Length := Integer (C_Strlen_Raw (Pointer));
+        if Length > 0 and then Length <= 1000 then
+          Scratch := C_Memcpy (Name_Buffer'Address, Pointer, C_Size (Length));
+          Last := Length;
+        end if;
+      end if;
+      if Last = 0 then
+        Name_Buffer (1) := '.';
+        Last := 1;
+      end if;
+      Last := Last + 1;
+      Name_Buffer (Last) := '/';
+      for I in Prefix'Range loop
+        Last := Last + 1;
+        Name_Buffer (Last) := Prefix (I);
+      end loop;
+      Append_Number (C_Getpid);
+      Last := Last + 1;
+      Name_Buffer (Last) := '_';
+      Temporary_Serial := Temporary_Serial + 1;
+      Append_Number (Temporary_Serial);
+      Name_Buffer (Last + 1) := Character'Val (0);
+      Stream := C_Fopen (Name_Buffer'Address, Mode_Text'Address);
+      if Stream /= Null_Address then
+        Ignore := C_Remove (Name_Buffer'Address);
+      end if;
+      return Stream;
     end;
   procedure Attach (File : in out File_Type; Mode : File_Mode; Name : String; Creating : Boolean) is
     Table_Slot  : Integer;
@@ -2844,7 +3253,7 @@ package body Sequential_IO is
         File_Control_Blocks (Table_Slot).Name_Length := Name'Length;
         File_Control_Blocks (Table_Slot).Name (1..Name'Length) := Name;
       else
-        File_Control_Blocks (Table_Slot).Stream := C_Tmpfile;
+        File_Control_Blocks (Table_Slot).Stream := Open_Temporary;
         if File_Control_Blocks (Table_Slot).Stream = Null_Address then raise Use_Error; end if;
         File_Control_Blocks (Table_Slot).Name_Length := 0;
       end if;
@@ -3105,18 +3514,23 @@ private
     end record;
 end;
 package body Stream_IO is
+  type C_Size is range 0 .. 2 ** 63 - 1;
+  type C_Long is range -(2 ** (System.C_Long_Bits - 1)) .. 2 ** (System.C_Long_Bits - 1) - 1;
   function C_Fopen (Name : System.Address; Mode : System.Address) return System.Address;
   pragma Import (C, C_Fopen, "fopen");
   function C_Fclose (Stream : System.Address) return Integer;
   pragma Import (C, C_Fclose, "fclose");
+  function C_Fread_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fread_Raw, "fread");
   function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fread, "fread");
+  function C_Fwrite_Raw (Pointer : System.Address; Size : C_Size; Count : C_Size; Stream : System.Address) return C_Size;
+  pragma Import (C, C_Fwrite_Raw, "fwrite");
   function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer;
-  pragma Import (C, C_Fwrite, "fwrite");
   function C_Remove (Name : System.Address) return Integer;
   pragma Import (C, C_Remove, "remove");
+  function C_Fseek_Raw (Stream : System.Address; Offset : C_Long; Whence : Integer) return Integer;
+  pragma Import (C, C_Fseek_Raw, "fseek");
   function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer;
-  pragma Import (C, C_Fseek, "fseek");
   function C_Fflush (Stream : System.Address) return Integer;
   pragma Import (C, C_Fflush, "fflush");
   function C_Fgetc (Stream : System.Address) return Integer;
@@ -3125,6 +3539,14 @@ package body Stream_IO is
   pragma Import (C, C_Ungetc, "ungetc");
   function C_Tmpfile return System.Address;
   pragma Import (C, C_Tmpfile, "tmpfile");
+  function C_Getenv (Name : System.Address) return System.Address;
+  pragma Import (C, C_Getenv, "getenv");
+  function C_Getpid return Integer;
+  pragma Import (C, C_Getpid, "getpid");
+  function C_Memcpy (Target : System.Address; Source : System.Address; Length : C_Size) return System.Address;
+  pragma Import (C, C_Memcpy, "memcpy");
+  function C_Strlen_Raw (Buffer : System.Address) return C_Size;
+  pragma Import (C, C_Strlen_Raw, "strlen");
   Null_Address : constant System.Address := System.Null_Address;
   Seek_Set     : constant Integer        := 0;
   Seek_End     : constant Integer        := 2;
@@ -3137,6 +3559,22 @@ package body Stream_IO is
       Name        : String (1..1024);
     end record;
   File_Control_Blocks : array (1..99) of Control_Block;
+  Temporary_Serial    : Integer := 0;
+  function C_Fread (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fread_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fread;
+
+  function C_Fwrite (Pointer : System.Address; Size : Integer; Count : Integer; Stream : System.Address) return Integer is
+  begin
+    return Integer (C_Fwrite_Raw (Pointer, C_Size (Size), C_Size (Count), Stream));
+  end C_Fwrite;
+
+  function C_Fseek (Stream : System.Address; Offset : Integer; Whence : Integer) return Integer is
+  begin
+    return C_Fseek_Raw (Stream, C_Long (Offset), Whence);
+  end C_Fseek;
+
   function Is_Open_Index (Table_Slot : Integer) return Boolean is
     begin
       return Table_Slot >= 1 and then Table_Slot <= 99 and then File_Control_Blocks (Table_Slot).Is_Open;
@@ -3154,6 +3592,72 @@ package body Stream_IO is
         J := J + 1;
       end loop;
       Buffer (J) := Character'Val (0);
+    end;
+  function Open_Temporary return System.Address is
+    Mode_Text   : constant String         := 'w' & '+' & 'b' & 'D' & Character'Val (0);
+    TMP_Name    : constant String         := "TMP" & Character'Val (0);
+    TEMP_Name   : constant String         := "TEMP" & Character'Val (0);
+    TMPDIR_Name : constant String         := "TMPDIR" & Character'Val (0);
+    Prefix      : constant String         := "ta_tmp_";
+    Stream      :          System.Address := C_Tmpfile;
+    Pointer     :          System.Address;
+    Name_Buffer :          String (1..1100);
+    Last        :          Integer        := 0;
+    Length      :          Integer;
+    Ignore      :          Integer;
+    Scratch     :          System.Address;
+    procedure Append_Number (Value : Integer) is
+      Digits_Text :          String (1..12);
+      Remaining   :          Integer       := Value;
+      Count       :          Integer       := 0;
+      begin
+        if Remaining < 0 then Remaining := 0; end if;
+        loop
+          Count := Count + 1;
+          Digits_Text (Count) := Character'Val (Character'Pos ('0') + Remaining mod 10);
+          Remaining := Remaining / 10;
+          exit when Remaining = 0;
+        end loop;
+        for I in reverse 1..Count loop
+          Last := Last + 1;
+          Name_Buffer (Last) := Digits_Text (I);
+        end loop;
+      end;
+    begin
+      if Stream /= Null_Address then
+        return Stream;
+      end if;
+      Pointer := C_Getenv (TMP_Name'Address);
+      if Pointer = Null_Address then Pointer := C_Getenv (TEMP_Name'Address); end if;
+      if Pointer = Null_Address then Pointer := C_Getenv (TMPDIR_Name'Address); end if;
+      if Pointer /= Null_Address then
+        Length := Integer (C_Strlen_Raw (Pointer));
+        if Length > 0 and then Length <= 1000 then
+          Scratch := C_Memcpy (Name_Buffer'Address, Pointer, C_Size (Length));
+          Last := Length;
+        end if;
+      end if;
+      if Last = 0 then
+        Name_Buffer (1) := '.';
+        Last := 1;
+      end if;
+      Last := Last + 1;
+      Name_Buffer (Last) := '/';
+      for I in Prefix'Range loop
+        Last := Last + 1;
+        Name_Buffer (Last) := Prefix (I);
+      end loop;
+      Append_Number (C_Getpid);
+      Last := Last + 1;
+      Name_Buffer (Last) := '_';
+      Temporary_Serial := Temporary_Serial + 1;
+      Append_Number (Temporary_Serial);
+      Name_Buffer (Last + 1) := Character'Val (0);
+      Stream := C_Fopen (Name_Buffer'Address, Mode_Text'Address);
+      if Stream /= Null_Address then
+        Ignore := C_Remove (Name_Buffer'Address);
+      end if;
+      return Stream;
     end;
   procedure Attach (File : in out File_Type; Mode : File_Mode; Name : String; Creating : Boolean) is
     Table_Slot  : Integer := 0;
@@ -3182,7 +3686,7 @@ package body Stream_IO is
         File_Control_Blocks (Table_Slot).Name_Length := Name'Length;
         File_Control_Blocks (Table_Slot).Name (1..Name'Length) := Name;
       else
-        File_Control_Blocks (Table_Slot).Stream := C_Tmpfile;
+        File_Control_Blocks (Table_Slot).Stream := Open_Temporary;
         if File_Control_Blocks (Table_Slot).Stream = Null_Address then raise Use_Error; end if;
         File_Control_Blocks (Table_Slot).Name_Length := 0;
       end if;
