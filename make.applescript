@@ -230,7 +230,7 @@ end launcherFor
 
 on sharedLibrariesFor(chosenPlatform)
 	if chosenPlatform is windowsPlatform() then return "*.dll"
-	return ""
+	return chosenPlatform & "/*"
 end sharedLibrariesFor
 
 on librariesArchive()
@@ -475,6 +475,8 @@ on buildProgram()
 		"gcc -O3 -Wall -std=gnu2x -o " & binaryPath & " turboada.c", ¬
 		"cp turboada-runtime.ada " & binaryFolderFor(macosPlatform()) & "/ || echo 'turboada-runtime.ada is not here; ta needs it beside the executable.'", ¬
 		"cp turboada-runtime-legacy.ada " & binaryFolderFor(macosPlatform()) & "/ || echo 'turboada-runtime-legacy.ada is not here; ta serves the Ada.Strings and Ada.Containers units from it.'", ¬
+		"cp turboada-runtime-apis.ada " & binaryFolderFor(macosPlatform()) & "/ || echo 'turboada-runtime-apis.ada is not here; ta serves the SDL, OpenAL, Vulkan, OpenGL, DirectX, Zlib, Opus and Metal units from it.'", ¬
+		"unzip -qoj " & librariesArchive() & " '" & sharedLibrariesFor(macosPlatform()) & "' -d " & binaryFolderFor(macosPlatform()) & " || echo '" & librariesArchive() & " holds no macos libraries; programs find SDL3, OpenAL Soft and Opus in the system instead.'", ¬
 		"echo", ¬
 		"echo 'Built " & binaryPath & ".'", ¬
 		"echo 'Compile a program with:  ./" & binaryPath & " myprogram.ada -o myprogram'"}, ¬
@@ -502,10 +504,12 @@ on archiveSteps(chosenPlatform)
 			"printf '%s\\n' 'with Text_IO;' 'procedure Hello is' 'begin' '  Text_IO.Put_Line (\"packaged ta works\");' 'end Hello;' > staging/proof/hello.adb", ¬
 			"( cd staging/proof && ./ta hello.adb -o hello && ./hello | grep -xF 'packaged ta works' >/dev/null ) || { echo 'the packaged compiler cannot build and run a program'; exit 1; }", ¬
 			"printf '%s\\n' 'with Ada.Strings.Fixed, Text_IO;' 'procedure Legacy is' 'begin' '  Text_IO.Put_Line (Ada.Strings.Fixed.Trim (\"  legacy units served  \", Ada.Strings.Both));' 'end Legacy;' > staging/proof/legacy.adb", ¬
-			"( cd staging/proof && ./ta legacy.adb -o legacy && ./legacy | grep -xF 'legacy units served' >/dev/null ) || { echo 'the packaged compiler cannot serve turboada-runtime-legacy.ada'; exit 1; }"}
+			"( cd staging/proof && ./ta legacy.adb -o legacy && ./legacy | grep -xF 'legacy units served' >/dev/null ) || { echo 'the packaged compiler cannot serve turboada-runtime-legacy.ada'; exit 1; }", ¬
+			"printf '%s\\n' 'with Interfaces.C.Strings, Text_IO, Zlib;' 'procedure Apis is' 'begin' '  Text_IO.Put_Line (\"zlib \" & Interfaces.C.Strings.Value (Zlib.zlibVersion));' 'end Apis;' > staging/proof/apis.adb", ¬
+			"( cd staging/proof && ./ta apis.adb -o apis && ./apis | grep -q '^zlib 1\\.' ) || { echo 'the packaged compiler cannot serve turboada-runtime-apis.ada or load zlib'; exit 1; }"}
 	else if chosenPlatform is windowsPlatform() then
 		set steps to steps & {"unzip -l " & archivePath & " | grep -qi 'LLVM-C\\.dll' || { echo '" & archivePath & " does not carry LLVM-C.dll'; exit 1; }", ¬
-			"! unzip -l " & archivePath & " | grep -qi 'libwinpthread\\|libgcc_s\\|libstdc++\\|libiconv\\|libxml2\\|libzstd\\|zlib1' || { echo '" & archivePath & " carries a MinGW runtime DLL'; exit 1; }", ¬
+			"! unzip -l " & archivePath & " | grep -qi 'libwinpthread\\|libgcc_s\\|libstdc++\\|libiconv\\|libxml2\\|libzstd' || { echo '" & archivePath & " carries a MinGW runtime DLL'; exit 1; }", ¬
 			"echo '" & archivePath & " was built for windows and cannot run here'"}
 	else
 		set steps to steps & {"echo '" & archivePath & " was built for linux and cannot run here'"}
@@ -518,7 +522,7 @@ on packageProgram(chosenPlatform)
 	return guardedProgram(extensionSteps(chosenPlatform) & sharedLibraryGuardSteps(chosenPlatform) & ¬
 		sliceGuardSteps(chosenPlatform) & resourceObjectSteps(chosenPlatform) & ¬
 		chosenRouteSteps(chosenPlatform) & compileSteps(chosenPlatform) & ¬
-		{"cp turboada-runtime.ada turboada-runtime-legacy.ada " & binFolder & "/"} & launcherSteps(chosenPlatform) & ¬
+		{"cp turboada-runtime.ada turboada-runtime-legacy.ada turboada-runtime-apis.ada " & binFolder & "/"} & launcherSteps(chosenPlatform) & ¬
 		sharedLibrarySteps(chosenPlatform) & {"rm -rf staging"} & archiveSteps(chosenPlatform), ¬
 		"Packaging failed; the message above says why.")
 end packageProgram
@@ -541,6 +545,7 @@ on run argv
 		if chosenAction is "package" then
 			requireFile(directory, "turboada-runtime.ada")
 			requireFile(directory, "turboada-runtime-legacy.ada")
+			requireFile(directory, "turboada-runtime-apis.ada")
 			requireFile(directory, iconSourceFor())
 		end if
 		if chosenAction is not "build" then

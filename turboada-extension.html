@@ -26,13 +26,15 @@ release or let you point at one. A project can also name its compiler with
 
 Downloads go into the extension's own storage, are checked with
 `--version` before use, and include `turboada-runtime.ada`, which has to
-be next to the executable.
+be next to the executable, the two library files beside it, and the
+shared libraries the API units load that the platform lacks.
 
 ## Starting a project
 
-**TurboAda: New Project** asks for a kind and a name, then writes a
-`.gpr` with a typed scenario variable, a `src/` folder and a main that
-prints a line. `Ctrl+Alt+Shift+B` builds it.
+**TurboAda: New Project** asks for a kind, a format and a name, then
+writes a GNAT `.gpr` with a typed scenario variable, or a Green Hills
+`.gpj` with a `BUILD` macro, a `src/` folder and a main that prints a
+line. `Ctrl+Alt+Shift+B` builds it.
 
 ## Writing code
 
@@ -82,8 +84,28 @@ Select Project**.
 The turbocharger icon in the activity bar opens the project view. The
 scenario variables come first, then the main programs with inline
 **Build**, **Run** and **Debug** buttons, then the project itself: its
-sources, imported projects and settings. A build shows its progress
+sources; the projects it withs, limited-withs, extends or aggregates, each
+opening into its own view; the library it builds, with its file, kind,
+directories and interface; its settings; and its packages, each with its
+attributes. An attribute the compiler reads and does not act on, such as
+a `Prove` package's, is marked *recorded*. A build shows its progress
 across the top of the view and in the status bar, where a click stops it.
+
+### Editing project files
+
+`.gpr` and `.gpj` files are checked as you type by the compiler's own
+project reader, with the unsaved text, so an error appears at its line
+before the file is saved. Completion offers package names after
+`package`, the attributes of the enclosing package after `for` and after
+a reference such as `Base.Compiler'`, the values of an attribute that has
+a fixed set (`Library_Kind`), built-in functions, and in a `.gpj` the
+options, settings (`:sourceDir`), tags and directives. Hovering an
+attribute, a package, a built-in, an option, a setting or a tag shows
+what it means, its value kind, its index, its values and its default.
+The outline lists the imports, the project, its packages, attributes,
+types and variables, or a `.gpj`'s entries and their options, and
+**Format Document** indents a `.gpr` three spaces a level and puts a
+`.gpj`'s options under their entries with a tab.
   
 ## Scenario variables
 
@@ -94,6 +116,10 @@ lists the values it accepts:
 type Build_Kind is ("debug", "release");
 Build : Build_Kind := external ("BUILD", "debug");
 ```
+
+A `.gpj`'s macros, the environment variables it reads, and its
+`defineConfig` build configurations (as `cfg`) are scenario variables
+too.
 
 The status bar shows the current values, such as `MODE: Flight`. Click it,
 or run **TurboAda: Set Scenario Variable** (`Ctrl+Alt+X`), to change one.
@@ -168,7 +194,7 @@ with `turboada.language`.
 | `turboada.downloadBase` | `"https://raw.githubusercontent.com/AdaDoom3/Ada83/main"` | Where to fetch the compiler from. |
 | `turboada.debugAdapterPath` |  | Another debug adapter, should you prefer your own. |
 | `turboada.enable` | `true` | Check the program as you type. |
-| `turboada.languageExtensions` | `true` | Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... |
+| `turboada.languageExtensions` | `true` | Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, discriminants of an unconstrained type, null and empty record definitions (is null record, is record;), if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre and Post on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... |
 | `turboada.requestTimeout` | `15000` | How long to wait for an answer, in milliseconds. |
 | `turboada.workspaceRequestTimeout` | `120000` | The same, for a search across the workspace. |
 | `turboada.includePaths` | `[]` | Further places to look for with-ed units. |
@@ -302,7 +328,9 @@ indexing and iteration, streams, and the rest listed under
     "workspaceContains:**/*.adb",
     "workspaceContains:**/*.ads",
     "workspaceContains:**/*.gpr",
-    "workspaceContains:**/*.gpj"
+    "workspaceContains:**/*.gpj",
+    "onLanguage:gpr",
+    "onLanguage:gpj"
   ],
   "icon": "turboada-icon.png",
   "main": "./turboada-extension.js",
@@ -479,7 +507,7 @@ indexing and iteration, streams, and the rest listed under
         "turboada.languageExtensions": {
           "type": "boolean",
           "default": true,
-          "description": "Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... of loops, continue, raise ... with, delta aggregates, the <> box and iterated component associations in aggregates, private extensions, requeue, delay until, streams, Atomic and Volatile, defaults for generic formals, dot notation for a call on its first parameter, Ada. names for the predefined units, and a use clause that stands for its with clause. Turn it off to compile strict Ada 83 (-ada83), where each of these is an error.",
+          "description": "Accept the extensions this compiler adds to Ada 83: protected types, timed and conditional calls to a protected entry, controlled types without tagged types, child units, general and anonymous access types and access discriminants, access-to-subprogram types, modular types, discriminants of an unconstrained type, null and empty record definitions (is null record, is record;), if, case, quantified and declare expressions, raise expressions, expression functions, null procedures, the Pre, Post and Predicate aspects, Pre and Post on an entry, Atomic on a protected type, user-defined literals, indexing and iteration, for ... of loops, continue, raise ... with, delta aggregates, the <> box and iterated component associations in aggregates, private extensions, requeue, delay until, streams, Atomic and Volatile, defaults for generic formals, dot notation for a call on its first parameter, Ada. names for the predefined units, and a use clause that stands for its with clause. Turn it off to compile strict Ada 83 (-ada83), where each of these is an error.",
           "scope": "resource"
         },
         "turboada.requestTimeout": {
@@ -503,7 +531,7 @@ indexing and iteration, streams, and the rest listed under
         "turboada.projectFile": {
           "type": "string",
           "default": "",
-          "description": "The project file to use. A single .gpr at the workspace root is found automatically; with several, pick one from the status bar."
+          "description": "The project file to use, a .gpr or a .gpj. A single one at the workspace root is found automatically; with several, pick one from the status bar."
         },
         "turboada.scenario": {
           "type": "object",
@@ -914,7 +942,7 @@ indexing and iteration, streams, and the rest listed under
           {
             "id": "turboada.start.new",
             "title": "Start a project",
-            "description": "New Project asks for a kind and a name, then creates a project that builds and runs right away.\n[New project](command:turboada.newProject)",
+            "description": "New Project asks for a kind, a format (.gpr or .gpj) and a name, then creates a project that builds and runs right away.\n[New project](command:turboada.newProject)",
             "media": {
               "image": "./turboada-icon.png",
               "altText": "The TurboAda icon"
@@ -1865,16 +1893,20 @@ const Admitted_Constructs =
   ['protected types, timed and conditional calls to a protected entry,',
    'controlled types (Ada.Finalization) without tagged types, child units,',
    'general and anonymous access types, access discriminants,',
-   'access-to-subprogram types, modular types, if, case, quantified and',
-   'declare expressions, raise expressions, expression functions, null',
-   'procedures, the Pre, Post and Predicate aspects and pragma Assert, Pre',
-   'on an entry, user-defined literals, indexing and iteration, for ... of',
+   'access-to-subprogram types, modular types, discriminants of an',
+   'unconstrained type, null and empty record definitions, if, case,',
+   'quantified and declare expressions, raise expressions, expression',
+   'functions, null procedures, the Pre, Post and Predicate aspects and',
+   'pragma Assert, Pre on an entry, user-defined literals, indexing and',
+   'iteration, for ... of',
    'loops, continue, raise ... with, delta aggregates, the <> box and',
    'iterated component associations in aggregates, Ada.Exceptions, private',
    'extensions, requeue, delay until, the asynchronous select,',
    'access-to-protected-subprogram types, streams, Atomic and Volatile',
-   '(Atomic may name a protected type), defaults for generic formals, and a',
-   'use clause that stands for its with clause'].join (' ');
+   '(Atomic may name a protected type), defaults for generic formals, a',
+   'use clause that stands for its with clause, Interfaces, Interfaces.C and',
+   'Interfaces.C.Strings, pragma Dynamic_Library, and the units SDL, OpenAL,',
+   'Vulkan, OpenGL, DirectX, Zlib, Opus and Metal'].join (' ');
 
 const Absent_Constructs =
   ['tagged types or anything that dispatches (no \'Class, abstract types,',
@@ -2349,7 +2381,7 @@ const Extension_Arguments = () =>
 const Project_Arguments = (Project, Rest) =>
   ['-P', Project, ...Extension_Arguments (), ...Scenario_Arguments (), ...Rest];
 
-const Ran = (Arguments, Environment) =>
+const Ran = (Arguments, Environment, Input) =>
   new Promise ((Resolve) => {
     const [Command, Given, Options] =
       Host_Escaped (Compiler_Path (), Arguments, Environment);
@@ -2360,6 +2392,8 @@ const Ran = (Arguments, Environment) =>
     Child.on ('error', ({ message }) =>
       Resolve ({ Code: -1, Answer, Complaint: message }));
     Child.on ('close', (Code) => Resolve ({ Code, Answer, Complaint }));
+    Child.stdin.on ('error', () => { });
+    Child.stdin.end (Input ?? '');
   });
 
 const Plan_Value_Column = 41;
@@ -2467,6 +2501,8 @@ const Complaint_Of = (Row, Column, Severity, Message) =>
       Message, Project_Severity_Of (Severity)),
     { source: 'turboada' });
 
+const Live_Project_Files = new Set ();
+
 const Complained_About = (Complaints, Text) => {
   const Found = new Map ();
   Text.split (/\r?\n/).forEach ((Line) =>
@@ -2478,7 +2514,10 @@ const Complained_About = (Complaints, Text) => {
      }) (Complaint_Pattern.exec (Line)));
   Complaints.clear ();
   Found.forEach ((Diagnostics, File) =>
-    Complaints.set (vscode.Uri.file (Beside_The_Folder (File)), Diagnostics));
+    ((Uri) => {
+       if (!Live_Project_Files.has (Uri.fsPath))
+         Complaints.set (Uri, Diagnostics);
+     }) (vscode.Uri.file (Beside_The_Folder (File))));
 };
 
 let Project_Item = null;
@@ -2580,14 +2619,18 @@ const Listed_Variables = async (Project) =>
      } catch { return null; }
    }) (await Ran (Project_Arguments (Project, [Externals_Argument])));
 
-const External_Line = /^(.+?)=([\s\S]*) \((command line|project)\)$/;
+const External_Line =
+  /^(.+?)=([\s\S]*) \((command line|environment|project|default|not defined)\)$/;
 
 const Planned_Variables = () =>
   Top_Level ('external')
     .map ((Line) => External_Line.exec (Line))
     .filter ((Match) => Match !== null)
-    .map (([, Name, Value]) =>
-      ({ Name, Type: null, Values: [], Default: Value, Value }));
+    .map (([, Name, Value, Origin]) =>
+      Origin === 'not defined'
+        ? { Name, Type: null, Values: [], Default: null, Value: null,
+            Origin: null }
+        : { Name, Type: null, Values: [], Default: Value, Value, Origin });
 
 const With_The_Setting = (Known) =>
   [...Known,
@@ -2875,18 +2918,23 @@ const Build_Project = (Memory, Clean) => With_A_Project (async (Project) => {
 });
 
 const Build_Main = (Memory, Clean) => With_A_Project (async (Project) => {
-  const Mains = In_The_Root ('Main');
+  const Mains = ((Planned) =>
+    Planned.length > 0
+      ? Planned
+      : In_The_Root ('Main').map ((Main) => ({ Main, Label: Main })))
+    (Debug_Mains ());
   if (Mains.length === 0)
     return void vscode.window.showInformationMessage (
       'TurboAda: cannot build. The project declares no Main.');
   const Chosen = Mains.length === 1
     ? Mains[0]
-    : await vscode.window.showQuickPick (
-        Mains, { title: 'Build Main' });
+    : await Main_Picked (Mains, 'Build Main');
   if (Chosen === undefined) return;
   if (!await Cleared_First (Memory, Clean)) return;
   await Memory.update (Built_With, Stamp_Of ());
-  vscode.tasks.executeTask (Main_Task (Project, Chosen));
+  vscode.tasks.executeTask (Chosen.Main === null
+                              ? Project_Task (Project)
+                              : Main_Task (Project, Chosen.Main));
 });
 
 const Show_Plan = With_A_Project ((Project) =>
@@ -2928,9 +2976,14 @@ const Clean_Project = async () => {
     `${[...Objects, ...Executables].join (', ')}?`,
     { modal: true }, 'Remove');
   if (Chosen !== 'Remove') return;
+  const Planned = Debug_Mains ()
+    .map (({ Main, Given }) => Sidebar_Executable (Given, Main))
+    .filter ((Given) => Given !== null)
+    .flatMap ((Given) => [Given, `${Given}.exe`]);
   const Gone =
-    [...Objects.flatMap (Products_In),
-     ...Executables.flatMap (Executables_In)].reduce (
+    [...new Set ([...Objects.flatMap (Products_In),
+                  ...Executables.flatMap (Executables_In),
+                  ...Planned])].reduce (
        (Total, Given) => Total + Removed (Given), 0);
   vscode.window.showInformationMessage (
     `TurboAda: removed ${Gone} file${Gone === 1 ? '' : 's'}.`);
@@ -3123,7 +3176,9 @@ const Sidebar_Plan = async (Project) =>
     await Ran (Project_Arguments (Project, [Sidebar_Plan_Argument])));
 
 const Sidebar_Meta_Spellings = ['file', 'qualifier', 'directory', 'import',
-                                'extends', 'external'];
+                                'limited import', 'extends', 'extends all',
+                                'aggregate', 'library file', 'output',
+                                'external'];
 
 const Sidebar_One_Of = (Values, Key) => (Values.get (Key) ?? [])[0] ?? null;
 
@@ -3138,7 +3193,14 @@ const Sidebar_Planned_Project = ({ Name, Values }) => ({
   types: [],
   variables: [],
   imports: Values.get ('import') ?? [],
-  extends: Sidebar_One_Of (Values, 'extends'),
+  limited: Values.get ('limited import') ?? [],
+  aggregated: Values.get ('aggregate') ?? [],
+  extends: Sidebar_One_Of (Values, 'extends') ??
+           Sidebar_One_Of (Values, 'extends all'),
+  extends_all: Values.has ('extends all'),
+  output: Sidebar_One_Of (Values, 'output'),
+  library: ((File) => (File === null ? null : { file: File }))
+             (Sidebar_One_Of (Values, 'library file')),
 });
 
 const Sidebar_Plan_From_The_Reader = () =>
@@ -3147,20 +3209,28 @@ const Sidebar_Plan_From_The_Reader = () =>
     : { projects: Project_Plan.Projects.map (Sidebar_Planned_Project),
         externals: [] };
 
+const Sidebar_Model_Of = (Project, Plan, Variables) =>
+  ((Projects) => ({
+     Project,
+     Plan,
+     By_File: new Map ([...Projects].reverse ()
+                         .map ((Given) => [Given.file, Given])),
+     Instances: Projects.reduce ((Found, Given) =>
+       Found.set (Given.file, [...(Found.get (Given.file) ?? []), Given]),
+       new Map ()),
+     Variables,
+   }))
+    (Plan === null ? [] : Plan.projects);
+
 const Sidebar_Gathered = async () =>
   ((Project) =>
      Project === null
        ? Promise.resolve (null)
        : Promise.all ([Sidebar_Plan (Project), Scenario_Variables (Project)])
            .then (([Told, Variables]) =>
-              ((Plan) => ({
-                 Project,
-                 Plan,
-                 By_File: new Map ((Plan === null ? [] : Plan.projects)
-                                     .map ((Given) => [Given.file, Given])),
-                 Variables,
-               }))
-                (Told ?? Sidebar_Plan_From_The_Reader ())))
+              Sidebar_Model_Of (Project,
+                                Told ?? Sidebar_Plan_From_The_Reader (),
+                                Variables)))
     (Active_Project ());
 
 const Refresh_Sidebar = async () => {
@@ -3171,8 +3241,13 @@ const Refresh_Sidebar = async () => {
 
 const Sidebar_Leaf = vscode.TreeItemCollapsibleState.None;
 
-const Sidebar_Attribute_Spelled = ({ name, index }) =>
-  index === null || index === undefined ? name : `${name} ("${index}")`;
+const Sidebar_Unit_At = (Unit) =>
+  Number.isInteger (Unit) && Unit > 0 ? ` at ${Unit}` : '';
+
+const Sidebar_Attribute_Spelled = ({ name, index, index_unit }) =>
+  index === null || index === undefined
+    ? name
+    : `${name} ("${index}"${Sidebar_Unit_At (index_unit)})`;
 
 const Sidebar_Origin_Spelled = { 'command line': 'set', default: 'default' };
 
@@ -3213,13 +3288,16 @@ const Sidebar_Source_File = (Given, Name) =>
     .map ((Directory) => path.join (Sidebar_Full_Path (Given, Directory), Name))
     .find ((Candidate) => fs.existsSync (Candidate)) ?? null;
 
-const Sidebar_Project_Item = ({ Given, Root }) =>
+const Sidebar_Project_Item = ({ Given, Root, Relation }) =>
   Object.assign (
     new vscode.TreeItem (Given.name,
       Root ? vscode.TreeItemCollapsibleState.Expanded
            : vscode.TreeItemCollapsibleState.Collapsed),
-    { description: Given.file === null
-        ? '' : vscode.workspace.asRelativePath (Given.file),
+    { description: [...(Relation === undefined || Relation === 'import'
+                          ? [] : [Relation]),
+                     ...(Given.file === null ? []
+                         : [vscode.workspace.asRelativePath (Given.file)])]
+                     .join (' · '),
       tooltip: Given.file ?? Given.name,
       iconPath: new vscode.ThemeIcon (Root ? 'project' : 'link'),
       contextValue: 'turboadaProject' });
@@ -3239,8 +3317,20 @@ const Sidebar_Section = (Title, Icon, Open, Tooltip, Items) =>
                      : [{ Kind: 'section', Title, Icon, Open, Tooltip, Items }];
 
 const Sidebar_Mains = (Given) =>
-  Sidebar_Attribute_Values (Given, 'Main')
-    .map ((Main) => ({ Kind: 'main', Main, Given }));
+  Array.isArray (Given.mains) && Given.mains.length > 0
+    ? Given.mains.map (({ name, executable }) =>
+        ({ Kind: 'main', Main: name ?? null, Given,
+           Label: name ?? path.basename (executable ?? Given.name) }))
+    : Sidebar_Attribute_Values (Given, 'Main')
+        .map ((Main) => ({ Kind: 'main', Main, Given }));
+
+const Main_Label = ({ Main, Label }) => Label ?? Main;
+
+const Sidebar_Root_Mains = (Root) =>
+  [...Sidebar_Mains (Root),
+   ...(Root.aggregated ?? []).flatMap ((File) =>
+      ((Found) => (Found === undefined ? [] : Sidebar_Mains (Found)))
+        (Sidebar_Model?.By_File.get (File)))];
 
 const Sidebar_Listed_Source = (Given, Name) =>
   ((Full) => Full === null ? { Kind: 'source', Path: Name, Tag: null }
@@ -3277,18 +3367,18 @@ const Sidebar_Sources = (Given, Groups, Open) =>
              Open))
     (Sidebar_Written_Values (Given, 'Source_Files'));
 
-const Sidebar_Main_Item = ({ Main, Given }) =>
+const Sidebar_Main_Item = ({ Main, Given, Label }) =>
   ((Source) =>
-     Object.assign (new vscode.TreeItem (Main, Sidebar_Leaf),
-       { description: 'main program',
+     Object.assign (new vscode.TreeItem (Label ?? Main, Sidebar_Leaf),
+       { description: Main === null ? 'program' : 'main program',
          tooltip: Source === null
-           ? `${Main}: build, run or debug it with the buttons`
+           ? `${Label ?? Main}: build, run or debug it with the buttons`
            : `${Sidebar_Shown_Path (Source)}: click to open it; build, ` +
              'run or debug it with the buttons',
          iconPath: new vscode.ThemeIcon ('symbol-method'),
          contextValue: 'turboadaMain',
          ...(Source === null ? {} : { command: Sidebar_Opens (Source) }) }))
-    (Sidebar_Source_File (Given, Main));
+    (Main === null ? null : Sidebar_Source_File (Given, Main));
 
 const Sidebar_Folder_Item = ({ Written, Full }) =>
   Object.assign (
@@ -3316,20 +3406,80 @@ const Sidebar_File_Item = ({ Full }) =>
       tooltip: Sidebar_Shown_Path (Full),
       command: Sidebar_Opens (Full) });
 
+const Sidebar_Recorded_Note =
+  'recorded: read, kept and shown, not acted on by this builder';
+
 const Sidebar_Attribute_Item = ({ Row }) =>
   Row.values.length > 1
     ? Object.assign (
         new vscode.TreeItem (Sidebar_Attribute_Spelled (Row),
                              vscode.TreeItemCollapsibleState.Collapsed),
-        { iconPath: new vscode.ThemeIcon ('symbol-field') })
+        { iconPath: new vscode.ThemeIcon ('symbol-field'),
+          ...(Row.recorded === true
+                ? { description: 'recorded', tooltip: Sidebar_Recorded_Note }
+                : {}) })
     : Object.assign (
         new vscode.TreeItem (Sidebar_Attribute_Spelled (Row), Sidebar_Leaf),
-        { description: Row.values.map (Sidebar_Shown_Path).join (' '),
-          tooltip: Row.values.join ('\n'),
+        { description: [Row.values.map (Sidebar_Shown_Path).join (' ') +
+                          Sidebar_Unit_At ((Row.unit_indexes ?? [])[0]),
+                        ...(Row.recorded === true ? ['recorded'] : [])]
+                         .join (' · '),
+          tooltip: [...Row.values,
+                    ...(Row.recorded === true ? [Sidebar_Recorded_Note] : [])]
+                     .join ('\n'),
           iconPath: new vscode.ThemeIcon ('symbol-field') });
 
-const Sidebar_Value_Item = ({ Text }) =>
-  Object.assign (new vscode.TreeItem (Sidebar_Shown_Path (Text), Sidebar_Leaf),
+const Sidebar_Package_Of = (Name) =>
+  ((At) => (At < 0 ? null : Name.slice (0, At))) (Name.indexOf ("'"));
+
+const Sidebar_Packages = (Given, Rows) =>
+  [...new Set ([...(Given.packages ?? []),
+                ...Rows.map (({ name }) => Sidebar_Package_Of (name))
+                       .filter ((Package) => Package !== null)])]
+    .map ((Package) => ({
+       Kind: 'package',
+       Package,
+       Rows: Rows.filter (({ name }) => Sidebar_Package_Of (name) === Package)
+                 .map ((Row) =>
+                   ({ ...Row, name: Row.name.slice (Package.length + 1) })),
+     }));
+
+const Sidebar_Package_Item = ({ Package, Rows }) =>
+  Object.assign (
+    new vscode.TreeItem (Package,
+      Rows.length === 0 ? Sidebar_Leaf
+                        : vscode.TreeItemCollapsibleState.Collapsed),
+    { description: Rows.length > 0 &&
+                   Rows.every (({ recorded }) => recorded === true)
+        ? `${Rows.length} · recorded` : String (Rows.length),
+      tooltip: `package ${Package}`,
+      iconPath: new vscode.ThemeIcon ('package'),
+      contextValue: 'turboadaPackage' });
+
+const Sidebar_Library_Rows = (Library) =>
+  Library === null || Library === undefined
+    ? []
+    : [['Library file', Library.file],
+       ['Kind', Library.kind],
+       ['Directory', Library.directory],
+       ['ALI directory', Library.ali_directory],
+       ['Interface sources', Library.source_directory],
+       ['Version', Library.version],
+       ['Standalone', Library.standalone === true
+          ? (Library.auto_init === true ? 'yes, initialized when loaded'
+                                        : 'yes')
+          : Library.standalone === false ? 'no' : null],
+       ['Externally built', Library.externally_built === true ? 'yes' : null]]
+        .filter (([, Value]) =>
+           Value !== null && Value !== undefined && Value !== '')
+        .map (([name, Value]) =>
+           ({ name, index: null, values: [String (Value)] }))
+        .concat ((Library.interface ?? []).length === 0 ? [] :
+           [{ name: 'Interface', index: null, values: Library.interface }]);
+
+const Sidebar_Value_Item = ({ Text, Unit }) =>
+  Object.assign (new vscode.TreeItem (Sidebar_Shown_Path (Text) + (Unit ?? ''),
+                                      Sidebar_Leaf),
     { iconPath: new vscode.ThemeIcon ('symbol-string') });
 
 const Sidebar_Variable_Item = ({ Variable }) =>
@@ -3364,14 +3514,34 @@ const Sidebar_Source_Item = ({ Path, Tag }) =>
 const Sidebar_Language_Children = ({ Sources }) =>
   Sources.map ((Source) => ({ Kind: 'source', ...Source }));
 
-const Sidebar_Import_Node = (File, Trail) =>
+const Sidebar_Instance = (File, Nth) =>
+  (Sidebar_Model.Instances?.get (File) ?? [])[Nth] ??
+  Sidebar_Model.By_File.get (File);
+
+const Sidebar_Import_Node = (File, Trail, Nth, Relation) =>
   ((Found) =>
      Found === undefined || Trail.includes (File)
        ? { Kind: 'attribute',
-           Row: { name: 'import', index: null, values: [File] } }
-       : { Kind: 'project', Given: Found, Root: false,
+           Row: { name: Relation, index: null, values: [File] } }
+       : { Kind: 'project', Given: Found, Root: false, Relation,
            Trail: [...Trail, File] })
-    (Sidebar_Model.By_File.get (File));
+    (Sidebar_Instance (File, Nth));
+
+const Sidebar_Nth_Of = (Files) =>
+  Files.map ((File, At) =>
+    ({ File, Nth: Files.slice (0, At).filter ((Other) => Other === File)
+                       .length }));
+
+const Sidebar_Related = (Given, Trail) =>
+  [...Sidebar_Nth_Of (Given.imports ?? []).map (({ File, Nth }) =>
+     Sidebar_Import_Node (File, Trail, Nth, 'import')),
+   ...(Given.limited ?? []).map ((File) =>
+     Sidebar_Import_Node (File, Trail, 0, 'limited with')),
+   ...(Given.extends === null || Given.extends === undefined ? [] :
+       [Sidebar_Import_Node (Given.extends, Trail, 0,
+          Given.extends_all === true ? 'extends all' : 'extends')]),
+   ...(Given.aggregated ?? []).map ((File) =>
+     Sidebar_Import_Node (File, Trail, 0, 'aggregate'))];
 
 const Sidebar_Project_Children = ({ Given, Trail, Root }) => {
   const Attributes = Given.attributes ?? [];
@@ -3381,22 +3551,24 @@ const Sidebar_Project_Children = ({ Given, Trail, Root }) => {
   const Grouped = (Name) =>
     Groups !== null &&
     Language_Source_Keys.some (({ Keys }) => Keys.includes (Name));
+  const Shown = Attributes.filter (({ name }) =>
+    name !== 'Main' && name !== 'Source_Files' && !Grouped (name));
   return [
     ...(Root ? [] : Sidebar_Mains (Given)),
     ...Sidebar_Sources (Given, Groups, Root),
     ...Sidebar_Section ('Imported projects', 'references', false,
-      'The projects this one withs or extends',
-      [...(Given.imports ?? []).map ((File) =>
-           Sidebar_Import_Node (File, Trail ?? [Given.file])),
-       ...(Given.extends === null || Given.extends === undefined ? [] :
-           [Named ({ name: 'extends', index: null,
-                     values: [Given.extends] })])]),
+      'The projects this one withs, extends or aggregates',
+      Sidebar_Related (Given, Trail ?? [Given.file])),
+    ...Sidebar_Section ('Library', 'library', false,
+      'The library this project builds',
+      Sidebar_Library_Rows (Given.library).map (Named)),
     ...Sidebar_Section ('Settings', 'symbol-property', false,
       'The attributes the project file sets, as the compiler reads them',
-      Attributes.filter (({ name }) =>
-                   name !== 'Main' && name !== 'Source_Files' &&
-                   !Grouped (name))
-                .map (Named)),
+      Shown.filter (({ name }) => Sidebar_Package_Of (name) === null)
+           .map (Named)),
+    ...Sidebar_Section ('Packages', 'package', false,
+      'The packages the project file declares, and the attributes in each',
+      Sidebar_Packages (Given, Shown)),
     ...Sidebar_Section ('Types and variables', 'symbol-variable', false,
       'The types and variables the project file declares',
       [...(Given.types ?? []).map (({ name, values }) =>
@@ -3408,7 +3580,9 @@ const Sidebar_Project_Children = ({ Given, Trail, Root }) => {
 
 const Sidebar_Attribute_Children = ({ Row }) =>
   Row.values.length > 1
-    ? Row.values.map ((Text) => ({ Kind: 'value', Text }))
+    ? Row.values.map ((Text, At) =>
+        ({ Kind: 'value', Text,
+           Unit: Sidebar_Unit_At ((Row.unit_indexes ?? [])[At]) }))
     : [];
 
 const Sidebar_Roots = () =>
@@ -3420,13 +3594,16 @@ const Sidebar_Roots = () =>
              Text: 'the project would not read; see the Problems panel' }]
         : [...Sidebar_Model.Variables.map ((Variable) =>
                ({ Kind: 'variable', Variable })),
-           ...Sidebar_Mains (Sidebar_Model.Plan.projects[0]),
+           ...Sidebar_Root_Mains (Sidebar_Model.Plan.projects[0]),
            { Kind: 'project',
              Given: Sidebar_Model.Plan.projects[0], Root: true }];
 
 const Sidebar_Kinds = {
   project:   { Item: Sidebar_Project_Item,   Children: Sidebar_Project_Children },
   section:   { Item: Sidebar_Section_Item,   Children: ({ Items }) => Items },
+  package:   { Item: Sidebar_Package_Item,
+               Children: ({ Rows }) =>
+                 Rows.map ((Row) => ({ Kind: 'attribute', Row })) },
   folder:    { Item: Sidebar_Folder_Item,    Children: Sidebar_Folder_Children },
   file:      { Item: Sidebar_File_Item,      Children: () => [] },
   main:      { Item: Sidebar_Main_Item,      Children: () => [] },
@@ -3541,7 +3718,9 @@ const Sidebar_Build = (Memory, Clean, Output) => async (Element, Debug) => {
   if (!await Cleared_First (Memory, Clean)) return null;
   await Memory.update (Built_With, Stamp_Of ());
   const Outcome = await Progress_Build (
-    Project, Element?.Main === undefined ? [] : [Element.Main], Output,
+    Project,
+    Element?.Main === undefined || Element.Main === null ? [] : [Element.Main],
+    Output,
     Debug);
   void Told_The_Outcome (Outcome, Output);
   return Outcome;
@@ -3553,7 +3732,11 @@ const Sidebar_Attribute_Values = (Given, Name, Index) =>
                       (Index === undefined || Row.index === Index))
     .flatMap ((Row) => Row.values);
 
+const Sidebar_Planned_Executable = (Given, Main) =>
+  (Given?.mains ?? []).find (({ name }) => name === Main)?.executable ?? null;
+
 const Sidebar_Executable = (Given, Main) =>
+  Sidebar_Planned_Executable (Given, Main) ??
   ((Directory) =>
      Directory === undefined
        ? null
@@ -3611,6 +3794,571 @@ const Sidebar_Registration = (Memory, Output, Refreshed) =>
      Run_Main (Memory, Clean_Project, Output)),
    vscode.commands.registerCommand ('turboada.stopBuild',
      () => Build_Stop?.())];
+
+const Project_Languages = ['gpr', 'gpj'];
+
+const Project_Selector = (Language) => ({ scheme: 'file', language: Language });
+
+const Is_Project_Document = (Document) =>
+  Document.uri.scheme === 'file' &&
+  (Project_Languages.includes (Document.languageId) ||
+   Is_A_Project (Document.uri.fsPath));
+
+const Project_Format_Of = (Document) =>
+  Document.languageId === 'gpj' ||
+  path.extname (Document.uri.fsPath).toLowerCase () === '.gpj'
+    ? 'gpj' : 'gpr';
+
+const Project_Schemas = new Map ();
+
+const Project_Schema = async () => {
+  const Compiler = Compiler_Path ();
+  if (Project_Schemas.has (Compiler)) return Project_Schemas.get (Compiler);
+  const Reply = await Ran (['--project-schema']);
+  const Schema = Reply.Code === 0 ? Parsed (Reply.Answer) : null;
+  if (Schema !== null) Project_Schemas.set (Compiler, Schema);
+  return Schema;
+};
+
+const Same_Name = (Left, Right) =>
+  String (Left).toLowerCase () === String (Right).toLowerCase ();
+
+const Schema_Package = (Schema, Name) =>
+  (Schema?.packages ?? []).find ((Row) => Same_Name (Row.name, Name));
+
+const Schema_Attributes_In = (Schema, Package) =>
+  (Schema?.attributes ?? []).filter ((Row) => Same_Name (Row.package, Package));
+
+const Schema_Attribute = (Schema, Package, Name) =>
+  Schema_Attributes_In (Schema, Package)
+    .find ((Row) => Same_Name (Row.name, Name));
+
+const Schema_Builtin = (Schema, Name) =>
+  (Schema?.builtins ?? []).find ((Row) => Same_Name (Row.name, Name));
+
+const Attribute_Spelled = (Row) =>
+  Row.package === '' ? Row.name : `${Row.package}'${Row.name}`;
+
+const Attribute_Facts = (Row) => [
+  Row.description ?? '',
+  '',
+  `- value: ${Row.value === 'list' ? 'a list of strings' : 'a string'}` +
+    (Row.path === true ? ', paths read from the project\'s directory' : ''),
+  ...(Row.index === null || Row.index === undefined ? [] :
+      [`- index: ${Row.index}${Row.others === true ? ', or others' : ''}`]),
+  ...((Row.values ?? []).length === 0 ? [] :
+      [`- one of: ${Row.values.map ((Value) => `\`${Value}\``).join (', ')}`]),
+  ...(Row.default === undefined ? [] : [`- default: \`${Row.default}\``]),
+  ...(Row.recorded === true
+        ? ['- recorded: read, kept and shown, not acted on by this builder']
+        : []),
+];
+
+const Attribute_Documented = (Schema, Row) =>
+  Row.alias_of === undefined
+    ? [`**${Attribute_Spelled (Row)}**`, '', ...Attribute_Facts (Row)]
+        .join ('\n')
+    : ((Target) =>
+         [`**${Attribute_Spelled (Row)}** is another name for ` +
+          `**${Attribute_Spelled ({ ...Row, name: Row.alias_of })}**.`,
+          ...(Target === undefined ? [] : ['', ...Attribute_Facts (Target)])]
+           .join ('\n'))
+        (Schema_Attributes_In (Schema, Row.package)
+           .find ((Other) => Other.name === Row.alias_of &&
+                             Other.alias_of === undefined));
+
+const Package_Roles = {
+  builds: 'The builder acts on it.',
+  editor: 'The editor extension reads it.',
+  tool: 'It belongs to another tool: read, kept and shown, not acted on.',
+};
+
+const Package_Documented = (Row) =>
+  [`**package ${Row.name}**`, '', Row.description ?? '', '',
+   Package_Roles[Row.role] ?? Package_Roles.tool].join ('\n');
+
+const Builtin_Documented = (Row) =>
+  [`**${Row.name}**`, '', Row.description ?? '', '',
+   Row.least === Row.most
+     ? `${Row.least} argument${Row.least === 1 ? '' : 's'}`
+     : `${Row.least} to ${Row.most} arguments`].join ('\n');
+
+const Gpr_Uncommented = (Line) => {
+  let Quoted = false;
+  for (let At = 0; At < Line.length; At++) {
+    if (Line[At] === '"') Quoted = !Quoted;
+    else if (!Quoted && Line.startsWith ('--', At)) return Line.slice (0, At);
+  }
+  return Line;
+};
+
+const Gpr_Package_Opening =
+  /^\s*package\s+([A-Za-z]\w*)(\s+extends\s+[\w.]+)?\s+is\b/i;
+
+const Gpr_Block_Closing = /^\s*end\s+([A-Za-z][\w.]*)\s*;/i;
+
+const Gpr_Package_At = (Before) =>
+  Before.split ('\n').map (Gpr_Uncommented).reduce ((Open, Line) => {
+    const Opened = Gpr_Package_Opening.exec (Line);
+    if (Opened !== null) return [...Open, Opened[1]];
+    const Closed = Gpr_Block_Closing.exec (Line);
+    return Closed !== null && Open.length > 0 &&
+           Same_Name (Open[Open.length - 1], Closed[1])
+      ? Open.slice (0, -1) : Open;
+  }, []).pop () ?? '';
+
+const Word_At = (Line, Column, Pattern) => {
+  for (const Found of Line.matchAll (Pattern))
+    if (Found.index <= Column && Column <= Found.index + Found[0].length)
+      return { Text: Found[0], Start: Found.index,
+               End: Found.index + Found[0].length };
+  return null;
+};
+
+const Gpr_Keywords =
+  ['project', 'is', 'end', 'for', 'use', 'package', 'renames', 'extends',
+   'all', 'with', 'limited', 'type', 'case', 'when', 'others', 'null', 'at',
+   'abstract', 'aggregate', 'library', 'configuration', 'standard'];
+
+const Completion_Row = (Label, Kind, Detail, Documentation, Insert) =>
+  ({ Label, Kind, Detail, Documentation, Insert: Insert ?? Label });
+
+const Attribute_Rows = (Schema, Package) =>
+  Schema_Attributes_In (Schema, Package).map ((Row) =>
+    Completion_Row (Row.name, 'Property',
+      Row.alias_of === undefined
+        ? `${Row.value}${Row.index === null ? '' : ', indexed'}`
+        : `another name for ${Row.alias_of}`,
+      Attribute_Documented (Schema, Row)));
+
+const Odd_Quotes = (Line) => (Line.split ('"').length - 1) % 2 === 1;
+
+const Gpr_Completions = (Schema, Before) => {
+  const Line = Before.slice (Before.lastIndexOf ('\n') + 1);
+  if (Gpr_Uncommented (Line) !== Line) return [];
+  const Valued =
+    /\bfor\s+([A-Za-z]\w*)\s*(?:\([^)]*\))?\s+use\b[^;]*"[^"]*$/i.exec (Line);
+  if (Valued !== null && Odd_Quotes (Line)) {
+    const Row = Schema_Attribute (Schema, Gpr_Package_At (Before), Valued[1]);
+    return (Row?.values ?? []).map ((Value) =>
+      Completion_Row (Value, 'EnumMember', Attribute_Spelled (Row),
+                      Row.description));
+  }
+  if (Odd_Quotes (Line)) return [];
+  if (/\bpackage\s+[A-Za-z_]*$/i.test (Line))
+    return (Schema?.packages ?? []).map ((Row) =>
+      Completion_Row (Row.name, 'Module', Row.role, Package_Documented (Row)));
+  if (/\bfor\s+[A-Za-z_]*$/i.test (Line))
+    return Attribute_Rows (Schema, Gpr_Package_At (Before));
+  const Referenced = /([A-Za-z][\w.]*)'[A-Za-z_]*$/.exec (Line);
+  if (Referenced !== null)
+    return ((Package) =>
+       Package !== undefined
+         ? Attribute_Rows (Schema, Package.name)
+         : [...Attribute_Rows (Schema, ''),
+            Completion_Row ('Name', 'Field', 'the project\'s name',
+                            'The name of the project.'),
+            Completion_Row ('Project_Dir', 'Field', 'the project\'s directory',
+                            'The directory the project file is in.')])
+      (Schema_Package (Schema, Referenced[1].split ('.').pop ()));
+  return [...Gpr_Keywords.map ((Word) =>
+            Completion_Row (Word, 'Keyword', 'keyword', '')),
+          ...(Schema?.builtins ?? []).map ((Row) =>
+            Completion_Row (Row.name, 'Function', 'built-in function',
+                            Builtin_Documented (Row), `${Row.name} (`))];
+};
+
+const Gpj_Completions = (Schema, Before) => {
+  const Line = Before.slice (Before.lastIndexOf ('\n') + 1);
+  const Gpj = Schema?.gpj ?? {};
+  if (/(^|\s)#/.test (Line)) return [];
+  if (/\$[({]%[A-Za-z_]*$/.test (Line))
+    return [
+      Completion_Row ('option_value', 'Function', 'an option\'s value so far',
+        '`${%option_value(-opt)}` is the value the option -opt has so far, ' +
+        'an inherited one included.', 'option_value('),
+      Completion_Row ('expand_path', 'Function',
+        'a directory read from the project\'s',
+        '`${%expand_path(dir)}` is that directory resolved from the ' +
+        'project\'s.', 'expand_path(')];
+  if (/\[[^\]]*$/.test (Line))
+    return (Gpj.tags ?? []).map ((Row) =>
+      Completion_Row (Row.name, 'EnumMember', 'tag', Row.description,
+                      `${Row.name}]`));
+  if (/^\s*:[A-Za-z]*$/.test (Line))
+    return (Gpj.settings ?? []).map ((Row) =>
+      Completion_Row (Row.name, 'Property', 'setting', Row.description,
+                      `${Row.name}=`));
+  const Optioned = /^\s*(?:\{[^}]*\}\s*)?(-\S*)$/.exec (Line);
+  if (Optioned !== null)
+    return (Gpj.options ?? []).map ((Row) =>
+      ({ ...Completion_Row (Row.name, 'Property', 'option', Row.description),
+         Replace: Optioned[1].length }));
+  if (/^[A-Za-z]*$/.test (Line))
+    return (Gpj.directives ?? []).map ((Row) =>
+      Completion_Row (Row.name, 'Keyword', 'directive', Row.description,
+                      `${Row.name} `));
+  return [];
+};
+
+const Gpr_Hover = (Schema, Lines, Row, Column) => {
+  const Line = Gpr_Uncommented (Lines[Row] ?? '');
+  const Word = Word_At (Line, Column, /[A-Za-z]\w*/g);
+  if (Word === null) return null;
+  const Before = Line.slice (0, Word.Start);
+  const After = Line.slice (Word.End);
+  const Package = Schema_Package (Schema, Word.Text);
+  if (Package !== undefined &&
+      (/\b(package|end|renames|extends)\s+(\w+\.)*$/i.test (Before) ||
+       /^'/.test (After)))
+    return Package_Documented (Package);
+  const Builtin = Schema_Builtin (Schema, Word.Text);
+  if (Builtin !== undefined && /^\s*\(/.test (After) && !/'$/.test (Before))
+    return Builtin_Documented (Builtin);
+  const Prefix = /([A-Za-z][\w.]*)'$/.exec (Before);
+  if (Prefix === null && !/\bfor\s+$/i.test (Before)) return null;
+  const Owner = Prefix === null
+    ? Gpr_Package_At (Lines.slice (0, Row + 1).join ('\n'))
+    : Schema_Package (Schema, Prefix[1].split ('.').pop ())?.name ?? '';
+  const Attribute = Schema_Attribute (Schema, Owner, Word.Text);
+  return Attribute === undefined
+    ? null : Attribute_Documented (Schema, Attribute);
+};
+
+const Gpj_Hover = (Schema, Lines, Row, Column) => {
+  const Line = Lines[Row] ?? '';
+  const Gpj = Schema?.gpj ?? {};
+  const Open = Line.lastIndexOf ('[', Column);
+  const Close = Open < 0 ? -1 : Line.indexOf (']', Open);
+  if (Open >= 0 && Close >= Column) {
+    const Tag = (Gpj.tags ?? []).find ((Given) =>
+      Same_Name (Given.name, Line.slice (Open + 1, Close).trim ()));
+    return Tag === undefined ? null : `**[${Tag.name}]**\n\n${Tag.description}`;
+  }
+  const Token = Word_At (Line, Column, /[^\s"'{}=]+/g);
+  if (Token === null) return null;
+  if (Token.Text.startsWith (':'))
+    return ((Setting) =>
+       Setting === undefined
+         ? null : `**:${Setting.name}**\n\n${Setting.description}`)
+      ((Gpj.settings ?? []).find ((Given) =>
+         Given.name === Token.Text.slice (1)));
+  if (Token.Text.startsWith ('-'))
+    return ((Option) =>
+       Option === undefined
+         ? `**${Token.Text}**\n\nRead through the Green Hills table of the ` +
+           'compiler; an option the table does not know is a compiler switch.'
+         : `**${Option.name}**\n\n${Option.description}`)
+      ((Gpj.options ?? [])
+         .filter ((Given) => Token.Text.startsWith (Given.name))
+         .sort ((Left, Right) => Right.name.length - Left.name.length)[0]);
+  const Directive = (Gpj.directives ?? []).find ((Given) =>
+    Given.name === Token.Text);
+  return Directive !== undefined && Token.Start === 0
+    ? `**${Directive.name}**\n\n${Directive.description}` : null;
+};
+
+const Outline_Symbol = (Name, Detail, Kind, Line) =>
+  ({ Name: Name === '' ? '(unnamed)' : Name, Detail, Kind, Line, Last: Line,
+     Children: [] });
+
+const Outline_Detail_Width = 60;
+
+const Outline_Clipped = (Text) =>
+  Text.length <= Outline_Detail_Width
+    ? Text : `${Text.slice (0, Outline_Detail_Width - 1)}…`;
+
+const Gpr_Outline = (Text) => {
+  const Roots = [];
+  const Open = [];
+  const Add = (Symbol) => {
+    (Open.length === 0 ? Roots : Open[Open.length - 1].Children)
+      .push (Symbol);
+    return Symbol;
+  };
+  const Lines = Text.split ('\n');
+  Lines.forEach ((Raw, Row) => {
+    const Line = Gpr_Uncommented (Raw);
+    const Withed = /^\s*(limited\s+)?with\s+(.*)$/i.exec (Line);
+    const Header =
+      /^\s*((?:[A-Za-z]+\s+)*?)project\s+([A-Za-z][\w.]*)(.*?)\s+is\b/i
+        .exec (Line);
+    const Package = /^\s*package\s+([A-Za-z]\w*)\s*(.*?)\s*(\bis\b|;)/i
+      .exec (Line);
+    const Typed = /^\s*type\s+([A-Za-z]\w*)\s+is\b/i.exec (Line);
+    const Declared =
+      /^\s*for\s+([A-Za-z]\w*)\s*(\([^)]*\))?\s+use\b\s*(.*?)\s*;?\s*$/i
+        .exec (Line);
+    const Variable =
+      /^\s*([A-Za-z]\w*)\s*(?::\s*([\w.]+)\s*)?:=\s*(.*?)\s*;?\s*$/.exec (Line);
+    const Closed = /^\s*end\s+(?!case\b)([A-Za-z][\w.]*)\s*;/i.exec (Line);
+    if (Withed !== null && Open.length === 0)
+      [...Withed[2].matchAll (/"([^"]*)"/g)].forEach (([, File]) =>
+        Add (Outline_Symbol (File, Withed[1] === undefined
+                                     ? 'with' : 'limited with',
+                             'Namespace', Row)));
+    else if (Header !== null)
+      Open.push (Add (Outline_Symbol (Header[2],
+        [Header[1].trim (), Header[3].trim ()]
+          .filter ((Part) => Part !== '').join (' '),
+        'Module', Row)));
+    else if (Package !== null)
+      ((Symbol) => { if (/^is$/i.test (Package[3])) Open.push (Symbol); })
+        (Add (Outline_Symbol (Package[1], Package[2], 'Package', Row)));
+    else if (Typed !== null)
+      Add (Outline_Symbol (Typed[1], 'type', 'Enum', Row));
+    else if (Declared !== null)
+      Add (Outline_Symbol (
+        Declared[2] === undefined ? Declared[1]
+                                  : `${Declared[1]} ${Declared[2]}`,
+        Outline_Clipped (Declared[3]), 'Property', Row));
+    else if (Variable !== null)
+      Add (Outline_Symbol (Variable[1], Variable[2] ?? '', 'Variable', Row));
+    else if (Closed !== null && Open.length > 0)
+      Open.pop ().Last = Row;
+  });
+  Open.forEach ((Symbol) => { Symbol.Last = Lines.length - 1; });
+  return Roots;
+};
+
+const Gpj_Uncommented = (Line) => {
+  let Quote = null;
+  for (let At = 0; At < Line.length; At++) {
+    if (Quote !== null) { if (Line[At] === Quote) Quote = null; }
+    else if (Line[At] === '"' || Line[At] === '\'') Quote = Line[At];
+    else if (Line[At] === '#' && (At === 0 || /\s/.test (Line[At - 1])))
+      return Line.slice (0, At);
+  }
+  return Line;
+};
+
+const Gpj_Outline = (Text, Schema) => {
+  const Roots = [];
+  const Directives = (Schema?.gpj?.directives ?? []).map (({ name }) => name);
+  let Holder = null;
+  let Options = false;
+  Text.split ('\n').forEach ((Raw, Row) => {
+    const Line = Gpj_Uncommented (Raw).trimEnd ();
+    const Bare = Line.trim ();
+    if (Bare === '') return;
+    const First = Bare.split (/\s/)[0];
+    if (!/^\s/.test (Line) && Directives.includes (First))
+      return void Roots.push (Outline_Symbol (Bare, 'directive', 'Constant',
+                                              Row));
+    if (/^\[[^\]]+\]$/.test (Bare)) {
+      Holder = Outline_Symbol (Bare, 'project', 'Module', Row);
+      Options = true;
+      return void Roots.push (Holder);
+    }
+    const Linked = Options && Bare.startsWith ('"');
+    if (/^(\{[^}]*\}\s*)?[-:]/.test (Bare) || Linked) {
+      (Holder === null ? Roots : Holder.Children)
+        .push (Linked ? Outline_Symbol (Bare, 'linked', 'File', Row)
+                      : Outline_Symbol (Bare, 'option', 'Property', Row));
+      if (Holder !== null) Holder.Last = Row;
+      return;
+    }
+    Options = false;
+    const Entry = /^(\{[^}]*\}\s*)?("[^"]*"|\S+)\s*(\[[^\]]*\])?/.exec (Bare);
+    Holder = Outline_Symbol (Entry[2], Entry[3] ?? '',
+                             /\.gpj"?$/i.test (Entry[2]) ? 'Module' : 'File',
+                             Row);
+    Roots.push (Holder);
+  });
+  return Roots;
+};
+
+const Gpr_Indent_Width = 3;
+
+const Gpr_Opens = (Line) =>
+  /^((?:[A-Za-z]+\s+)*?)project\s+[A-Za-z][\w.]*.*\bis$/i.test (Line) ||
+  /^package\s+[A-Za-z]\w*(\s+extends\s+[\w.]+)?\s+is$/i.test (Line) ||
+  /^case\s+.*\bis$/i.test (Line);
+
+const Gpr_Formatted = (Text) => {
+  const Kinds = [];
+  let Continued = false;
+  const Depth_Of = (Code) => {
+    if (/^end\s+case\s*;/i.test (Code)) {
+      while (Kinds.length > 0 && Kinds[Kinds.length - 1] === 'when')
+        Kinds.pop ();
+      Kinds.pop ();
+      return Kinds.length;
+    }
+    if (/^end\b/i.test (Code)) {
+      while (Kinds.length > 0 &&
+             ['when', 'case'].includes (Kinds[Kinds.length - 1]))
+        Kinds.pop ();
+      Kinds.pop ();
+      return Kinds.length;
+    }
+    if (/^when\b/i.test (Code)) {
+      if (Kinds[Kinds.length - 1] === 'when') Kinds.pop ();
+      Kinds.push ('when');
+      return Kinds.length - 1;
+    }
+    const At = Kinds.length + (Continued && Code !== '' ? 1 : 0);
+    if (Gpr_Opens (Code)) Kinds.push (/^case\b/i.test (Code) ? 'case' : 'block');
+    return At;
+  };
+  return Text.split ('\n').map ((Raw) => {
+    const Bare = Raw.trim ();
+    if (Bare === '') return '';
+    const Code = Gpr_Uncommented (Bare).trim ();
+    const Depth = Depth_Of (Code);
+    if (Code !== '')
+      Continued = !/;$/.test (Code) && !Gpr_Opens (Code) &&
+                  !/^when\b.*=>$/i.test (Code);
+    return ' '.repeat (Gpr_Indent_Width * Depth) + Bare;
+  }).join ('\n').replace (/\n*$/, '\n');
+};
+
+const Gpj_Formatted = (Text) => {
+  let Entries = false;
+  return Text.split ('\n').map ((Raw, Row) => {
+    const Right = Raw.trimEnd ();
+    const Bare = Right.trim ();
+    if (Bare === '') return '';
+    if (Row === 0 || Bare.startsWith ('#')) return Right;
+    if (/^(\{[^}]*\}\s*)?[-:]/.test (Bare)) return `\t${Bare}`;
+    if (/^\[[^\]]*\]$/.test (Bare)) {
+      Entries = false;
+      return Bare;
+    }
+    if (/^\s/.test (Raw) && !Entries && Bare.startsWith ('"'))
+      return `\t${Bare}`;
+    Entries = true;
+    return Bare.replace (/^("[^"]*"|\S+)\s+(\[[^\]]*\])$/, '$1\t$2');
+  }).join ('\n').replace (/\n*$/, '\n');
+};
+
+const Live_Project_Timers = new Map ();
+
+const Edited_Complaints = (File, Text) =>
+  Text.split (/\r?\n/)
+    .map ((Line) => Complaint_Pattern.exec (Line))
+    .filter ((Match) =>
+       Match !== null &&
+       path.resolve (Beside_The_Folder (Match[1])) === path.resolve (File))
+    .map (([, , Row, Column, Severity, Message]) =>
+       Complaint_Of (Row, Column, Severity, Message));
+
+const Project_Checked = (Edits) => async (Document) => {
+  const File = Document.uri.fsPath;
+  const Reply = await Ran (Project_Arguments (File, ['--project-stdin', '-n']),
+                           undefined, Document.getText ());
+  if (Live_Project_Files.has (File))
+    Edits.set (Document.uri, Edited_Complaints (File, Reply.Complaint));
+};
+
+const Project_Check_Soon = (Edits) => (Document) => {
+  if (!Is_Project_Document (Document)) return;
+  const File = Document.uri.fsPath;
+  Live_Project_Files.add (File);
+  clearTimeout (Live_Project_Timers.get (File));
+  Live_Project_Timers.set (File,
+    setTimeout (() => Project_Checked (Edits) (Document),
+                Math.max (250, Configured ('syncDelay', 120))));
+};
+
+const Project_Unwatched = (Edits) => (Document) => {
+  if (!Is_Project_Document (Document)) return;
+  const File = Document.uri.fsPath;
+  Live_Project_Files.delete (File);
+  clearTimeout (Live_Project_Timers.get (File));
+  Live_Project_Timers.delete (File);
+  Edits.delete (Document.uri);
+};
+
+const Completion_Items = (Rows, Position) =>
+  Rows.map ((Row) => Object.assign (
+    new vscode.CompletionItem (Row.Label, vscode.CompletionItemKind[Row.Kind]),
+    { detail: Row.Detail,
+      documentation: new vscode.MarkdownString (Row.Documentation ?? ''),
+      insertText: Row.Insert,
+      ...(Row.Replace === undefined ? {} :
+          { range: new vscode.Range (Position.line,
+                                     Position.character - Row.Replace,
+                                     Position.line, Position.character) }) }));
+
+const Project_Completion_Provider = {
+  provideCompletionItems: async (Document, Position) =>
+    ((Schema, Before) =>
+       Completion_Items (
+         (Project_Format_Of (Document) === 'gpj'
+            ? Gpj_Completions : Gpr_Completions) (Schema, Before),
+         Position))
+      (await Project_Schema (),
+       Document.getText (new vscode.Range (0, 0, Position.line,
+                                           Position.character))),
+};
+
+const Project_Hover_Provider = {
+  provideHover: async (Document, Position) =>
+    ((Markdown) =>
+       Markdown === null
+         ? undefined : new vscode.Hover (new vscode.MarkdownString (Markdown)))
+      ((Project_Format_Of (Document) === 'gpj' ? Gpj_Hover : Gpr_Hover) (
+         await Project_Schema (), Document.getText ().split ('\n'),
+         Position.line, Position.character)),
+};
+
+const Symbol_Of_Outline = (Document) => (Symbol) =>
+  Object.assign (
+    new vscode.DocumentSymbol (
+      Symbol.Name, Symbol.Detail ?? '', vscode.SymbolKind[Symbol.Kind],
+      new vscode.Range (Symbol.Line, 0, Symbol.Last,
+                        Document.lineAt (Symbol.Last).text.length),
+      new vscode.Range (Symbol.Line, 0, Symbol.Line,
+                        Document.lineAt (Symbol.Line).text.length)),
+    { children: Symbol.Children.map (Symbol_Of_Outline (Document)) });
+
+const Project_Symbol_Provider = {
+  provideDocumentSymbols: async (Document) =>
+    (Project_Format_Of (Document) === 'gpj'
+       ? Gpj_Outline (Document.getText (), await Project_Schema ())
+       : Gpr_Outline (Document.getText ()))
+      .map (Symbol_Of_Outline (Document)),
+};
+
+const Project_Formatting_Provider = {
+  provideDocumentFormattingEdits: (Document) =>
+    ((Before) =>
+       ((After) =>
+          After === Before
+            ? []
+            : [vscode.TextEdit.replace (
+                 new vscode.Range (Document.positionAt (0),
+                                   Document.positionAt (Before.length)),
+                 After)])
+         ((Project_Format_Of (Document) === 'gpj'
+             ? Gpj_Formatted : Gpr_Formatted) (Before)))
+      (Document.getText ()),
+};
+
+const Project_Triggers = { gpr: ["'", '"'], gpj: ['-', ':', '[', '%'] };
+
+const Project_Editing_Registration = (Edits) => {
+  const Check = Project_Check_Soon (Edits);
+  vscode.workspace.textDocuments.forEach (Check);
+  return [
+    vscode.workspace.onDidOpenTextDocument (Check),
+    vscode.workspace.onDidChangeTextDocument (({ document }) =>
+      Check (document)),
+    vscode.workspace.onDidSaveTextDocument (Check),
+    vscode.workspace.onDidCloseTextDocument (Project_Unwatched (Edits)),
+    ...Project_Languages.flatMap ((Language) => [
+      vscode.languages.registerCompletionItemProvider (
+        Project_Selector (Language), Project_Completion_Provider,
+        ...Project_Triggers[Language]),
+      vscode.languages.registerHoverProvider (
+        Project_Selector (Language), Project_Hover_Provider),
+      vscode.languages.registerDocumentSymbolProvider (
+        Project_Selector (Language), Project_Symbol_Provider),
+      vscode.languages.registerDocumentFormattingEditProvider (
+        Project_Selector (Language), Project_Formatting_Provider)]),
+  ];
+};
 
 const http = require ('http');
 const https = require ('https');
@@ -3705,8 +4453,16 @@ const Download_Base = () =>
 
 const Fetched_Names = () =>
   [`${Platform_Folder}/${Compiler_Name}`, 'turboada-runtime.ada',
-   'turboada-runtime-legacy.ada',
-   ...(process.platform === 'win32' ? ['bin-libraries.zip'] : [])];
+   'turboada-runtime-legacy.ada', 'turboada-runtime-apis.ada',
+   'bin-libraries.zip'];
+
+const Payload_Folder = Platform_Folder.replace (/^bin-/, '') + '/';
+
+const Belongs_Beside_Compiler = (Member) =>
+  !Member.Name.endsWith ('/') &&
+  (Member.Name.startsWith (Payload_Folder) ||
+   (process.platform === 'win32' && !Member.Name.includes ('/') &&
+    Member.Name.toLowerCase ().endsWith ('.dll')));
 
 const Got = (Address, Redirects) =>
   new Promise ((Resolve, Reject) => {
@@ -3783,7 +4539,7 @@ const Downloaded_Compiler = async (Context) => {
       const Data = await Got (`${Download_Base ()}/${Name}`);
       if (Name === 'bin-libraries.zip')
         Zip_Members (Data)
-          .filter ((Member) => Member.Name.toLowerCase ().endsWith ('.dll'))
+          .filter (Belongs_Beside_Compiler)
           .forEach ((Member) =>
             fs.writeFileSync (
               path.join (Staging, path.basename (Member.Name)),
@@ -3939,6 +4695,21 @@ const Scaffold_Project = (Name, Kind) => [
   `end ${Name};`,
   ``].join ('\n');
 
+const Scaffold_Gpj = (Name, Kind) => [
+  '#!gbuild',
+  '#  Written by TurboAda: New Project.  Build it with',
+  `#    ta -P ${Name.toLowerCase ()}.gpj [-X BUILD=release]`,
+  'macro BUILD=debug',
+  Kind === 'application' ? '[Program]' : '[Library]',
+  '\t-object_dir=objs',
+  Kind === 'application' ? `\t-o ${Name.toLowerCase ()}`
+                         : `\t-o lib${Name.toLowerCase ()}.a`,
+  '\t{"$(BUILD)" == "release"} -Ospeed',
+  ...(Kind === 'application'
+        ? ['src/main.adb']
+        : [`src/${Name.toLowerCase ()}.ads`, `src/${Name.toLowerCase ()}.adb`]),
+  ''].join ('\n');
+
 const Scaffold_Main = (Name) => [
   `with Text_IO; use Text_IO;`,
   ``,
@@ -3975,12 +4746,27 @@ const Project_Kinds = [
 const Asked_Kind = async () =>
   ((Chosen) => Chosen === undefined ? undefined : Chosen.Kind)
     (await vscode.window.showQuickPick (Project_Kinds,
-       { title: 'New Project: Kind (1/2)',
+       { title: 'New Project: Kind (1/3)',
          placeHolder: 'Select a project kind' }));
+
+const Project_Formats = [
+  { label: 'GNAT project (.gpr)',
+    description: 'the format gprbuild and GNAT Studio read',
+    Format: 'gpr' },
+  { label: 'Green Hills project (.gpj)',
+    description: 'the format MULTI and gbuild read',
+    Format: 'gpj' },
+];
+
+const Asked_Format = async () =>
+  ((Chosen) => Chosen === undefined ? undefined : Chosen.Format)
+    (await vscode.window.showQuickPick (Project_Formats,
+       { title: 'New Project: Format (2/3)',
+         placeHolder: 'Select a project file format' }));
 
 const Asked_Name = () =>
   vscode.window.showInputBox ({
-    title: 'New Project: Name (2/2)',
+    title: 'New Project: Name (3/3)',
     prompt: 'Enter the project name; its lower case names the folder.',
     validateInput: (Given) =>
       Ada_Identifier.test (Given.trim ())
@@ -3989,31 +4775,35 @@ const Asked_Name = () =>
           'underscores.',
   });
 
-const Asked_Location = (Start) =>
+const Asked_Location = (Start, Format) =>
   vscode.window.showSaveDialog ({
-    title: 'New Project: Location (2/2)',
+    title: 'New Project: Location (3/3)',
     saveLabel: 'Create Project',
-    defaultUri: Start ?? vscode.Uri.file (path.join (os.homedir (), '.gpr')),
-    filters: { 'GPR project file': ['gpr'] },
+    defaultUri: Start ??
+                vscode.Uri.file (path.join (os.homedir (), `.${Format}`)),
+    filters: Format === 'gpj' ? { 'Green Hills project file': ['gpj'] }
+                              : { 'GNAT project file': ['gpr'] },
   });
 
 const New_Project = (Context) => async () => {
   const Kind = await Asked_Kind ();
   if (Kind === undefined) return;
+  const Format = await Asked_Format ();
+  if (Format === undefined) return;
 
   const Folder = Opened_Folder ();
   let Name, Parent;
   if (Folder === null) {
     for (let Start;;) {
-      const Chosen = await Asked_Location (Start);
+      const Chosen = await Asked_Location (Start, Format);
       if (Chosen === undefined) return;
-      Name   = path.basename (Chosen.fsPath).replace (/\.gpr$/i, '');
+      Name   = path.basename (Chosen.fsPath).replace (/\.(gpr|gpj)$/i, '');
       Parent = path.dirname (Chosen.fsPath);
       if (Ada_Identifier.test (Name)) break;
-      Start = vscode.Uri.file (path.join (Parent, '.gpr'));
+      Start = vscode.Uri.file (path.join (Parent, `.${Format}`));
       await vscode.window.showErrorMessage (
         Name === ''
-          ? 'TurboAda: the project needs a name before the .gpr.'
+          ? `TurboAda: the project needs a name before the .${Format}.`
           : `TurboAda: '${Name}' is not an Ada identifier, so it cannot ` +
             'name a project.',
         { modal: true });
@@ -4039,7 +4829,9 @@ const New_Project = (Context) => async () => {
   const Written = new vscode.WorkspaceEdit ();
   const Filed = (Where, Text) =>
     Written.createFile (Where, { contents: Buffer.from (Text) });
-  Filed (Under (`${Lower}.gpr`), Scaffold_Project (Name, Kind));
+  Filed (Under (`${Lower}.${Format}`),
+         Format === 'gpj' ? Scaffold_Gpj (Name, Kind)
+                          : Scaffold_Project (Name, Kind));
   if (Kind === 'application')
     Filed (First, Scaffold_Main (Name));
   else {
@@ -4059,7 +4851,7 @@ const New_Project = (Context) => async () => {
     return void vscode.commands.executeCommand ('vscode.openFolder', Root);
 
   await Settled ('projectFile',
-                 vscode.workspace.asRelativePath (Under (`${Lower}.gpr`)));
+                 vscode.workspace.asRelativePath (Under (`${Lower}.${Format}`)));
   await vscode.window.showTextDocument (
     await vscode.workspace.openTextDocument (First));
   if (Known_Compiler.Version === null) Offer_Compiler (Context);
@@ -4132,8 +4924,8 @@ const Debug_Mains = () =>
   ((Root) =>
      Root === undefined
        ? []
-       : Sidebar_Attribute_Values (Root, 'Main')
-           .map ((Main) => ({ Main, Given: Root })))
+       : Sidebar_Root_Mains (Root).map (({ Main, Given, Label }) =>
+           ({ Main, Given, Label })))
     (Sidebar_Model?.Plan?.projects[0]);
 
 const Source_Given = (Given) =>
@@ -4145,12 +4937,12 @@ const Main_Of_The_Source = (Source_Path) =>
   Source_Path === null
     ? undefined
     : Debug_Mains ().find (({ Main }) =>
-        path.basename (Main) === path.basename (Source_Path));
+        Main !== null && path.basename (Main) === path.basename (Source_Path));
 
 const Main_Picked = async (Mains, Title) =>
-  ((Picked) => Mains.find (({ Main }) => Main === Picked))
+  ((Picked) => Mains.find ((Given) => Main_Label (Given) === Picked))
     (await vscode.window.showQuickPick (
-       Mains.map (({ Main }) => Main), { title: Title }));
+       Mains.map (Main_Label), { title: Title }));
 
 const Chosen_Main = async (Given, Title) => {
   if (Given?.Main !== undefined) return Given;
@@ -4169,7 +4961,7 @@ const Chosen_Main = async (Given, Title) => {
 const Debug_Configuration = (Element, Executable) => ({
   type: Debug_Type,
   request: 'launch',
-  name: `TurboAda: ${Element.Main}`,
+  name: `TurboAda: ${Main_Label (Element)}`,
   program: Executable,
 });
 
@@ -4346,6 +5138,8 @@ const activate = (Context) => {
   const Diagnostics = vscode.languages.createDiagnosticCollection ('turboada');
   const Complaints =
     vscode.languages.createDiagnosticCollection ('turboada-project');
+  const Project_Edits =
+    vscode.languages.createDiagnosticCollection ('turboada-project-edits');
   const Status = vscode.window.createStatusBarItem (
     vscode.StatusBarAlignment.Right, 100);
   Status.command = 'turboada.showOutput';
@@ -4384,6 +5178,7 @@ const activate = (Context) => {
     Output,
     Diagnostics,
     Complaints,
+    Project_Edits,
     Status,
     Project_Item,
     Scenario_Item,
@@ -4426,6 +5221,7 @@ const activate = (Context) => {
     ...Ada_Tasks_Registration (),
     ...Bootstrap_Registration (Context),
     ...Scaffold_Registration (Context),
+    ...Project_Editing_Registration (Project_Edits),
     ...Manual_Registration (Context.extensionPath),
     ...Reformat_Registration (Context.extensionPath),
     ...Suggestion_Registration (Context.extensionPath),
@@ -4518,6 +5314,36 @@ console.log ('README tables regenerated from the manifest');
 
 Every user-visible change, newest first. The version is the extension's
 own; the compiler versions independently and answers `--version`.
+
+## Unreleased
+
+Project files of both formats, everywhere the extension reads them:
+
+- A `.gpr` or `.gpj` is checked as you type: the compiler reads the unsaved
+  text (`--project-stdin`) and its errors and warnings appear at their
+  lines.
+- Completion, hover, the outline and Format Document work in `.gpr` and
+  `.gpj` files, from the registry the compiler prints with
+  `--project-schema`: packages, attributes with their index, values and
+  default, built-in functions, and the `.gpj` options, settings, tags and
+  directives.
+- The project view shows limited withs, `extends all`, aggregated
+  projects, the library a project builds, and the packages with their
+  attributes; an attribute the compiler records and does not act on is
+  marked so. Two references to one `.gpj` with different outputs are two
+  projects.
+- Run and Debug use the executable the compiler says a main links, so a
+  `.gpj`'s `-o` and a program whose main is found when it is built are
+  run and debugged too; Clean removes those executables.
+- New Project writes a `.gpj` when asked for one.
+- The scenario lists the environment variables and macros a `.gpj` reads,
+  and an external's origin from the plan when `--externals` cannot be
+  asked.
+- A downloaded compiler comes with `turboada-runtime-apis.ada`, which
+  serves `with SDL;`, `with Vulkan;` and the other API units, and with the
+  shared libraries those units load that the platform lacks.
+  `pragma Dynamic_Library` and `pragma Dynamic_Library_Resolver` are
+  highlighted as the pragmas they are.
 
 ## 1.1.0
 
@@ -4681,16 +5507,25 @@ them wherever they make the code clearer:
 - modular types;
 - if, case and quantified expressions, expression functions and null
   procedures;
-- the `Pre`, `Post` and `Predicate` aspects, and `pragma Assert`; `Pre` on
-  an entry too, evaluated where the call is made, before it is queued;
+- the `Pre`, `Post` and `Predicate` aspects, and `pragma Assert`; `Pre` and
+  `Post` on an entry too, `Pre` evaluated where the call is made, before it
+  is queued, and `Post` where the accept statement or entry body completes;
 - user-defined literals, indexing and iteration (`String_Literal`,
   `Constant_Indexing`, `Variable_Indexing`, `Iterable`);
 - `for ... of` loops, `continue`, `raise ... with`, and `Ada.Exceptions`;
-- private extensions (`is new P with private`), `requeue` between the
-  entries of one protected object, and `delay until`;
+- private extensions (`is new P with private`), `requeue` out of an entry
+  body or an accept statement to an entry of any task or protected object,
+  or to one member of a family, with or without `with abort`, and `delay
+  until`;
 - streams (`'Read`, `'Write`, `Stream_Size`, `Ada.Streams.Stream_IO`);
 - `Atomic` and `Volatile`, and defaults for generic formals; `Atomic` may
-  name a protected type, whose action is indivisible already.
+  name a protected type, whose action is indivisible already;
+- `Interfaces`, `Interfaces.C` and `Interfaces.C.Strings`, and
+  `pragma Dynamic_Library ("libz.so.1", "zlib1.dll", ...)` in a package, which
+  binds its imports at their first use from those libraries instead of at
+  link time; the units `SDL`, `OpenAL`, `Vulkan`, `OpenGL`, `DirectX`, `Zlib`,
+  `Opus` and `Metal` are such bindings, with the C names kept
+  (`SDL_Init`, `vkCreateInstance`, `glDrawArrays`).
 
 Never write what the compiler does not have:
 
@@ -4700,11 +5535,13 @@ Never write what the compiler does not have:
   `Ada.Numerics` or `Ada.Real_Time`, none of which exists here.
 
 The predefined packages are `Standard`, `System`, `Text_IO` with its
-`Integer_IO`, `Float_IO`, `Fixed_IO` and `Enumeration_IO`, `Sequential_IO`,
-`Direct_IO`, `IO_Exceptions`, `Calendar`, `Low_Level_IO`, `Machine_Code`,
-`Unchecked_Conversion` and `Unchecked_Deallocation`, also reachable under
-their `Ada.` names, beside `Ada.Finalization`, `Ada.Streams`, `Ada.Exceptions`,
-`Ada.Assertions` and `Ada.Command_Line`.
+`Integer_IO`, `Modular_IO`, `Float_IO`, `Fixed_IO` and `Enumeration_IO`,
+`Sequential_IO`, `Direct_IO`, `IO_Exceptions`, `Calendar`, `Low_Level_IO`,
+`Machine_Code`, `Unchecked_Conversion` and `Unchecked_Deallocation`, also
+reachable under their `Ada.` names, beside `Ada.Finalization`, `Ada.Streams`,
+`Ada.Exceptions`, `Ada.Assertions` and `Ada.Command_Line`, with `Interfaces`,
+`Interfaces.C` and `Interfaces.C.Strings`, and the API units `SDL`, `OpenAL`,
+`Vulkan`, `OpenGL`, `DirectX`, `Zlib`, `Opus` and `Metal`.
 
 If the project is built with `-ada83` (the setting `turboada.languageExtensions`
 off), none of the later constructs belongs in these files: write Ada 83 as
@@ -5290,7 +6127,7 @@ the clause it extends.
     "pragma": {
       "patterns": [
         {
-          "match": "(?i)\\b(pragma)\\s+(assert|atomic|atomic_components|controlled|convention|elaborate|elaborate_all|export|import|inline|interface|list|memory_size|optimize|pack|page|preelaborate|priority|profile|pure|restrictions|shared|storage_unit|suppress|system_name|unreferenced|volatile|volatile_components)\\b",
+          "match": "(?i)\\b(pragma)\\s+(assert|atomic|atomic_components|controlled|convention|dynamic_library|dynamic_library_resolver|elaborate|elaborate_all|export|import|inline|interface|list|memory_size|optimize|pack|page|preelaborate|priority|profile|pure|restrictions|shared|storage_unit|suppress|system_name|unreferenced|volatile|volatile_components)\\b",
           "captures": {
             "1": { "name": "keyword.other.pragma.ada" },
             "2": { "name": "support.function.pragma.ada" }
@@ -5468,7 +6305,7 @@ the clause it extends.
         },
         {
           "name": "support.class.ada",
-          "match": "(?i)\\b(Standard|ASCII|System|Calendar|Text_IO|Sequential_IO|Direct_IO|IO_Exceptions|Low_Level_IO|Machine_Code|Unchecked_Conversion|Unchecked_Deallocation|Integer_IO|Float_IO|Fixed_IO|Enumeration_IO|Ada|Finalization|Streams|Stream_IO|Exceptions|Assertions|Command_Line|Integer_Text_IO|Float_Text_IO)\\b"
+          "match": "(?i)\\b(Standard|ASCII|System|Calendar|Text_IO|Sequential_IO|Direct_IO|IO_Exceptions|Low_Level_IO|Machine_Code|Unchecked_Conversion|Unchecked_Deallocation|Integer_IO|Modular_IO|Float_IO|Fixed_IO|Enumeration_IO|Ada|Finalization|Streams|Stream_IO|Exceptions|Assertions|Command_Line|Integer_Text_IO|Float_Text_IO)\\b"
         }
       ]
     },

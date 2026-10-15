@@ -1,8 +1,905 @@
 #!/usr/bin/env bash
-set -euo pipefail
+#  Armed only when executed: a sourcing scenario or worker picks its own
+#  options, and an imposed -e would kill scripts whose greps may miss.
+[ "${BASH_SOURCE[0]}" != "$0" ] || set -euo pipefail
 
 SELF=${0##*/}
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+TA_ROOT=$HERE
+TA_LIB=$HERE/$(basename -- "${BASH_SOURCE[0]}")
+
+case $(uname -s 2>/dev/null) in
+    Darwin)               TA_HOST=macos ;;
+    MINGW*|MSYS*|CYGWIN*) TA_HOST=windows ;;
+    *)                    TA_HOST=linux ;;
+esac
+
+TA_TIMEOUT_DEFAULTS='acats       30   30   410
+extensions  30   30   600
+project    120   60   600
+bonus      120   60   600
+repro      120  300  2400
+fuzz        60   20   600
+debug       30   30  1800
+gameplay   600  300  1500'
+
+TA_CRASH='internal error|^internal:|\.ll:[0-9]+:[0-9]+: error:|LLVM ERROR|PLEASE submit|Segmentation fault|Assertion failed|core dumped'
+
+usage(){ cat <<TEXT
+Usage: $SELF [COMMAND] [SELECTOR...] [-j N] [--accept] [--only L] [--skip L]
+
+Test and measure the TurboAda compiler.  Every suite runs through one
+engine: each test is an item in one pool of workers, every verdict is a
+row of results.tsv, and one table reports them.  With no arguments, runs
+every test.
+
+Commands:
+  run [SELECTOR...]   run the selected tests and print a report (the default)
+  q [SELECTOR...]     a quick run of one ACATS group (default: c32)
+  check [SELECTOR...] run, then diff against the baseline; exit 1 on a
+                      regression: a test the baseline passed that no longer
+                      does, or a test the baseline does not know that fails
+  bless [SELECTOR...] run, then record the results in the baseline
+  ci                  run the integrator's suites (acats repro extensions),
+                      print the first failures' logs, write the step summary
+                      when GitHub Actions asks; exit 1 on a failure in any
+                      suite but debug, or on an ACATS test that never ran.
+                      --only/--skip narrow it further
+  list [SELECTOR...]  list the tests the selectors expand to, as SUITE/NAME
+  acats [PREFIX]      run the conformance suite, or the tests whose file
+                      name starts with PREFIX
+  extensions [NAME]   run the extension tests (extensions/)
+  project [CASE]      run the project-file cases (project/), such as gpr,
+                      gpj/t07-macro or build
+  bonus [FEATURE]     run the acats-bonus suite, or one feature's directory
+  debug [SESSION]     run the debugging sessions (debug/run.sh --list names
+                      them); a failure here reports but never gates ci
+  repro [NAME]        run the reproducers, or one; a support file's name
+                      runs the program it supports
+  fuzz [CELL]         run the fuzz corpus, or one cell's directory
+  gameplay [TIER] [NAME]
+                      run the gameplay suite (gameplay/): its movement and
+                      fuzz tiers, or one TIER -- movement, fuzz, fun,
+                      behaviour, bench, audit or survival -- or one map,
+                      case or bench of it; all but movement and fuzz run
+                      only when named
+  bench [MODE]        measure rather than test; see Benchmark modes below
+  help                display this help and exit
+
+The suite commands exit 1 when a test in the run fails; run never does.
+NAME, CASE, FEATURE, SESSION and CELL are a test's name, a directory of
+them, or a shell pattern matching either.
+
+Selectors:
+  all                 every test of every suite (default)
+  a, b, c, d, e, l    one ACATS class
+  PREFIX              ACATS tests whose file name starts with PREFIX (c45)
+  SUITE               one suite: acats extensions project bonus debug repro fuzz
+                      gameplay
+  SUITE/NAME          what the suite command above would take as its argument
+
+Options:
+  -j N                run N tests at a time (default: the processor count)
+  --accept            rewrite the expected output of the project cases and
+                      of the debug programs from this run; read the diff
+                      before committing it
+  --only L            run only these suites (comma or space separated); a
+                      suite outside the list yields no tests even if named
+  --skip L            run every suite but these (comma or space separated);
+                      TA_ONLY and TA_SKIP set the same from the environment
+
+The suites and what each test must do:
+  acats       ACATS 1.11 (tests.zip, unpacked to acats/ and refreshed
+              whenever tests.zip changes), judged by class as the ACVC
+              defines them: B tests must be rejected near every marked
+              line, C tests must print PASSED, L tests must not link.
+  extensions  extensions/NAME.ada builds, runs, prints PASSED and no FAILED.
+              Headers: -- LINK: unit.ada (compiled first, linked in; the
+              unit is support, not a test), -- SYMBOL: s / -- SYMBOL-NOT: s
+              (nm must find, or must not find, s in the program),
+              -- ARGS: words (the command line, shell-quoted).
+  project     project/gpr/gNN-*.gpr, project/gpj/tNN-*.gpj: \`ta -P CASE -n
+              [CASE.args]' run in the case's directory; stdout, stderr and
+              \`exit N' must equal CASE.expected.  project/build/bNN-*.gp[rj]:
+              \`ta -P CASE' in a scratch copy with CC and CXX unset, then the
+              program it linked; \`build exit N', the program's output and
+              \`exit N' join the comparison.  A CASE.known file marks an
+              expected failure, counted as skip with its first line as the
+              reason; a .known case that passes fails, so the marker goes.
+  bonus       acats-bonus/FEATURE/NAME.ada, ACATS 4.2 tests for the post-83
+              features.  A b-test must be rejected with an error on every
+              line marked \`-- ERROR:' (a \`{N:' after the marker accepts the
+              N lines above it too; NAME.errlines may name, per marked line,
+              the lines whose errors stand for it), and with at least as
+              many errors as marked lines; any other test must print PASSED
+              and no FAILED.  NAME.ir lists \`present TEXT' and \`absent TEXT'
+              lines the program's IR must and must not hold.
+  debug       debug/run.sh, one session per program: -g, DWARF, gdb, lldb,
+              DAP and REPL cases; a feature not merged yet is PENDING (skip).
+  repro       repro/NAME.ada, the program each fix was landed with, run in
+              its own empty directory, and repro/DIR/run.sh, a scripted
+              scenario whose exit code is its verdict.  A file another
+              file names in a WITH: header is support, not a test.  A
+              program states what it expects in \`-- KEY: value' lines at
+              the top of the file, before its first line of Ada; with none
+              it must compile, link, run to exit 0, and print no line that
+              begins with FAIL or WRONG or ends with WRONG.  Otherwise:
+                -- FLAGS: -ada83           extra compiler flags
+                -- WITH: a.ada b.ll        files copied beside it and compiled with it
+                -- HOSTS: linux macos      hosts the test can judge; elsewhere it skips
+                -- EXPECT: error TEXT      compilation must fail, with TEXT in an error line
+                -- EXPECT: note TEXT       TEXT must appear in a note line
+                -- EXPECT: warning TEXT    TEXT must appear in a warning line
+                -- EXPECT: no-warning      compilation must produce no warning at all
+                -- EXPECT: raise NAME      the run must end in \`Unhandled exception: NAME'
+                -- EXPECT: print TEXT      some line of the output must be exactly TEXT
+              EXPECT lines may repeat.  note is checked with error; warning,
+              no-warning and print combine with the others; error stops
+              before running; raise replaces the exit-0 rule.
+  fuzz        fuzz/CELL/NAME.ada, the feature-matrix corpus.  The first
+              line says \`-- CLASS: A|B|C' (else the name's first letter):
+              A and C must build, run, print PASSED and no FAILED; B is
+              judged as a bonus b-test is.  What ships is what passes.
+  gameplay    the example game, Turbo Engine, driven headless through its
+              \`--simulate BATCH --out DIR' mode (swarm/apis-2026-10/
+              SIMULATION.md is the contract) by ./craft test, which
+              writes every verdict.  One item is one game process, which
+              loads its map once for all its rows.  Tiers:
+                movement/MAP   the cases of gameplay/movement/cases.tsv on a
+                               test map of gameplay/maps/, each measure
+                               within its tolerance of the oracle in craft or
+                               of the contract; determinism (byte-identical
+                               reruns) and prediction (client against server)
+                fuzz/MAP       fuzzing and exploring bots from every spawn of
+                               a map under turboada-example-game-assets/maps/:
+                               invariant violations, stuck players, pickups
+                               no explorer touched, tick-time spikes, speed
+                               against real time, determinism across processes
+                fun/MAP/MODE   seeded bot matches, each metric of
+                               gameplay/fun.tsv against its band (on demand)
+                behaviour/MAP  deathmatches and duels at every difficulty:
+                               how naturally the bots aim and move and how
+                               often a person-like bot beats each difficulty,
+                               against gameplay/behaviour.tsv (on demand)
+                bench/BENCH    craft bench, one bench an item: recoil against
+                               the CoD4 weapon files, sprint, smooth (a client
+                               walk: camera jerk, pops, frame time and pacing),
+                               rest, anim, speed, look and art (the remix
+                               gates), each metric against gameplay/bench.tsv
+                               (on demand)
+                audit/claims   craft audit, the over-promise audit, a row a
+                               claim (on demand)
+                survival/nights  gameplay/night-shift.tsv's Night Shift runs:
+                               a clean end, the ledger adding up, the grade,
+                               the wave reached, the first death, recruit
+                               against veteran (on demand)
+              Each tier's tables and verdicts land in test_results/RUN/
+              gameplay/TIER/ with report.md and report.html: heatmaps,
+              distributions, and a reproduction command and replay for every
+              failure.  The game is GAME, else bin-<platform>/turboada-
+              example-game, built from turboada-example-game.ada when that is
+              newer; a game that does not answer --simulate makes every row a
+              skip, and one that does not build makes every row a failure.
+
+Every judge fails a compile that crashes (a signal, a timeout, an internal
+error, an LLVM error) whatever else it printed.
+
+A scenario script (repro/DIR/run.sh) starts
+
+    set -euo pipefail
+    . "\$(dirname -- "\${BASH_SOURCE[0]}")/../../test.sh"
+    scenario
+
+and then has HERE (its directory), ADA83 (the compiler, absolute), WORK
+(an empty directory removed on exit) and \`timed compile|run|SECONDS CMD',
+which caps CMD at the suite's limit or at SECONDS.  A script that does not
+source the library still gets ADA83 and TMPDIR from the harness.
+
+Benchmark modes, reached as \`$SELF bench MODE':
+  stages              where compile time goes: front end against back end
+  parser              front end against input size, to expose non-linear cost
+  corpus              throughput over the conformance suite, slowest inputs named
+  compare REFERENCE   this compiler against another build of it, with deltas
+  profile             the functions in turboada.c that compiling spends time in
+  codegen             run time of the generated code, against GNAT where present
+  memory              peak memory of the compiler and of what it produces
+  all                 every mode but compare and profile (the default)
+
+To compare two builds, keep the old binary and name it:
+
+  cp bin-*/ta /tmp/before && make && ./$SELF bench compare /tmp/before
+
+Environment:
+  ADA83              compiler to test (default: bin-<platform>/ta, rebuilt
+                     with make when it is missing or older than turboada.c)
+  OPT                the flag ACATS tests link with (default: -O2); under
+                     bench, the level alone (default: 2)
+  JOBS, NPROC        parallel workers (default: the processor count)
+  COMPILE_TIMEOUT    per-compile cap in seconds, for every suite
+  TEST_TIMEOUT       per-run cap in seconds, for every suite
+  LINK_TIMEOUT       ACATS per-test link cap in seconds (default: 20)
+  WORKER_TIMEOUT     last-resort cap around one ACATS test
+  SCENARIO_TIMEOUT   cap around one scripted test (a scenario, a debug session)
+  STARTUP_TIMEOUT    compiler version-query cap in seconds (default: 30)
+  BUILD_TIMEOUT      compiler rebuild cap in seconds (default: 300)
+  KILL_GRACE         seconds after TERM before a cap sends KILL (default: 5)
+  BASELINE           baseline path (default: test.baseline; an older
+                     acats.baseline is read when it is absent)
+  KEEP_WORK          set to 1 to keep every test's working directory
+  TAP                set to 1 to also write a TAP stream
+  CI_MAX_FAILURES    failures whose logs ci prints (default: all)
+  NO_ANIMATE         set to 1 to draw no progress indicators
+  NO_COLOUR          set to 1 to draw no colour
+
+Gameplay environment (craft test documents each):
+  GAME               the game's command (default: bin-<platform>/turboada-example-game)
+  GAMEPLAY_MAPS      the maps directory (default: turboada-example-game-assets/maps)
+  GAMEPLAY_FUZZ_SEEDS, GAMEPLAY_FUZZ_SECONDS, GAMEPLAY_FUZZ_BOTS
+                     seeds per map (3), game seconds per run (60), bots per run (8)
+  GAMEPLAY_FUN_MATCHES, GAMEPLAY_FUN_SECONDS
+                     matches per map and mode (24), seconds each (0: the mode's limit)
+  GAMEPLAY_SAMPLE_HZ samples a second (8; the movement tier takes all 64)
+  GAMEPLAY_SPIKE_US  a tick slower than this is a spike (15625, one tick of real time)
+  GAMEPLAY_MIN_SPEEDUP  median times real time a fuzz run must reach (100)
+
+The caps per suite, in seconds; COMPILE_TIMEOUT, TEST_TIMEOUT and
+SCENARIO_TIMEOUT replace a column for every suite:
+$(printf '%s\n' "suite compile run item" "$TA_TIMEOUT_DEFAULTS" | awk '{ printf "  %-12s %7s %5s %6s\n", $1, $2, $3, $4 }')
+(item caps a scripted test, a repro scenario or a debug session, and an
+ACATS test, whose cap is computed from its compile, link and run caps.)
+
+Benchmark environment:
+  REPEATS            timed repetitions after warmup (default: 7)
+  WARMUP             untimed runs before measuring (default: 1)
+  CORPUS             files to take from the conformance suite (default: 300)
+  ONLY               run only the named programs, space separated
+  NO_GNAT            set to 1 to skip GNAT
+  SLOWEST            slowest benchmark inputs to name (default: 12)
+
+codegen mode only, where the two compilers are compared directly:
+  CODEGEN_REPEATS    timed repetitions of each pair (default: 25)
+  CODEGEN_WARMUP     untimed runs of each binary first (default: 3)
+  SUITES             whole passes of the suite, to show the ratios hold (default: 2)
+  BENCH_CPU          core to pin both binaries to (default: the last one)
+  BENCH_CPUS_TASK    cores for the programs with tasks (default: the last two)
+  RT                 set to 1 to run at SCHED_FIFO priority 50 as well
+  FLOOR              seconds below which a MAD is treated as timer noise (default: 0.002)
+  LOAD_MAX           one-minute load average above which the run refuses (default: 2.0)
+  FORCE              set to 1 to measure anyway on a busy machine
+  TSV_DIR            directory to write suite<N>.tsv into, one row per program
+  NO_PIN             set to 1 to measure without taskset, nice or chrt
+
+Each run writes test_results/ID/, where ID is unique to the run, so
+concurrent runs do not overwrite one another: results.tsv (suite, name,
+verdict, detail), test_summary.txt, results.tap when TAP=1, logs/ (every
+ACATS test's logs, and the logs of every other test that failed) and
+acats/ (what the ACATS tests built).
+TEXT
+}
+
+now_ms(){
+    local stamp=${EPOCHREALTIME:-}
+    stamp=${stamp/[.,]/}
+    if [[ $stamp =~ ^[0-9]{7,}$ ]]; then printf '%s' "${stamp:0:${#stamp}-3}"; return; fi
+    stamp=$(date +%s%3N 2>/dev/null)
+    [[ $stamp =~ ^[0-9]+$ ]] || stamp=$(( $(date +%s) * 1000 ))
+    printf '%s' "$stamp"
+}
+
+abspath(){
+    case $1 in
+        /*|?:[/\\]*) printf '%s\n' "$1" ;;
+        *)           printf '%s/%s\n' "$(cd -- "$(dirname -- "$1")" && pwd)" "$(basename -- "$1")" ;;
+    esac
+}
+
+find_timeout(){
+    local candidate found
+    for candidate in ${TIMEOUT:+"$TIMEOUT"} timeout gtimeout /usr/bin/timeout; do
+        found=$(command -v "$candidate" 2>/dev/null) || continue
+        "$found" -k 1 1 true >/dev/null 2>&1 && { printf '%s' "$found"; return 0; }
+    done
+    return 1
+}
+
+case ${TIMEOUT:-} in
+    /*) [ -x "$TIMEOUT" ] || TIMEOUT=$(find_timeout) || TIMEOUT='' ;;
+    *)  TIMEOUT=$(find_timeout) || TIMEOUT='' ;;
+esac
+KILL_GRACE=${KILL_GRACE:-5}
+
+timeout_table(){
+    printf '%s\n' "$TA_TIMEOUT_DEFAULTS" |
+        awk -v c="${COMPILE_TIMEOUT:-}" -v r="${TEST_TIMEOUT:-}" -v w="${WORKER_TIMEOUT:-}" -v s="${SCENARIO_TIMEOUT:-}" '
+            { if (c != "") $2 = c; if (r != "") $3 = r
+              if ($1 == "acats") { if (w != "") $4 = w } else if (s != "") $4 = s
+              print }'
+}
+
+timeout_for(){
+    local table suite compile run item found='' fallback=''
+    if [ -n "${TA_TIMEOUTS:-}" ]; then table=$TA_TIMEOUTS; else table=$(timeout_table); fi
+    while read -r suite compile run item; do
+        [ "$suite" = "$1" ] && found="$compile $run $item"
+        [ "$suite" = repro ] && fallback="$compile $run $item"
+    done <<<"$table"
+    set -- "$2" ${found:-$fallback}
+    case $1 in
+        compile) printf '%s\n' "$2" ;;
+        run)     printf '%s\n' "$3" ;;
+        item)    printf '%s\n' "$4" ;;
+        all)     printf '%s %s %s\n' "$2" "$3" "$4" ;;
+        *)       return 1 ;;
+    esac
+}
+
+timed(){
+    local secs=$1
+    shift
+    case $secs in
+        compile) secs=${TA_T_COMPILE:-$(timeout_for "${TA_SUITE:-repro}" compile)} ;;
+        run)     secs=${TA_T_RUN:-$(timeout_for "${TA_SUITE:-repro}" run)} ;;
+        item)    secs=${TA_T_ITEM:-$(timeout_for "${TA_SUITE:-repro}" item)} ;;
+    esac
+    if [ -n "${TIMEOUT:-}" ]; then "$TIMEOUT" -k "${KILL_GRACE:-5}" "$secs" "$@"; else "$@"; fi
+}
+
+timed_out(){ [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
+
+find_compiler(){
+    local candidate
+    if [ -n "${ADA83:-}" ]; then
+        candidate=$ADA83
+        [ -x "$candidate" ] || [ ! -x "$candidate.exe" ] || candidate=$candidate.exe
+        [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
+        abspath "$candidate"
+        return 0
+    fi
+    for candidate in "$TA_ROOT/bin-$TA_HOST/ta" "$TA_ROOT/bin-$TA_HOST/ta.exe" \
+                     "$TA_ROOT"/bin-*/ta "$TA_ROOT"/bin-*/ta.exe "$TA_ROOT/ta" "$TA_ROOT/ta.exe"; do
+        [ -f "$candidate" ] && [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    return 1
+}
+
+acats_current(){
+    [ -f "$TA_ROOT/acats/report.adb" ] || return 1
+    [ -f "$TA_ROOT/tests.zip" ] || return 0
+    [ "$(cat "$TA_ROOT/acats/.tests.zip.cksum" 2>/dev/null)" = "$(cksum < "$TA_ROOT/tests.zip")" ]
+}
+
+#  Every suite rides in tests.zip.  acats is never kept in the tree -- it is
+#  unpacked, checksum-stamped and re-unpacked when the archive changes; the
+#  rest are unpacked only when absent, so a working copy that keeps them in
+#  place is left untouched while a lean checkout -- the public repo, CI --
+#  fills them from the archive.
+TESTS_ZIP_SUITES="extensions project acats-bonus debug repro fuzz gameplay"
+
+corpus_complete(){
+    acats_current || return 1
+    local d
+    for d in $TESTS_ZIP_SUITES; do [ -e "$TA_ROOT/$d" ] || return 1; done
+    return 0
+}
+
+extract_all(){
+    if command -v unzip >/dev/null; then unzip -qo "$1"
+    elif command -v powershell.exe >/dev/null; then
+        powershell.exe -NoProfile -Command \
+            "Expand-Archive -LiteralPath '$1' -DestinationPath '.' -Force"
+    else return 1
+    fi
+}
+
+#  Whole-archive extract into a scratch dir, then install what the tree lacks:
+#  acats whenever the checksum moved, the tracked suites only when missing.
+#  A dir/* member glob is avoided -- some unzip builds do not recurse it.
+ensure_corpus(){
+    corpus_complete && return 0
+    [ -f "$TA_ROOT/tests.zip" ] || { [ -f "$TA_ROOT/acats/report.adb" ] && return 0 || return 1; }
+    local fresh rc=0 d
+    fresh=$(mktemp -d "$TA_ROOT/.tests-unpack.XXXXXX") || return 1
+    ( cd "$fresh" && extract_all "$TA_ROOT/tests.zip" ) || rc=$?
+    if [ "$rc" = 0 ]; then
+        if ! acats_current && [ -f "$fresh/acats/report.adb" ]; then
+            cksum < "$TA_ROOT/tests.zip" > "$fresh/acats/.tests.zip.cksum"
+            rm -rf "$TA_ROOT/acats" && mv "$fresh/acats" "$TA_ROOT/acats" || rc=1
+        fi
+        for d in $TESTS_ZIP_SUITES; do
+            [ -e "$TA_ROOT/$d" ] && continue
+            [ -d "$fresh/$d" ] && { mv "$fresh/$d" "$TA_ROOT/$d" || rc=1; }
+        done
+    fi
+    rm -rf "$fresh"
+    return "$rc"
+}
+
+provide_report(){
+    local from=${TA_REPORT_DIR:-$TA_ROOT/acats}
+    if [ -f "$from/report.adb" ] && [ -f "$from/report.ads" ]; then
+        cp "$from/report.ads" "$from/report.adb" "$1/"
+    else
+        ( cd "$1" && unzip -o -q -j "$TA_ROOT/tests.zip" 'acats/report.*' ) 2>/dev/null
+    fi
+    [ -f "$1/report.adb" ]
+}
+
+crashed(){
+    [ "$2" -ge 124 ] && return 0
+    grep -v 'warning:' "$1" 2>/dev/null | grep -q -E "$TA_CRASH"
+}
+
+first_problem(){ grep -m1 -E 'error|internal|Segmentation|undefined' "$1" 2>/dev/null | cut -c1-160; }
+
+last_line(){ tail -1 "$1" 2>/dev/null | cut -c1-"${2:-120}"; }
+
+row(){
+    local detail=${4:-}
+    detail=${detail//$'\t'/ }
+    detail=${detail//$'\r'/}
+    detail=${detail//$'\n'/ }
+    if [ -n "${TA_ROWS:-}" ]
+    then printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$detail" >> "$TA_ROWS"
+    else printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$detail"
+    fi
+}
+
+judged(){ J_VERDICT=$1 J_DETAIL=${2:-}; }
+
+headers(){
+    awk -v key="$1" '
+        /^--/            { if (sub("^-- " key ": *", "")) print; next }
+        /^[[:space:]]*$/ { next }
+                         { exit }' "$2"
+}
+
+ext_header(){ sed -n "s/^-- $2: //p" "$1" | tail -1; }
+
+work_dir(){
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}/${1:-turboada}-XXXXXX") || return 1
+    trap '[ "${KEEP_WORK:-0}" = 1 ] || rm -rf "$WORK"' EXIT
+}
+
+scenario(){
+    HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd)
+    TA_SUITE=${TA_SUITE:-repro}
+    ADA83=$(find_compiler) || ADA83=${ADA83:-$TA_ROOT/bin-$TA_HOST/ta}
+    export ADA83
+    work_dir "${HERE##*/}" || exit 2
+}
+
+build_program(){
+    local dir=$1 exe=$2 rc=0 first
+    shift 2
+    ( cd "$dir" && timed compile "$ADA83" "$@" -o "$exe" ) >"$dir/compile.log" 2>&1 || rc=$?
+    first=$(first_problem "$dir/compile.log")
+    if crashed "$dir/compile.log" "$rc"; then
+        judged fail "CRASH: ${first:-compile exit $rc}"
+        return 1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        judged fail "REJECTED: ${first:-compile exit $rc}"
+        return 1
+    fi
+    PROGRAM=$dir/$exe
+    [ ! -f "$PROGRAM.exe" ] || PROGRAM=$PROGRAM.exe
+    [ -x "$PROGRAM" ] || { judged fail "NO_PROGRAM: the compile exited 0 and wrote no $exe"; return 1; }
+    return 0
+}
+
+run_program(){
+    local dir=$1
+    shift
+    RUN_RC=0
+    ( cd "$dir" && { ulimit -s 8192 2>/dev/null || :; } && timed run "$@" ) >"$dir/run.log" 2>&1 || RUN_RC=$?
+}
+
+judge_output(){
+    local log=$1/run.log line
+    if timed_out "$RUN_RC"; then
+        judged fail "TIMEOUT: the run exceeded ${TA_T_RUN:-its cap}s"
+        return
+    fi
+    line=$(grep -m1 FAILED "$log" | cut -c1-160)
+    [ -z "$line" ] || { judged fail "$line"; return; }
+    [ "$RUN_RC" -eq 0 ] || { judged fail "RUNTIME: exit $RUN_RC: $(last_line "$log")"; return; }
+    grep -q PASSED "$log" && { judged pass PASSED; return; }
+    line=$(grep -m1 '^NOT APPLICABLE:' "$log" | cut -c1-80)
+    [ -z "$line" ] || { judged skip "N/A: $line"; return; }
+    judged fail "NO_REPORT: printed neither PASSED nor FAILED: $(last_line "$log")"
+}
+
+judge_build_run(){
+    local dir=$1 exe=$2
+    shift 2
+    build_program "$dir" "$exe" "$@" || return 0
+    run_program "$dir" "./${PROGRAM##*/}"
+    judge_output "$dir"
+}
+
+marker_covered(){
+    local alt alts
+    awk -v lo=$(($2 - $3)) -v hi="$2" '$1 >= lo && $1 <= hi { found = 1 } END { exit !found }' "$1" && return 0
+    [ -n "$4" ] && [ -f "$4" ] || return 1
+    alts=$(sed 's/#.*//' "$4" | awk -v m="$2" '$1 == m { for (i = 2; i <= NF; i++) print $i }')
+    [ -n "$alts" ] || return 1
+    for alt in $alts; do
+        awk -v a="$alt" '$1 == a { found = 1 } END { exit !found }' "$1" || return 1
+    done
+    return 0
+}
+
+judge_illegal(){
+    local dir=$1 name=$2 alternates=$3 rc=0 first line span want=0 hit=0 got missed=''
+    shift 3
+    ( cd "$dir" && timed compile "$ADA83" "$@" -o "$name.bin" ) >"$dir/compile.log" 2>&1 || rc=$?
+    first=$(first_problem "$dir/compile.log")
+    if crashed "$dir/compile.log" "$rc"; then
+        judged fail "CRASH: ${first:-compile exit $rc}"
+        return
+    fi
+    [ "$rc" -ne 0 ] || { judged fail "ACCEPTED: compiled; expected rejection"; return; }
+    grep -E "^$name\.ada:[0-9]+:[0-9]+: error:" "$dir/compile.log" | cut -d: -f2 | sort -n > "$dir/errlines"
+    got=$(wc -l < "$dir/errlines")
+    for line in $(grep -n -- '-- *ERROR:' "$dir/$name.ada" | cut -d: -f1); do
+        want=$((want + 1))
+        span=$(sed -n "${line}p" "$dir/$name.ada" | sed -n 's/.*ERROR:[^{]*{\([0-9][0-9]*\):.*/\1/p')
+        if marker_covered "$dir/errlines" "$line" "${span:-0}" "$alternates"
+        then hit=$((hit + 1))
+        else missed="$missed $line"
+        fi
+    done
+    if [ "$hit" -eq "$want" ] && [ "$got" -ge "$want" ]
+    then judged pass "REJECTED: $want marked lines, all diagnosed"
+    else judged fail "MISSED: $hit of $want marked lines diagnosed, $got errors; missed:${missed:- none}"
+    fi
+}
+
+judge_headers(){
+    local name=$1 here=$2 dir=$3 src=$2/$1.ada flags with inputs f rc=0 exe expect line
+    cp "$src" "$dir/"
+    flags=$(headers FLAGS "$src")
+    with=$(headers WITH "$src")
+    inputs=$name.ada
+    for f in $with; do
+        [ -f "$here/$f" ] || { judged fail "WITH names a missing file: $f"; return; }
+        cp "$here/$f" "$dir/"
+        inputs="$inputs $f"
+    done
+    expect=$(headers EXPECT "$src")
+    local hosts
+    hosts=$(headers HOSTS "$src")
+    if [ -n "$hosts" ]; then
+        case " $hosts " in
+            *" $TA_HOST "*) ;;
+            *) judged skip "N/A: needs one of: $hosts"; return ;;
+        esac
+    fi
+
+    ( cd "$dir" && timed compile "$ADA83" $flags $inputs -o "$name" ) >"$dir/compile.log" 2>&1 || rc=$?
+    if crashed "$dir/compile.log" "$rc"; then
+        judged fail "CRASH: compile exit $rc: $(first_problem "$dir/compile.log")"
+        return
+    fi
+
+    if printf '%s\n' "$expect" | grep -q '^error '; then
+        if [ "$rc" -eq 0 ]; then
+            judged fail "compiled, but expected: $(printf '%s\n' "$expect" | grep '^error ' | head -1)"
+            return
+        fi
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            grep -F -- "$line" "$dir/compile.log" | grep -q 'error:' ||
+                { judged fail "no error line contains: $line"; return; }
+        done < <(printf '%s\n' "$expect" | sed -n 's/^error //p')
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            grep -F -- "$line" "$dir/compile.log" | grep -q 'note:' ||
+                { judged fail "no note line contains: $line"; return; }
+        done < <(printf '%s\n' "$expect" | sed -n 's/^note //p')
+        judged pass ''
+        return
+    fi
+
+    if [ "$rc" -ne 0 ]; then
+        judged fail "compile exit $rc: $(grep -m1 -E 'error|undefined reference' "$dir/compile.log" | cut -c1-160)"
+        return
+    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        grep -F -- "$line" "$dir/compile.log" | grep -q 'warning:' ||
+            { judged fail "no warning line contains: $line"; return; }
+    done < <(printf '%s\n' "$expect" | sed -n 's/^warning //p')
+    if printf '%s\n' "$expect" | grep -qx 'no-warning'; then
+        line=$(grep -m1 'warning:' "$dir/compile.log")
+        [ -z "$line" ] || { judged fail "expected no warning, got: $(printf '%s' "$line" | cut -c1-140)"; return; }
+    fi
+
+    exe=$dir/$name
+    [ -f "$exe.exe" ] && exe=$exe.exe
+    run_program "$dir" "$exe"
+
+    line=$(printf '%s\n' "$expect" | sed -n 's/^raise //p' | head -1)
+    if [ -n "$line" ]; then
+        [ "$RUN_RC" -ne 0 ] || { judged fail "ran to exit 0, but expected to raise $line"; return; }
+        grep -q "Unhandled exception: $line" "$dir/run.log" ||
+            { judged fail "expected $line, got: $(last_line "$dir/run.log")"; return; }
+    else
+        [ "$RUN_RC" -eq 0 ] || { judged fail "run exit $RUN_RC: $(last_line "$dir/run.log")"; return; }
+        line=$(grep -m1 '^NOT APPLICABLE:' "$dir/run.log" | cut -c1-80)
+        [ -z "$line" ] || { judged skip "N/A: $line"; return; }
+        line=$(grep -m1 -E '^(FAIL|WRONG)|WRONG$' "$dir/run.log")
+        [ -z "$line" ] || { judged fail "$(printf '%s' "$line" | cut -c1-140)"; return; }
+    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        grep -qxF -- "$line" "$dir/run.log" || { judged fail "output has no line: $line"; return; }
+    done < <(printf '%s\n' "$expect" | sed -n 's/^print //p')
+    judged pass ''
+}
+
+judge_extension(){
+    local name=$1 dir=$ITEM_DIR src=$TA_ROOT/extensions/$1.ada linked symbol symbol_not symbols args nm_tool
+    local -a fragments=() argv=()
+    linked=$(ext_header "$src" LINK)
+    if [ -n "$linked" ]; then
+        if ( cd "$dir" && timed compile "$ADA83" --ir "$TA_ROOT/extensions/$linked" -o "$dir/linked.ll" ) \
+               >"$dir/support.log" 2>&1; then
+            fragments+=("$dir/linked.ll")
+        else
+            judged fail "support unit $linked: $(tail -2 "$dir/support.log" | tr '\n' ' ')"
+            return
+        fi
+    fi
+    build_program "$dir" "$name" "$src" ${fragments[@]+"${fragments[@]}"} || return 0
+
+    symbol=$(ext_header "$src" SYMBOL)
+    symbol_not=$(ext_header "$src" SYMBOL-NOT)
+    if [ -n "$symbol$symbol_not" ]; then
+        nm_tool=$(command -v nm || command -v llvm-nm || true)
+        [ -n "$nm_tool" ] || { judged skip "symbol check needs nm, which is not on PATH"; return; }
+        symbols=$("$nm_tool" "$PROGRAM" 2>/dev/null) || symbols=""
+        grep -qE '[[:alnum:]]' <<<"$symbols" ||
+            { judged skip "symbol check needs an unstripped binary; the linker kept no symbol table"; return; }
+        if [ -n "$symbol" ] && ! grep -qE "[[:space:]]_?$symbol\$" <<<"$symbols"; then
+            judged fail "symbol $symbol missing from the executable"
+            return
+        fi
+        if [ -n "$symbol_not" ] && grep -qE "[[:space:]]_?$symbol_not\$" <<<"$symbols"; then
+            judged fail "symbol $symbol_not present in the executable"
+            return
+        fi
+    fi
+
+    args=$(ext_header "$src" ARGS)
+    [ -z "$args" ] || eval "argv=($args)"
+    run_program "$dir" "$PROGRAM" ${argv[@]+"${argv[@]}"}
+    judge_output "$dir"
+}
+
+judge_project(){
+    local kind=${1%%/*} case=${1#*/} dir=$ITEM_DIR cases project expected cwd status=0 exe run_status=0 tag=exit
+    cases=$TA_ROOT/project/$kind
+    if [ -f "$cases/$case.gpr" ]; then project=$case.gpr; else project=$case.gpj; fi
+    expected=$cases/$case.expected
+    if [ ! -f "$expected" ] && [ "${TA_ACCEPT:-0}" != 1 ]; then
+        judged fail "no $case.expected; --accept writes one"
+        return
+    fi
+    set -- -P "$project"
+    [ "$kind" = build ] || set -- "$@" -n
+    if [ -f "$cases/$case.args" ]; then
+        set -- "$@" $(cat "$cases/$case.args")
+    fi
+    cwd=$cases
+    if [ "$kind" = build ]; then
+        cp -R "$cases/." "$dir/cases" || { judged fail "HARNESS: could not copy $kind/ to a scratch directory"; return; }
+        cwd=$dir/cases tag='build exit'
+    fi
+    ( cd "$cwd" && { [ "$kind" != build ] || unset CC CXX; } && timed compile "$ADA83" "$@" ) \
+        >"$dir/out" 2>"$dir/err" || status=$?
+    if grep -q "the .gpr reader is not built yet" "$dir/err"; then
+        judged skip "PENDING: the .gpr reader is not built yet"
+        return
+    fi
+    { cat "$dir/out" "$dir/err"; echo "$tag $status"; } > "$dir/actual"
+    if [ "$kind" = build ] && [ "$status" -eq 0 ]; then
+        exe=$(sed -n "s/^Linked '\(.*\)'\$/\1/p" "$dir/err" | head -1)
+        if [ -z "$exe" ]; then
+            echo "no main linked" >> "$dir/actual"
+        else
+            case $exe in /*) ;; *) exe=./$exe ;; esac
+            ( cd "$cwd" && timed run "$exe" ) >"$dir/run" 2>&1 || run_status=$?
+            { cat "$dir/run"; echo "exit $run_status"; } >> "$dir/actual"
+        fi
+    fi
+    if [ "$TA_HOST" = windows ]; then
+        sed -i "s/^\(Linked '.*\)\.exe'\$/\1'/" "$dir/actual"
+    fi
+    if [ "${TA_ACCEPT:-0}" = 1 ]; then
+        if [ "$kind" = build ] && [ -f "$cases/$case.known" ]; then
+            judged skip "KNOWN: kept (a .known case's expected file is the proposal)"
+        else
+            cp "$dir/actual" "$expected"
+            judged pass "ACCEPTED: wrote $case.expected"
+        fi
+        return
+    fi
+    if diff -u "$expected" "$dir/actual" > "$dir/diff.log"; then
+        if [ -f "$cases/$case.known" ]
+        then judged fail "passes now; delete $case.known and the entry it cites"
+        else judged pass ''
+        fi
+    elif [ -f "$cases/$case.known" ]; then
+        judged skip "KNOWN: $(head -1 "$cases/$case.known")"
+    else
+        judged fail "differs from $case.expected: $(grep -m1 -E '^[-+][^-+]' "$dir/diff.log" | cut -c1-140)"
+    fi
+}
+
+judge_scenario(){
+    local log=$ITEM_DIR/scenario.log rc=0
+    mkdir -p "$ITEM_DIR/tmp"
+    ( cd "$1" && ADA83=$ADA83 TMPDIR=$ITEM_DIR/tmp timed item bash ./run.sh ) >"$log" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        judged pass ''
+    elif [ "$rc" -eq 77 ]; then
+        judged skip "N/A: $(last_line "$log" 140)"
+    elif timed_out "$rc"; then
+        judged fail "TIMEOUT: run.sh exceeded ${TA_T_ITEM:-its cap}s: $(last_line "$log" 140)"
+    else
+        judged fail "run.sh exit $rc: $(last_line "$log" 140)"
+    fi
+}
+
+ir_assertions(){
+    local dir=$1 name=$2 ir=$3 kind text
+    shift 3
+    [ -f "$ir" ] || return 0
+    ( cd "$dir" && timed compile "$ADA83" --ir "$name.ada" "$@" report.adb ) >"$dir/ir.log" 2>&1
+    [ -s "$dir/$name.ll" ] || { judged fail "IR: no $name.ll produced"; return; }
+    while read -r kind text; do
+        case $kind in
+            present) grep -qF -- "$text" "$dir/$name.ll" || { judged fail "IR: '$text' missing"; return; } ;;
+            absent)  ! grep -qF -- "$text" "$dir/$name.ll" || { judged fail "IR: '$text' present"; return; } ;;
+        esac
+    done < "$ir"
+}
+
+fuzz_class(){
+    local class
+    class=$(sed -n '1s/^-- *CLASS: *\([ABCabc]\).*/\1/p' "$1" | tr abc ABC)
+    [ -n "$class" ] || class=$(basename -- "$1" | cut -c1 | tr abc ABC)
+    printf '%s' "$class"
+}
+
+item_acats(){
+    local out class verdict name detail
+    out=$(run_one_timed "acats/$1.ada") || true
+    [ -n "$out" ] || return 0
+    read -r class verdict name detail <<<"$out"
+    row acats "$name" "$verdict" "$detail"
+}
+
+item_fuzz(){
+    local name=$1 base=${1##*/} dir=$ITEM_DIR
+    cp "$TA_ROOT/fuzz/$name.ada" "$dir/" && provide_report "$dir" || { row fuzz "$name" fail "HARNESS: cannot stage the test"; return; }
+    if [ "$(fuzz_class "$dir/$base.ada")" = B ]
+    then judge_illegal "$dir" "$base" '' "$base.ada"
+    else judge_build_run "$dir" "$base.bin" "$base.ada"
+    fi
+    row fuzz "$name" "$J_VERDICT" "$J_DETAIL"
+}
+
+item_bonus(){
+    local name=$1 slug=${1%%/*} base=${1##*/} dir=$ITEM_DIR
+    local -a extra=()
+    cp "$TA_ROOT/acats-bonus/$name.ada" "$dir/" && provide_report "$dir" || { row bonus "$name" fail "HARNESS: cannot stage the test"; return; }
+    [ ! -f "$TA_ROOT/acats-bonus/support/impdef.ada" ] || cp "$TA_ROOT/acats-bonus/support/impdef.ada" "$dir/"
+    grep -qi '^[[:space:]]*with[[:space:]][[:space:]]*ImpDef' "$dir/$base.ada" && extra=(impdef.ada)
+    case $base in
+        b*) judge_illegal "$dir" "$base" "$TA_ROOT/acats-bonus/$slug/$base.errlines" \
+                "$base.ada" ${extra[@]+"${extra[@]}"} report.adb ;;
+        *)  judge_build_run "$dir" "$base.bin" "$base.ada" ${extra[@]+"${extra[@]}"} report.adb
+            [ "$J_VERDICT" != pass ] ||
+                ir_assertions "$dir" "$base" "$TA_ROOT/acats-bonus/$slug/$base.ir" ${extra[@]+"${extra[@]}"} ;;
+    esac
+    row bonus "$name" "$J_VERDICT" "$J_DETAIL"
+}
+
+item_repro(){
+    if [ -f "$TA_ROOT/repro/$1/run.sh" ]
+    then judge_scenario "$TA_ROOT/repro/$1"
+    else judge_headers "$1" "$TA_ROOT/repro" "$ITEM_DIR"
+    fi
+    row repro "$1" "$J_VERDICT" "$J_DETAIL"
+}
+
+item_extensions(){
+    judge_extension "$1"
+    row extensions "$1" "$J_VERDICT" "$J_DETAIL"
+}
+
+item_project(){
+    judge_project "$1"
+    row project "$1" "$J_VERDICT" "$J_DETAIL"
+}
+
+item_gameplay(){
+    local rc=0
+    if [ -f "$TA_ROOT/gameplay/$1/run.sh" ]; then
+        judge_scenario "$TA_ROOT/gameplay/$1"
+        row gameplay "$1" "$J_VERDICT" "$J_DETAIL"
+        return
+    fi
+    [ -f "$TA_ROOT/craft" ] || { row gameplay "$1" skip "craft is not in the tree"; return; }
+    command -v python3 >/dev/null 2>&1 || { row gameplay "$1" skip "python3 is not on PATH"; return; }
+    ( cd "$TA_ROOT" && timed item ./craft test item "$1" --work "$ITEM_DIR" ) \
+        >"$ITEM_DIR/harness.log" 2>&1 || rc=$?
+    if timed_out "$rc"; then
+        row gameplay "$1" fail "TIMEOUT: the item exceeded ${TA_T_ITEM:-its cap}s"
+    elif [ "$rc" -ne 0 ] && [ ! -s "$TA_ROWS" ]; then
+        row gameplay "$1" fail "HARNESS: craft test exit $rc: $(last_line "$ITEM_DIR/harness.log" 140)"
+    fi
+}
+
+item_debug(){
+    local rc=0
+    local -a accept=()
+    [ "${TA_ACCEPT:-0}" != 1 ] || accept=(--accept)
+    ( cd "$ITEM_DIR" && TMPDIR=$ITEM_DIR timed item bash "$TA_ROOT/debug/run.sh" ${accept[@]+"${accept[@]}"} "$1" ) || rc=$?
+    if timed_out "$rc"; then
+        row debug "$1-session" fail "TIMEOUT: the session exceeded ${TA_T_ITEM:-its cap}s"
+    elif [ "$rc" -ne 0 ]; then
+        row debug "$1-session" fail "debug/run.sh exit $rc"
+    fi
+}
+
+save_logs(){
+    local suite=$1 dir=$2 name target f
+    while IFS=$'\t' read -r _ name _ _; do
+        target=$TA_LOGS/$suite/$name.log
+        mkdir -p "$(dirname -- "$target")"
+        for f in "$dir.log" "$dir"/*.log; do
+            [ -s "$f" ] || continue
+            printf '==> %s <==\n' "${f##*/}"
+            tail -n 400 "$f"
+        done > "$target"
+    done < <(awk -F'\t' '$3 == "fail"' "$dir.rows")
+}
+
+run_item(){
+    local suite=${1%%:*} name=${1#*:} started rc=0 rows
+    started=$(now_ms)
+    ITEM_DIR=$TA_WORK/$suite/$name TA_SUITE=$suite TA_ROWS=$TA_WORK/$suite/$name.rows
+    export ITEM_DIR TA_SUITE TA_ROWS
+    read -r TA_T_COMPILE TA_T_RUN TA_T_ITEM <<<"$(timeout_for "$suite" all)"
+    export TA_T_COMPILE TA_T_RUN TA_T_ITEM
+    rm -rf "$ITEM_DIR"
+    mkdir -p "$ITEM_DIR"
+    : > "$TA_ROWS"
+    if declare -F "item_$suite" >/dev/null
+    then "item_$suite" "$name" >"$ITEM_DIR.log" 2>&1 || rc=$?
+    else row "$suite" "$name" fail "HARNESS: no suite named $suite"
+    fi
+    [ -s "$TA_ROWS" ] || [ "$suite" = acats ] ||
+        row "$suite" "$name" fail "HARNESS: no verdict (the item exited $rc)"
+    rows=$(<"$TA_ROWS")
+    [ -z "$rows" ] || printf '%s\n' "$rows"
+    [ "$suite" = acats ] || [ -z "${TA_LOGS:-}" ] || save_logs "$suite" "$ITEM_DIR"
+    [ "${KEEP_WORK:-0}" = 1 ] || rm -rf "$ITEM_DIR" "$ITEM_DIR.rows" "$ITEM_DIR.log"
+    [ -z "${TA_PROGRESS:-}" ] || printf '%s\t%s/%s\n' "$(( $(now_ms) - started ))" "$suite" "$name" >> "$TA_PROGRESS"
+    return 0
+}
+
+
+#  Sourced, not run: the caller wants only the library above, not the harness.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
+[ -z "${ADA83:-}" ] || ADA83=$(abspath "$ADA83")
+[ -z "${BASELINE:-}" ] || BASELINE=$(abspath "$BASELINE")
+[ -z "${TSV_DIR:-}" ] || TSV_DIR=$(abspath "$TSV_DIR")
+cd "$HERE"
 
 NO_ANIMATE=${NO_ANIMATE:-0} NO_COLOUR=${NO_COLOUR:-0} KEEP_WORK=${KEEP_WORK:-0}
 SLOWEST=${SLOWEST:-12}
@@ -57,7 +954,11 @@ heading(){
     [ $# -gt 1 ] && printf '  %s%s%s\n' "$DIM" "$2" "$OFF"
     printf '\n'
 }
-rule(){ printf '  %s%s%s\n' "$DIM" "────────────────────────────────────────────────────────────────" "$OFF"; }
+rule(){
+    local line='' i
+    for ((i = 0; i < ${1:-64}; i++)); do line+='─'; done
+    printf '  %s%s%s\n' "$DIM" "$line" "$OFF"
+}
 die(){ pulse_stop; show_cursor; echo "$SELF: $*" >&2; exit 1; }
 
 pct(){ ((${2:-0}>0)) && printf %d "$((100*$1/$2))" || printf 0; }
@@ -95,12 +996,13 @@ stats(){
               printf "%.3f %.3f %d", med, mad, n }' "$1"
 }
 
-rate_bar(){
-    local label=$1 passed=$2 total=$3 rate colour
+result_row(){
+    local label=$1 passed=$2 failed=$3 skipped=$4 total=$5 weight=${6:-} rate colour
     rate=$(pct "$passed" "$total")
     if ((passed == total)); then colour=$GOOD; else colour=$BAD; fi
-    printf '  %-22s %s%s%s %5s%%  %s/%s\n' "$label" \
-        "$colour" "$(bar "$(scaled "$rate" 100 30)" 30)" "$OFF" "$rate" "$passed" "$total"
+    printf '  %s%-22s %6d %6d %6d %6d%s  %s%s%s %3s%%\n' "$weight" "$label" \
+        "$passed" "$failed" "$skipped" "$total" "$OFF" \
+        "$colour" "$(bar "$(scaled "$rate" 100 20)" 20)" "$OFF" "$rate"
 }
 
 loadavg(){
@@ -129,83 +1031,27 @@ load_watch_stop(){
 cleanup(){
     pulse_stop
     show_cursor
-    [ -n "${REPORT_LL:-}" ] && rm -f "$REPORT_LL" "${REPORT_LL%.ll}.ali"
+    if [ -n "${TA_WORK:-}" ]; then
+        if [ "$KEEP_WORK" = 1 ]
+        then printf '  %swork kept in %s%s\n' "$DIM" "$TA_WORK" "$OFF" >&2
+        else rm -rf "$TA_WORK"
+        fi
+    fi
+    [ -n "${ITEMS:-}" ] && rm -f "$ITEMS"
     [ -n "${BENCH_WORK:-}" ] && [ "$KEEP_WORK" != 1 ] && rm -rf "$BENCH_WORK"
     return 0
 }
 trap cleanup EXIT
 trap 'show_cursor; exit 130' INT
 
-case $(uname -s 2>/dev/null) in
-    Darwin)                 HOST_TARGET=macos ;;
-    MINGW*|MSYS*|CYGWIN*)   HOST_TARGET=windows ;;
-    *)                      HOST_TARGET=linux ;;
-esac
-
-unpack(){
-    if command -v unzip >/dev/null; then
-        unzip -qo "$1" "$2/*"
-    elif command -v tar >/dev/null && tar -xf "$1" "$2" 2>/dev/null; then
-        :
-    elif command -v powershell.exe >/dev/null; then
-        powershell.exe -NoProfile -Command \
-            "Expand-Archive -LiteralPath '$1' -DestinationPath '.' -Force"
-    else
-        return 1
-    fi
-}
-
-unpack_suite(){
-    local root=$1 suite=$2 rc=0
-    [ -d "$root/$suite" ] && return 0
-    [ -f "$root/tests.zip" ] || return 1
-    pulse "unpacking $suite"
-    ( cd "$root" && unpack tests.zip "$suite" ) || rc=$?
-    pulse_stop
-    [ "$rc" = 0 ] && [ -d "$root/$suite" ]
-}
-
-find_timeout(){
-    local candidate found
-    for candidate in ${TIMEOUT:+"$TIMEOUT"} timeout gtimeout /usr/bin/timeout; do
-        found=$(command -v "$candidate" 2>/dev/null) || continue
-        "$found" -k 1 1 true >/dev/null 2>&1 && { printf '%s' "$found"; return 0; }
-    done
-    return 1
-}
-
-timed(){
-    local secs=$1
-    shift
-    "$TIMEOUT" -k "$KILL_GRACE" "$secs" "$@"
-}
-
-now_ms(){
-    local stamp
-    stamp=$(date +%s%3N 2>/dev/null)
-    [[ $stamp =~ ^[0-9]+$ ]] || stamp=$(( $(date +%s) * 1000 ))
-    printf '%s' "$stamp"
-}
-
 elapsed(){
     local ms=$(( $(now_ms) - START_MS ))
     printf '%d.%03d' $((ms / 1000)) $((ms % 1000))
 }
 
-find_compiler(){
-    local candidate
-    for candidate in ${TURBOADA:+"$TURBOADA"} \
-                     "bin-$HOST_TARGET/ta" "bin-$HOST_TARGET/ta.exe" \
-                     bin-*/ta bin-*/ta.exe \
-                     ./ta ./ta.exe; do
-        [[ -x $candidate ]] && { printf '%s' "$candidate"; return 0; }
-    done
-    return 1
-}
-
 build_compiler(){
-    if [[ $HOST_TARGET == windows ]] && [[ -f make.bat ]] && command -v cmd.exe >/dev/null; then
-        timed "$BUILD_TIMEOUT" cmd.exe //c make.bat
+    if [[ $TA_HOST == windows ]] && [[ -f make.bat ]] && command -v cmd.exe >/dev/null; then
+        timed "$BUILD_TIMEOUT" cmd.exe //c .\\make.bat
     elif command -v make >/dev/null; then
         timed "$BUILD_TIMEOUT" make -s ta
     else
@@ -213,60 +1059,6 @@ build_compiler(){
         echo "         Windows: run make.bat, then start this script again" >&2
         return 1
     fi
-}
-
-acats_setup(){
-    NPROC=${JOBS:-${NPROC:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}}
-    TEST_TIMEOUT=${TEST_TIMEOUT:-30}
-    COMPILE_TIMEOUT=${COMPILE_TIMEOUT:-30}
-    LINK_TIMEOUT=${LINK_TIMEOUT:-20}
-    STARTUP_TIMEOUT=${STARTUP_TIMEOUT:-30}
-    BUILD_TIMEOUT=${BUILD_TIMEOUT:-300}
-    KILL_GRACE=${KILL_GRACE:-2}
-    WORKER_TIMEOUT=${WORKER_TIMEOUT:-$((8 * COMPILE_TIMEOUT + 4 * LINK_TIMEOUT + 2 * TEST_TIMEOUT + 30))}
-    BASELINE=${BASELINE:-acats.baseline}
-    OPT=${OPT:--O2}
-
-    TIMEOUT=$(find_timeout) || {
-        echo "$SELF: no usable 'timeout' command found" >&2
-        echo "         macOS:   brew install coreutils" >&2
-        echo "         Windows: run this under the bash that comes with Git for" >&2
-        echo "                  Windows, whose /usr/bin/timeout comes first on PATH" >&2
-        exit 1
-    }
-    export TIMEOUT
-    export -f timed
-    export KILL_GRACE
-
-    START_MS=$(now_ms)
-    mkdir -p test_results acats_logs
-
-    local suite
-    for suite in acats extensions project debug acats-bonus fuzz; do
-        unpack_suite "$PWD" "$suite" && continue
-        [[ $suite == acats ]] && die \
-            "$suite is missing and tests.zip does not carry it; it is tracked in git -- restore it with: git checkout -- $suite"
-    done
-
-    TURBOADA=$(find_compiler) || TURBOADA=""
-    if [[ -z $TURBOADA ]] || [[ turboada.c -nt $TURBOADA ]]; then
-        printf '  %srebuilding ta%s\n' "$DIM" "$OFF"
-        build_compiler || die "compiler build failed"
-        TURBOADA=$(find_compiler) || die "no ta executable after building"
-    fi
-    [[ $TURBOADA == /* || $TURBOADA == ?:[/\\]* ]] || TURBOADA=$PWD/${TURBOADA#./}
-    export TURBOADA
-
-    export REPORT_LL="${TMPDIR:-/tmp}/turboada-report-$$.ll"
-    timed "$COMPILE_TIMEOUT" "$TURBOADA" -ada83 --ir acats/report.adb -o "$REPORT_LL" >/dev/null 2>&1 || \
-        die "cannot compile acats/report.adb"
-
-    ROOT=$PWD
-    export ROOT
-    export -f run_one run_one_timed gather_files compile_set run_in_lib \
-              link_program report_link_failure run_continuity_creators pct now_ms
-    export START_MS TEST_TIMEOUT LINK_TIMEOUT COMPILE_TIMEOUT STARTUP_TIMEOUT \
-           BUILD_TIMEOUT WORKER_TIMEOUT OPT
 }
 
 gather_files(){
@@ -294,7 +1086,7 @@ compile_set(){
     COMPILE_FAILED=""
     for part in "${COMPILE_FILES[@]}"; do
         pn=$(basename "$part" .ada)
-        if ! timed "$COMPILE_TIMEOUT" "$TURBOADA" -ada83 --ir "$part" -o "$lib/$pn.ll" >/dev/null 2>"$LOGS_DIR/$n.err"; then
+        if ! timed "$COMPILE_TIMEOUT" "$ADA83" -ada83 --ir "$part" -o "$lib/$pn.ll" >/dev/null 2>"$LOGS_DIR/$n.err"; then
             if [[ $pn == "$n" ]]; then
                 COMPILE_FAILED=$pn
                 return 1
@@ -346,7 +1138,7 @@ compile_set(){
     fi
 
     BIND_FAILED=""
-    if ! timed "$COMPILE_TIMEOUT" "$TURBOADA" --bind "$lib" "$n" 2>"$LOGS_DIR/$n.bind"; then
+    if ! timed "$COMPILE_TIMEOUT" "$ADA83" --bind "$lib" "$n" 2>"$LOGS_DIR/$n.bind"; then
         BIND_FAILED=$n
     fi
 }
@@ -360,10 +1152,10 @@ run_in_lib(){
 link_program(){
     local n=$1 rc=0
     PROGRAM=$RESULTS_DIR/$n.bin
-    timed "$LINK_TIMEOUT" "$TURBOADA" "$OPT" "$MAIN_LL" \
+    timed "$LINK_TIMEOUT" "$ADA83" "$OPT" "$MAIN_LL" \
         ${LINK_FRAGMENTS[@]+"${LINK_FRAGMENTS[@]}"} "$REPORT_LL" \
         -o "$PROGRAM" >/dev/null 2>"$LOGS_DIR/$n.link" || rc=$?
-    [[ -x $PROGRAM ]] || [[ ! -x $PROGRAM.exe ]] || PROGRAM=$PROGRAM.exe
+    [[ ! -x $PROGRAM.exe ]] || PROGRAM=$PROGRAM.exe
     case $rc in
         0)       LINK_STATUS=ok ;;
         124|137) LINK_STATUS=timeout ;;
@@ -384,9 +1176,9 @@ run_continuity_creators(){
     for c in $(grep -oiE 'legal_file_name[ ]*\([^)]*"ce[0-9a-z]+"' "acats/$reader.ada" 2>/dev/null \
                | grep -oiE '"ce[0-9a-z]+"' | tr -d '"' | tr '[:upper:]' '[:lower:]' | sort -u); do
         [[ $c == "$self" || ! -f acats/$c.ada ]] && continue
-        timed "$COMPILE_TIMEOUT" "$TURBOADA" -ada83 --ir "acats/$c.ada" -o "$lib/$c.ll" \
+        timed "$COMPILE_TIMEOUT" "$ADA83" -ada83 --ir "acats/$c.ada" -o "$lib/$c.ll" \
             >/dev/null 2>&1 || continue
-        timed "$LINK_TIMEOUT" "$TURBOADA" "$OPT" "$lib/$c.ll" "$REPORT_LL" \
+        timed "$LINK_TIMEOUT" "$ADA83" "$OPT" "$lib/$c.ll" "$REPORT_LL" \
             -o "$lib/$c.bin" >/dev/null 2>&1 || continue
         ( cd "$lib" && timed "$TEST_TIMEOUT" "./$c.bin" ) >/dev/null 2>&1 || true
     done
@@ -474,7 +1266,7 @@ run_one(){
                     fi
                 fi
             done < "$part"
-            if timed "$COMPILE_TIMEOUT" "$TURBOADA" -ada83 --ir "$part" -o "$lib/${pn%.ada}.ll" \
+            if timed "$COMPILE_TIMEOUT" "$ADA83" -ada83 --ir "$part" -o "$lib/${pn%.ada}.ll" \
                  >/dev/null 2>"$LOGS_DIR/$n.$pn.err"; then :; else
                 rejected=yes
             fi
@@ -589,212 +1381,258 @@ run_one_timed(){
     return 0
 }
 
-CLASS_ROWS=(a "A  Acceptance"  b "B  Illegality"  c "C  Executable"
-            d "D  Numerics"    e "E  Inspection"  l "L  Post-compilation")
+SUITES='acats extensions project bonus debug repro fuzz'
+DORMANT_SUITES='gameplay'
 
-tally_results(){
-    local results_file=$1
-    local -A C=([a]=0 [b]=0 [c]=0 [d]=0 [e]=0 [l]=0
-                [fa]=0 [fb]=0 [fc]=0 [fd]=0 [fe]=0 [fl]=0
-                [sa]=0 [sb]=0 [sc]=0 [sd]=0 [se]=0 [sl]=0
-                [ta]=0 [tb]=0 [tc]=0 [td]=0 [te]=0 [tl]=0
-                [f]=0 [s]=0 [z]=0)
-    : > "$RESULTS_TSV"
+#  The suites the .github integrator runs; everything else stays out of its
+#  path.  `ci' selects exactly these.
+CI_SUITES='acats repro extensions'
 
-    local cls result name detail k i
-    while read -r cls result name detail; do
-        [[ -z $cls ]] && continue
-        k=${cls,,}
-        printf '%s\t%s\t%s\t%s\n' "$name" "$k" "$result" "$detail" >> "$RESULTS_TSV"
-        C[z]=$(( C[z] + 1 ))
-        C[t$k]=$(( ${C[t$k]:-0} + 1 ))
-        case $result in
-            pass) C[$k]=$(( ${C[$k]:-0} + 1 )) ;;
-            fail) C[f]=$(( C[f] + 1 )); C[f$k]=$(( ${C[f$k]:-0} + 1 )) ;;
-            skip) C[s]=$(( C[s] + 1 )); C[s$k]=$(( ${C[s$k]:-0} + 1 )) ;;
-        esac
-    done < "$results_file"
+#  --only and --skip (or the TA_ONLY / TA_SKIP environment, comma or space
+#  separated) narrow what runs; a disabled suite yields no tests whether it
+#  was reached through `all' or named outright.
+ONLY_SUITES=${TA_ONLY:-}
+SKIP_SUITES=${TA_SKIP:-}
 
-    local passing=$(( C[a] + C[b] + C[c] + C[d] + C[e] + C[l] ))
-
-    heading "RESULTS"
-    printf '  %-22s %6s %6s %6s %6s %7s\n' class pass fail skip total rate
-    rule
-    for ((i = 0; i < ${#CLASS_ROWS[@]}; i += 2)); do
-        k=${CLASS_ROWS[i]}
-        ((${C[t$k]} > 0)) && printf '  %-22s %6d %6d %6d %6d %6d%%\n' "${CLASS_ROWS[i+1]}" \
-            "${C[$k]}" "${C[f$k]}" "${C[s$k]}" "${C[t$k]}" "$(pct "${C[$k]}" "${C[t$k]}")"
-    done
-    rule
-    printf '  %s%-22s %6d %6d %6d %6d %6d%%%s\n' "$BOLD" TOTAL "$passing" "${C[f]}" "${C[s]}" \
-        "${C[z]}" "$(pct "$passing" "${C[z]}")" "$OFF"
-    printf '\n  %selapsed%s %ss over %d tests with %s workers, %s\n' \
-        "$DIM" "$OFF" "$(elapsed)" "${C[z]}" "$NPROC" "$(date '+%Y-%m-%d %H:%M:%S')"
-    [ "$LOAD_WATCHED" = 1 ] && printf '  %sload%s    %s now, %s at its worst while running\n' \
-        "$DIM" "$OFF" "$(loadavg)" "$LOAD_PEAK"
-
-    heading "PASS RATE BY CLASS"
-    for ((i = 0; i < ${#CLASS_ROWS[@]}; i += 2)); do
-        k=${CLASS_ROWS[i]}
-        ((${C[t$k]} > 0)) && rate_bar "${CLASS_ROWS[i+1]}" "${C[$k]}" "${C[t$k]}"
-    done
-    rule
-    rate_bar TOTAL "$passing" "${C[z]}"
-
-    printf "A=%d B=%d C=%d D=%d E=%d L=%d F=%d S=%d T=%d/%d (%d%%)\n" \
-        "${C[a]}" "${C[b]}" "${C[c]}" "${C[d]}" "${C[e]}" "${C[l]}" "${C[f]}" "${C[s]}" \
-        "$passing" "${C[z]}" "$(pct "$passing" "${C[z]}")" > "$RESULTS_DIR/test_summary.txt"
-
-    if [[ ${TAP:-0} == 1 ]]; then
-        { echo "TAP version 13"; local j=0 _k
-          while IFS=$'\t' read -r name _k result detail; do ((++j))
-            case $result in
-              pass) echo "ok $j $name" ;;
-              skip) echo "ok $j $name # SKIP ${detail}" ;;
-              *)    echo "not ok $j $name # ${detail}" ;;
-            esac
-          done < "$RESULTS_TSV"
-          echo "1..$j"; } > "$RESULTS_DIR/results.tap"
+suite_enabled(){
+    local s=$1 list
+    if [ -n "$ONLY_SUITES" ]; then
+        list=${ONLY_SUITES//,/ }
+        case " $list " in *" $s "*) ;; *) return 1 ;; esac
     fi
-}
-
-report_slowest(){
-    local timings=$1 pairs secs med mad n peak t name
-    [[ -s $timings ]] || return 0
-    pairs=$(mktemp); secs=$(mktemp)
-    awk -F'\t' '$2 == 1 { printf "%.3f\t%s\n", $1/1000, $3 }' "$timings" | sort -rn > "$pairs"
-    [[ -s $pairs ]] || { rm -f "$pairs" "$secs"; return 0; }
-    cut -f1 "$pairs" > "$secs"
-    read -r med mad n <<<"$(stats "$secs")"
-    peak=$(head -1 "$secs")
-    heading "SLOWEST TESTS" "wall time of one worker, compile through run"
-    while IFS=$'\t' read -r t name; do
-        printf '  %-18s %7ss  %s %s%sx%s\n' "$name" "$t" "$(bar "$(scaled "$t" "$peak" 24)" 24)" \
-            "$DIM" "$(ratio "$t" "$med")" "$OFF"
-    done < <(head -n "$SLOWEST" "$pairs")
-    printf '\n  %sper test%s %s  median ± MAD over %s tests\n' "$DIM" "$OFF" "$(pm "$med" "$mad")" "$n"
-    rm -f "$pairs" "$secs"
-}
-
-compare_to_baseline(){
-    REGRESSIONS=0
-    if [[ ! -f $BASELINE ]]; then
-        printf '\n  %sno baseline at %s — run %s to create one%s\n' \
-            "$DIM" "$BASELINE" "\`$SELF bless\`" "$OFF"
-        return 0
+    if [ -n "$SKIP_SUITES" ]; then
+        list=${SKIP_SUITES//,/ }
+        case " $list " in *" $s "*) return 1 ;; esac
     fi
-    local -A BL RES
-    local name status _c _d _rest
-    while IFS=$'\t' read -r name status _rest; do [[ -n $name ]] && BL[$name]=$status; done < "$BASELINE"
-    while IFS=$'\t' read -r name _c status _d; do [[ -n $name ]] && RES[$name]=$status; done < "$RESULTS_TSV"
-
-    local -a regr=() prog=() chg=() new=() miss=()
-    local k b r shared=0 was=0 now=0
-    for k in "${!RES[@]}"; do
-        b=${BL[$k]:-__absent__}; r=${RES[$k]}
-        if [[ $b != __absent__ ]]; then
-            shared=$((shared + 1))
-            [[ $b == pass ]] && was=$((was + 1))
-            [[ $r == pass ]] && now=$((now + 1))
-        fi
-        if   [[ $b == __absent__ ]]; then new+=("$k $r")
-        elif [[ $b == "$r" ]];      then :
-        elif [[ $b == pass ]];      then regr+=("$k $b->$r")
-        elif [[ $r == pass ]];      then prog+=("$k $b->$r")
-        else                             chg+=("$k $b->$r"); fi
-    done
-    for k in "${!BL[@]}"; do [[ -z ${RES[$k]:-} ]] && miss+=("$k ${BL[$k]}"); done
-    REGRESSIONS=${#regr[@]}
-
-    heading "BASELINE DIFF" "$BASELINE"
-    emit_group(){ local tag=$1 colour=$2; shift 2; (($#)) || return 0
-                  printf '  %s%s (%d)%s\n' "$colour" "$tag" "$#" "$OFF"
-                  printf '    %s\n' "$@" | sort; printf '\n'; }
-    emit_group "REGRESSIONS"  "$BAD"  ${regr[@]+"${regr[@]}"}
-    emit_group "PROGRESSIONS" "$GOOD" ${prog[@]+"${prog[@]}"}
-    emit_group "CHANGED"      "$BOLD" ${chg[@]+"${chg[@]}"}
-    emit_group "NEW"          "$BOLD" ${new[@]+"${new[@]}"}
-    emit_group "MISSING"      "$BOLD" ${miss[@]+"${miss[@]}"}
-    ((shared > 0)) && printf '  %spassing%s  %d of %d shared, was %d, %s\n' \
-        "$DIM" "$OFF" "$now" "$shared" "$was" "$(change "$now" "$was")"
-    printf '  %s%d regression(s), %d progression(s), %d changed, %d new, %d missing%s\n' \
-        "$DIM" ${#regr[@]} ${#prog[@]} ${#chg[@]} ${#new[@]} ${#miss[@]} "$OFF"
-    ((REGRESSIONS==0)) && printf '  %sOK — no regressions vs baseline%s\n' "$GOOD" "$OFF" \
-                       || printf '  %sREGRESSED — %d test(s) that passed in the baseline now fail%s\n' \
-                              "$BAD" "$REGRESSIONS" "$OFF"
-}
-
-write_baseline(){
-    local tmp; tmp=$(mktemp)
-    [[ -f $BASELINE ]] && cp "$BASELINE" "$tmp"
-    local -A NEW
-    local name _c status _d _rest
-    while IFS=$'\t' read -r name _c status _d; do [[ -n $name ]] && NEW[$name]=$status; done < "$RESULTS_TSV"
-    { [[ -f $tmp ]] && while IFS=$'\t' read -r name status _rest; do
-          [[ -n $name && -z ${NEW[$name]:-} ]] && printf '%s\t%s\n' "$name" "$status"
-      done < "$tmp"
-      for name in "${!NEW[@]}"; do printf '%s\t%s\n' "$name" "${NEW[$name]}"; done
-    } | sort -k1,1 > "$BASELINE"
-    rm -f "$tmp"
-    printf '\n  %sbaseline%s written to %s, %d tests recorded\n' \
-        "$BOLD" "$OFF" "$BASELINE" "$(wc -l < "$BASELINE")"
-}
-
-selector_prefix(){
-    case ${1:-all} in
-        all)                      printf '' ;;
-        a|b|c|d|e|l|A|B|C|D|E|L)  printf '%s' "${1,,}" ;;
-        *)                        printf '%s' "$1" ;;
-    esac
-}
-
-selector_files(){
-    local prefix f
-    prefix=$(selector_prefix "${1:-all}")
-    SELECTED=()
-    for f in acats/"$prefix"*.ada; do [[ -f $f ]] && SELECTED+=("$f"); done
     return 0
 }
 
-run_selector(){
-    local sel=${1:-all} title=$2
-    local -a SELECTED=()
-    selector_files "$sel"
-    local total=${#SELECTED[@]}
-    ((total > 0)) || die "selector '$sel' matched no tests"
+CLASS_ROWS=(a "A  Acceptance"  b "B  Illegality"  c "C  Executable"
+            d "D  Numerics"    e "E  Inspection"  l "L  Post-compilation")
 
-    local run_id; run_id="${sel}-$(date +%Y%m%d-%H%M%S)-$$"
-    export RESULTS_DIR="test_results/${run_id}"
-    export LOGS_DIR="acats_logs/${run_id}"
-    export RESULTS_TSV="$RESULTS_DIR/results.tsv"
-    mkdir -p "$RESULTS_DIR" "$LOGS_DIR"
+suite_label(){ case $1 in
+    extensions) echo "Extensions" ;;
+    project)    echo "Project files" ;;
+    bonus)      echo "Bonus (post-83)" ;;
+    debug)      echo "Debugging" ;;
+    repro)      echo "Reproducers" ;;
+    fuzz)       echo "Fuzz" ;;
+    gameplay)   echo "Gameplay" ;;
+    *)          echo "$1" ;;
+esac; }
 
-    local listfile; listfile=$(mktemp)
-    printf '%s\n' "${SELECTED[@]}" > "$listfile"
+is_suite(){ case " $SUITES $DORMANT_SUITES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+engine_setup(){
+    local user_worker=${WORKER_TIMEOUT:-}
+    JOBS=${JOBS_OPTION:-${JOBS:-${NPROC:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}}}
+    STARTUP_TIMEOUT=${STARTUP_TIMEOUT:-30}
+    BUILD_TIMEOUT=${BUILD_TIMEOUT:-300}
+    LINK_TIMEOUT=${LINK_TIMEOUT:-20}
+    BASELINE=${BASELINE:-test.baseline}
+    OPT=${OPT:--O2}
+
+    [ -n "$TIMEOUT" ] || {
+        echo "$SELF: no usable 'timeout' command found" >&2
+        echo "         macOS:   brew install coreutils" >&2
+        echo "         Windows: run this under the bash that comes with Git for" >&2
+        echo "                  Windows, whose /usr/bin/timeout comes first on PATH" >&2
+        exit 1
+    }
+    TA_TIMEOUTS=$(timeout_table)
+    read -r COMPILE_TIMEOUT TEST_TIMEOUT WORKER_TIMEOUT <<<"$(timeout_for acats all)"
+    [ -n "$user_worker" ] ||
+        WORKER_TIMEOUT=$((8 * COMPILE_TIMEOUT + 4 * LINK_TIMEOUT + 2 * TEST_TIMEOUT + 30))
+    TA_TIMEOUTS=$(printf '%s\n' "$TA_TIMEOUTS" | awk -v w="$WORKER_TIMEOUT" '$1 == "acats" { $4 = w } { print }')
+    START_MS=$(now_ms)
+
+    if ! corpus_complete; then
+        pulse "unpacking the test corpus from tests.zip"
+        ensure_corpus || { pulse_stop; die "the test corpus is missing and tests.zip cannot be unpacked; restore tests.zip (git checkout -- tests.zip)"; }
+        pulse_stop
+    fi
+
+    if [ -n "${ADA83:-}" ]; then
+        local named=$ADA83
+        ADA83=$(find_compiler) || die "ADA83 names no executable compiler: $named"
+    else
+        ADA83=$(find_compiler) || ADA83=""
+        if [[ -z $ADA83 ]] || [[ turboada.c -nt $ADA83 ]]; then
+            printf '  %srebuilding ta%s\n' "$DIM" "$OFF"
+            build_compiler || die "compiler build failed"
+            ADA83=$(find_compiler) || die "no ta executable after building"
+        fi
+    fi
+
+    TA_WORK=$(mktemp -d "${TMPDIR:-/tmp}/turboada-run-XXXXXX") || die "cannot make a work directory"
+    TA_REPORT_DIR=$TA_WORK/report
+    mkdir -p "$TA_REPORT_DIR"
+    cp acats/report.ads acats/report.adb "$TA_REPORT_DIR/" || die "acats/ carries no report package"
+    ROOT=$PWD
+
+    export ADA83 TIMEOUT KILL_GRACE TA_TIMEOUTS TA_WORK TA_REPORT_DIR ROOT START_MS OPT \
+           COMPILE_TIMEOUT TEST_TIMEOUT LINK_TIMEOUT WORKER_TIMEOUT
+    export TA_ACCEPT=${ACCEPT_OPTION:-0}
+    export -f run_one run_one_timed gather_files compile_set run_in_lib link_program \
+              report_link_failure run_continuity_creators pct now_ms timed
+}
+
+discover_suite(){
+    local suite=$1 filter=${2:-} f name d owner
+    local -A linked=() owner_of=()
+    case $suite in
+        acats)
+            for f in acats/"${filter,,}"*.ada; do
+                [[ -f $f ]] && printf '2\tacats:%s\n' "$(basename "$f" .ada)"
+            done ;;
+        fuzz)
+            for f in fuzz/*/*.ada; do
+                [[ -f $f ]] || continue
+                name=${f#fuzz/}; name=${name%.ada}
+                matches "$name" "$filter" && printf '3\tfuzz:%s\n' "$name"
+            done ;;
+        bonus)
+            for f in acats-bonus/*/*.ada; do
+                [[ -f $f ]] || continue
+                name=${f#acats-bonus/}; name=${name%.ada}
+                [[ $name == support/* ]] && continue
+                matches "$name" "$filter" && printf '3\tbonus:%s\n' "$name"
+            done ;;
+        extensions)
+            while read -r f; do [[ -n $f ]] && linked[$f]=1; done < <(sed -n 's/^-- LINK: //p' extensions/*.ada 2>/dev/null)
+            for f in extensions/*.ada; do
+                [[ -f $f ]] || continue
+                name=$(basename "$f" .ada)
+                [[ -n ${linked[$name.ada]:-} ]] && continue
+                matches "$name" "$filter" && printf '3\textensions:%s\n' "$name"
+            done ;;
+        project)
+            for f in project/gpr/g*.gpr project/gpj/t*.gpj project/build/b*.gpr project/build/b*.gpj; do
+                [[ -f $f ]] || continue
+                name=${f#project/}; name=${name%.*}
+                matches "$name" "$filter" && printf '3\tproject:%s\n' "$name"
+            done ;;
+        debug)
+            for name in $(bash debug/run.sh --list $([[ ${ACCEPT_OPTION:-0} == 1 ]] && echo --accept)); do
+                matches "$name" "$filter" && printf '0\tdebug:%s\n' "$name"
+            done ;;
+        repro)
+            while IFS=$'\t' read -r owner f; do owner_of[$f]=$owner; done < <(repro_support)
+            owner=${owner_of[$filter.ada]:-}
+            if [[ -n $filter && -n $owner ]]; then
+                printf '  %s%s.ada is support for %s, not a test on its own; running %s%s\n' \
+                    "$DIM" "$filter" "$owner" "$owner" "$OFF" >&2
+                filter=$owner
+            fi
+            for d in repro/*/; do
+                d=${d%/}
+                [[ -f $d/run.sh ]] || continue
+                name=${d#repro/}
+                matches "$name" "$filter" && printf '1\trepro:%s\n' "$name"
+            done
+            for f in repro/*.ada; do
+                [[ -f $f ]] || continue
+                name=$(basename "$f" .ada)
+                [[ -n ${owner_of[$name.ada]:-} ]] && continue
+                matches "$name" "$filter" && printf '3\trepro:%s\n' "$name"
+            done ;;
+        gameplay)
+            for d in gameplay/scenarios/*/; do
+                d=${d%/}
+                [[ -f $d/run.sh ]] || continue
+                name=${d#gameplay/}
+                matches "$name" "$filter" && printf '1\tgameplay:%s\n' "$name"
+            done
+            if [[ -f craft ]] && command -v python3 >/dev/null 2>&1; then
+                ./craft test list "$filter"
+            fi ;;
+    esac
+    return 0
+}
+
+repro_support(){
+    awk 'FNR == 1 { done = 0 }
+         done { next }
+         /^--/ { if (sub(/^-- WITH: */, "")) { n = split($0, w, /[ \t]+/)
+                     for (i = 1; i <= n; i++) if (w[i] != "") { f = FILENAME; sub(/.*\//, "", f); sub(/\.ada$/, "", f); print f "\t" w[i] } }
+                 next }
+         /^[[:space:]]*$/ { next }
+         { done = 1 }' repro/*.ada
+}
+
+matches(){
+    [[ -z $2 ]] && return 0
+    [[ $1 == $2 || $1 == $2/* ]]
+}
+
+discover(){
+    local sel suite
+    for sel; do
+        case $sel in
+            all)  for suite in $SUITES; do suite_enabled "$suite" && discover_suite "$suite"; done ;;
+            */*)  suite=${sel%%/*}
+                  is_suite "$suite" || die "no suite named '$suite' (the suites: $SUITES)"
+                  suite_enabled "$suite" && discover_suite "$suite" "${sel#*/}" ;;
+            a|b|c|d|e|l|A|B|C|D|E|L) suite_enabled acats && discover_suite acats "$sel" ;;
+            *)    if is_suite "$sel"; then suite_enabled "$sel" && discover_suite "$sel"
+                  else suite_enabled acats && discover_suite acats "$sel"; fi ;;
+        esac
+    done | awk -F'\t' '!seen[$2]++' | sort -s -t$'\t' -k1,1n | cut -f2-
+}
+
+run_label(){
+    local label=${1:-all}
+    (($# < 2)) || label+="+$(($# - 1))"
+    label=${label//\//_}
+    label=${label//[^A-Za-z0-9_.+-]/_}
+    printf '%s' "${label:0:64}"
+}
+
+run_pool(){
+    local items=$1 title=$2 total
+    total=$(wc -l < "$items")
+    ((total > 0)) || die "the selection matched no tests"
+
+    RUN_ID="$(run_label "${SELECTION[@]}")-$(date +%Y%m%d-%H%M%S)-$$"
+    RUN_DIR=test_results/$RUN_ID
+    RESULTS_TSV=$RUN_DIR/results.tsv
+    export RESULTS_DIR=$RUN_DIR/acats LOGS_DIR=$RUN_DIR/logs/acats
+    export TA_LOGS=$PWD/$RUN_DIR/logs
+    mkdir -p "$RUN_DIR" "$RESULTS_DIR" "$LOGS_DIR"
+
+    if grep -q '^acats:' "$items"; then
+        export REPORT_LL="$TA_WORK/report.ll"
+        timed "$COMPILE_TIMEOUT" "$ADA83" -ada83 --ir acats/report.adb -o "$REPORT_LL" >/dev/null 2>&1 ||
+            die "cannot compile acats/report.adb"
+    fi
+
+    export TA_RUN_DIR=$PWD/$RUN_DIR
+    grep -q '^gameplay:' "$items" && gameplay_setup
 
     local version
-    version=$(timed "$STARTUP_TIMEOUT" "$TURBOADA" --version 2>&1) || \
-        version="version query failed or timed out"
+    version=$(timed "$STARTUP_TIMEOUT" "$ADA83" --version 2>&1) || version="version query failed or timed out"
     version=${version%%$'\n'*}
 
+    local counts
+    counts=$(cut -d: -f1 "$items" | sort | uniq -c | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }')
     heading "$title"
-    printf '  %sta%s    %s\n' "$BOLD" "$OFF" "$version"
-    printf '  %stests%s    %s, over %s workers\n' "$BOLD" "$OFF" "$total" "$NPROC"
-    printf '  %sresults%s  %s\n' "$BOLD" "$OFF" "$RESULTS_DIR"
-    printf '  %slogs%s     %s\n' "$BOLD" "$OFF" "$LOGS_DIR"
+    printf '  %sta%s       %s\n' "$BOLD" "$OFF" "$version"
+    printf '  %stests%s    %s over %s workers: %s\n' "$BOLD" "$OFF" "$total" "$JOBS" "$counts"
+    printf '  %sresults%s  %s\n' "$BOLD" "$OFF" "$RUN_DIR"
 
-    export PROGRESS_FILE; PROGRESS_FILE=$(mktemp)
+    export TA_PROGRESS; TA_PROGRESS=$(mktemp)
     LOAD_SAMPLES=$(mktemp); LOAD_PEAK=0
     hide_cursor
     load_watch_start
-    local tmpfile; tmpfile=$(mktemp)
-    local worker_errors="$LOGS_DIR/harness.err"
+    local rows; rows=$(mktemp)
+    local worker_errors=$RUN_DIR/logs/harness.err
     local runner_status; runner_status=$(mktemp)
     : > "$worker_errors"
     (
         set +e
-        xargs -P "$NPROC" -I{} bash -c "run_one_timed \"\$@\"" _ {} \
-            < "$listfile" > "$tmpfile" 2>"$worker_errors"
+        tr '\n' '\0' < "$items" |
+            xargs -0 -P "$JOBS" -I{} bash -c '. "$1" && run_item "$2"' _ "$TA_LIB" {} \
+            >> "$rows" 2>"$worker_errors"
         rc=$?
         printf '%d\n' "$rc" > "$runner_status"
         exit "$rc"
@@ -803,8 +1641,8 @@ run_selector(){
     if [ $animated = 1 ]; then
         local done_n last
         while [[ ! -s $runner_status ]] && kill -0 "$runner" 2>/dev/null; do
-            done_n=$(wc -l < "$PROGRESS_FILE" 2>/dev/null) || done_n=0
-            last=$(awk 'END{print $3}' "$tmpfile" 2>/dev/null) || last=''
+            done_n=$(wc -l < "$TA_PROGRESS" 2>/dev/null) || done_n=0
+            last=$(tail -1 "$TA_PROGRESS" 2>/dev/null | cut -f2) || last=''
             progress "${done_n:-0}" "$total" "${last:-running the suite}"
             sleep 0.15
         done
@@ -817,244 +1655,225 @@ run_selector(){
         printf '  %swarning:%s worker launcher exited with status %d; see %s\n' \
             "$BAD" "$OFF" "$runner_rc" "$worker_errors" >&2
     fi
-    sort -k3 "$tmpfile" > "${tmpfile}.sorted"
-    tally_results "${tmpfile}.sorted"
-    report_slowest "$PROGRESS_FILE"
-    rm -f "$tmpfile" "${tmpfile}.sorted" "$listfile" "$PROGRESS_FILE" "$runner_status" "$LOAD_SAMPLES"
+    cut -f2 "$TA_PROGRESS" | sort > "$TA_PROGRESS.done"
+    tr ':' '/' < "$items" | sort | comm -23 - "$TA_PROGRESS.done" | while IFS= read -r lost; do
+        printf '%s\t%s\tfail\tHARNESS: the worker never finished this test\n' "${lost%%/*}" "${lost#*/}"
+    done >> "$rows"
+    tally "$rows"
+    gameplay_reports
+    rm -f "$rows" "$TA_PROGRESS" "$TA_PROGRESS.done" "$runner_status" "$LOAD_SAMPLES"
     LOAD_SAMPLES=''
 }
 
-ext_header(){ sed -n "s/^-- $2: //p" "$1" | tail -1; }
+gameplay_setup(){
+    local src=turboada-example-game.ada bin=bin-$TA_HOST/turboada-example-game
+    TA_GAME='' TA_GAME_WHY=''
+    #  Scripted scenarios build the game themselves; the craft-driven tiers
+    #  need a probed binary, and no craft means none of those will run.
+    if [[ ! -f craft ]]; then
+        TA_GAME_WHY='craft is not in the tree'
+        export TA_GAME TA_GAME_WHY
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        TA_GAME_WHY='python3 is not on PATH'
+    elif [[ -n ${GAME:-} ]]; then
+        TA_GAME=$GAME
+    elif [[ -f $src ]]; then
+        if [[ ! -x $bin || $src -nt $bin || $ADA83 -nt $bin ]]; then
+            pulse "building the game"
+            mkdir -p "${bin%/*}"
+            timed "$BUILD_TIMEOUT" "$ADA83" "$OPT" "$src" -o "$bin" >"$TA_WORK/game-build.log" 2>&1 ||
+                TA_GAME_WHY="BUILD: the game does not build: $(first_problem "$TA_WORK/game-build.log")"
+            pulse_stop
+        fi
+        [[ -n $TA_GAME_WHY ]] || TA_GAME=$PWD/$bin
+    fi
+    if [[ -n $TA_GAME ]] && ! TA_GAME=$TA_GAME ./craft test probe >/dev/null 2>&1; then
+        TA_GAME=''
+    fi
+    [[ -n $TA_GAME || -n $TA_GAME_WHY ]] || TA_GAME_WHY='the game has no --simulate yet'
+    export TA_GAME TA_GAME_WHY
+}
 
-run_extension_tests(){
-    EXT_PASS=0 EXT_FAIL=0 EXT_SKIP=0
-    [[ -d extensions ]] || { printf '  %sno extensions/ directory%s\n' "$DIM" "$OFF"; return 0; }
-
-    local nm_tool; nm_tool=$(command -v nm || command -v llvm-nm || true)
-    local work; work=$(mktemp -d "${TMPDIR:-/tmp}/turboada-ext.XXXXXX")
-
-    local -A is_support=()
-    local source linked
-    for source in extensions/*.ada; do
-        linked=$(ext_header "$source" LINK)
-        [[ -n $linked ]] && is_support[$linked]=1
+gameplay_reports(){
+    local d
+    [[ -f craft ]] || return 0
+    for d in "$RUN_DIR"/gameplay/*/; do
+        [[ -s $d/runs.tsv ]] || continue
+        ./craft test report "$d" 2>&1 | sed 's/^/  /'
     done
+    return 0
+}
 
-    heading "EXTENSIONS" "the _ada_ symbol prefix and Command_Line"
+tally(){
+    awk -F'\t' -v order="$SUITES $DORMANT_SUITES" '
+        BEGIN { n = split(order, o, " "); for (i = 1; i <= n; i++) rank[o[i]] = i }
+        NF >= 3 { printf "%02d\t%s\n", (rank[$1] ? rank[$1] : 99), $0 }' "$1" |
+        sort -t$'\t' -k1,1 -k3,3 | cut -f2- > "$RESULTS_TSV"
 
-    local name dir exe symbol symbol_not symbols args detail
-    local -a fragments argv
-    for source in extensions/*.ada; do
-        name=$(basename "$source" .ada)
-        [[ -n ${is_support[$name.ada]:-} ]] && continue
+    local counts
+    counts=$(awk -F'\t' '
+        { s = $1; v = $3; t[s]++; c[s, v]++
+          if (s == "acats") { k = tolower(substr($2, 1, 1)); t["acats." k]++; c["acats." k, v]++ } }
+        END { for (s in t) printf "%s %d %d %d %d\n", s, c[s, "pass"], c[s, "fail"], c[s, "skip"], t[s] }' "$RESULTS_TSV")
+    count(){ awk -v s="$1" -v f="$2" '$1 == s { print $f; found = 1 } END { if (!found) print 0 }' <<<"$counts"; }
 
-        dir=$work/$name
-        mkdir -p "$dir"
-        fragments=()
-        detail=""
-
-        linked=$(ext_header "$source" LINK)
-        if [[ -n $linked ]]; then
-            if timed "$COMPILE_TIMEOUT" "$TURBOADA" --ir "extensions/$linked" \
-                 -o "$dir/linked.ll" >"$dir/compile.log" 2>&1; then
-                fragments+=("$dir/linked.ll")
-            else
-                detail="support unit $linked: $(tail -2 "$dir/compile.log" | tr '\n' ' ')"
-            fi
-        fi
-
-        if [[ -z $detail ]] &&
-           ! ( cd "$dir" && timed "$LINK_TIMEOUT" "$TURBOADA" "$ROOT/$source" \
-                 ${fragments[@]+"${fragments[@]}"} -o "$dir/$name" ) \
-                 >>"$dir/compile.log" 2>&1; then
-            detail=$(tail -2 "$dir/compile.log" | tr '\n' ' ')
-        fi
-
-        exe=$dir/$name
-        [[ -f $exe.exe ]] && exe=$exe.exe
-
-        if [[ -z $detail ]]; then
-            symbol=$(ext_header "$source" SYMBOL)
-            symbol_not=$(ext_header "$source" SYMBOL-NOT)
-            if [[ -n $symbol || -n $symbol_not ]]; then
-                if [[ -z $nm_tool ]]; then
-                    printf '  %sskip%s %s — symbol check needs nm, which is not on PATH\n' \
-                        "$DIM" "$OFF" "$name"
-                    ((++EXT_SKIP)); continue
-                fi
-                symbols=$("$nm_tool" "$exe" 2>/dev/null) || symbols=""
-                if ! grep -qE '[[:alnum:]]' <<<"$symbols"; then
-                    printf '  %sskip%s %s — symbol check needs an unstripped binary; the linker kept no symbol table\n' \
-                        "$DIM" "$OFF" "$name"
-                    ((++EXT_SKIP)); continue
-                fi
-                if [[ -n $symbol ]] &&
-                   ! grep -qE "[[:space:]]_?$symbol\$" <<<"$symbols"; then
-                    detail="symbol $symbol missing from the executable"
-                elif [[ -n $symbol_not ]] &&
-                     grep -qE "[[:space:]]_?$symbol_not\$" <<<"$symbols"; then
-                    detail="symbol $symbol_not present in the executable"
-                fi
-            fi
-        fi
-
-        if [[ -z $detail ]]; then
-            args=$(ext_header "$source" ARGS)
-            argv=(); [[ -n $args ]] && eval "argv=($args)"
-            if ! timed "$TEST_TIMEOUT" "$exe" ${argv[@]+"${argv[@]}"} \
-                   >"$dir/run.out" 2>"$dir/run.err"; then
-                detail="exited $? — $(tail -2 "$dir/run.err" | tr '\n' ' ')"
-            elif grep -q FAILED "$dir/run.out"; then
-                detail=$(grep FAILED "$dir/run.out" | head -1)
-            elif ! grep -q PASSED "$dir/run.out"; then
-                detail="printed neither PASSED nor FAILED: $(head -1 "$dir/run.out")"
-            fi
-        fi
-
-        if [[ -z $detail ]]; then
-            printf '  %sok%s   %s\n' "$GOOD" "$OFF" "$name"
-            ((++EXT_PASS))
-        else
-            printf '  %sFAIL%s %s — %s\n' "$BAD" "$OFF" "$name" "$detail"
-            ((++EXT_FAIL))
-            [[ -n ${LOGS_DIR:-} ]] && cp "$dir/compile.log" "$LOGS_DIR/$name.ext" 2>/dev/null
-        fi
+    local i k suite p f s t tp=0 tf=0 ts=0 tt=0
+    heading "RESULTS"
+    printf '  %-22s %6s %6s %6s %6s  %s\n' suite pass fail skip total rate
+    rule 77
+    for ((i = 0; i < ${#CLASS_ROWS[@]}; i += 2)); do
+        k=${CLASS_ROWS[i]}
+        t=$(count "acats.$k" 5)
+        ((t > 0)) && result_row "${CLASS_ROWS[i+1]}" "$(count "acats.$k" 2)" "$(count "acats.$k" 3)" "$(count "acats.$k" 4)" "$t"
     done
-
-    [[ $KEEP_WORK == 1 ]] || rm -rf "$work"
-
-    local ext_total=$((EXT_PASS + EXT_FAIL + EXT_SKIP))
-    printf '\n  %s%d extension tests: %d passed, %d failed, %d skipped%s\n' \
-        "$BOLD" "$ext_total" "$EXT_PASS" "$EXT_FAIL" "$EXT_SKIP" "$OFF"
-    rate_bar EXTENSIONS "$EXT_PASS" "$ext_total"
-
-    [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' X=%d/%d XF=%d XS=%d\n' "$EXT_PASS" "$ext_total" "$EXT_FAIL" "$EXT_SKIP" \
-            >> "$RESULTS_DIR/test_summary.txt"
-    return 0
-}
-
-run_project_tests(){
-    PROJ_PASS=0 PROJ_FAIL=0 PROJ_KNOWN=0
-    [[ -d project ]] || { printf '  %sno project/ directory%s\n' "$DIM" "$OFF"; return 0; }
-
-    heading "PROJECT FILES" "gpr and gpj build descriptions, read with -P ... -n"
-
-    local suite line tail_line p f k
-    for suite in gpj gpr build; do
-        [[ -x project/$suite/run.sh || -f project/$suite/run.sh ]] || continue
-        line=$(sh "project/$suite/run.sh" "$TURBOADA" 2>&1) || true
-        printf '%s\n' "$line" | sed -n '/^\(FAILED\|KNOWN\)/s/^/  /p'
-        tail_line=$(printf '%s\n' "$line" | tail -1)
-        p=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); p=${p:-0}
-        f=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); f=${f:-0}
-        k=$(sed -n 's/.*[^0-9]\([0-9]\+\) known.*/\1/p'  <<<"$tail_line"); k=${k:-0}
-        PROJ_PASS=$((PROJ_PASS + p)) PROJ_FAIL=$((PROJ_FAIL + f)) PROJ_KNOWN=$((PROJ_KNOWN + k))
-        printf '  %-4s %s\n' "$suite" "$tail_line"
+    for suite in $SUITES $DORMANT_SUITES; do
+        t=$(count "$suite" 5)
+        ((t > 0)) || continue
+        p=$(count "$suite" 2) f=$(count "$suite" 3) s=$(count "$suite" 4)
+        tp=$((tp + p)) tf=$((tf + f)) ts=$((ts + s)) tt=$((tt + t))
+        [[ $suite == acats ]] || result_row "$(suite_label "$suite")" "$p" "$f" "$s" "$t"
     done
+    rule 77
+    result_row TOTAL "$tp" "$tf" "$ts" "$tt" "$BOLD"
+    printf '\n  %selapsed%s %ss over %d tests with %s workers, %s\n' \
+        "$DIM" "$OFF" "$(elapsed)" "$tt" "$JOBS" "$(date '+%Y-%m-%d %H:%M:%S')"
+    [ "$LOAD_WATCHED" = 1 ] && printf '  %sload%s    %s now, %s at its worst while running\n' \
+        "$DIM" "$OFF" "$(loadavg)" "$LOAD_PEAK"
 
-    local proj_total=$((PROJ_PASS + PROJ_FAIL + PROJ_KNOWN))
-    printf '\n  %s%d project tests: %d passed, %d failed, %d known%s\n' \
-        "$BOLD" "$proj_total" "$PROJ_PASS" "$PROJ_FAIL" "$PROJ_KNOWN" "$OFF"
-    rate_bar PROJECT "$PROJ_PASS" "$proj_total"
+    {
+        if (($(count acats 5) > 0)); then
+            printf "A=%d B=%d C=%d D=%d E=%d L=%d F=%d S=%d T=%d/%d (%d%%)\n" \
+                "$(count acats.a 2)" "$(count acats.b 2)" "$(count acats.c 2)" "$(count acats.d 2)" \
+                "$(count acats.e 2)" "$(count acats.l 2)" "$(count acats 3)" "$(count acats 4)" \
+                "$(count acats 2)" "$(count acats 5)" "$(pct "$(count acats 2)" "$(count acats 5)")"
+        fi
+        (($(count extensions 5) > 0)) && printf ' X=%d/%d XF=%d XS=%d\n' \
+            "$(count extensions 2)" "$(count extensions 5)" "$(count extensions 3)" "$(count extensions 4)"
+        (($(count project 5) > 0)) && printf ' PJ=%d/%d PJF=%d PJK=%d\n' \
+            "$(count project 2)" "$(count project 5)" "$(count project 3)" "$(count project 4)"
+        (($(count bonus 5) > 0)) && printf ' BN=%d/%d BNF=%d\n' \
+            "$(count bonus 2)" "$(count bonus 5)" "$(count bonus 3)"
+        (($(count debug 5) > 0)) && printf ' DBG=%d/%d DBGF=%d DBGP=%d\n' \
+            "$(count debug 2)" "$(( $(count debug 2) + $(count debug 3) ))" "$(count debug 3)" "$(count debug 4)"
+        (($(count repro 5) > 0)) && printf ' RP=%d/%d RPF=%d\n' \
+            "$(count repro 2)" "$(count repro 5)" "$(count repro 3)"
+        (($(count fuzz 5) > 0)) && printf ' FZ=%d/%d FZF=%d\n' \
+            "$(count fuzz 2)" "$(count fuzz 5)" "$(count fuzz 3)"
+        (($(count gameplay 5) > 0)) && printf ' GP=%d/%d GPF=%d GPS=%d\n' \
+            "$(count gameplay 2)" "$(count gameplay 5)" "$(count gameplay 3)" "$(count gameplay 4)"
+        true
+    } > "$RUN_DIR/test_summary.txt"
 
-    [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' PJ=%d/%d PJF=%d PJK=%d\n' "$PROJ_PASS" "$proj_total" "$PROJ_FAIL" "$PROJ_KNOWN" \
-            >> "$RESULTS_DIR/test_summary.txt"
-    return 0
+    local failures
+    failures=$(awk -F'\t' '$3 == "fail" || ($3 == "skip" && $1 == "acats")' "$RESULTS_TSV")
+    if [[ -n $failures ]]; then
+        heading "FAILURES" "every failing test, and every ACATS test that never ran"
+        while IFS=$'\t' read -r suite k p f; do
+            printf '  %s%-4s%s %s/%s  %s%s%s\n' "$BAD" "$p" "$OFF" "$suite" "$k" "$DIM" "$f" "$OFF"
+        done <<<"$failures"
+    fi
+
+    if [[ ${TAP:-0} == 1 ]]; then
+        { echo "TAP version 13"; local j=0 name result detail
+          while IFS=$'\t' read -r suite name result detail; do ((++j))
+            case $result in
+              pass) echo "ok $j $suite/$name" ;;
+              skip) echo "ok $j $suite/$name # SKIP ${detail}" ;;
+              *)    echo "not ok $j $suite/$name # ${detail}" ;;
+            esac
+          done < "$RESULTS_TSV"
+          echo "1..$j"; } > "$RUN_DIR/results.tap"
+    fi
 }
 
-run_bonus_tests(){
-    BONUS_PASS=0 BONUS_FAIL=0
-    [[ -d acats-bonus ]] || { printf '  %sno acats-bonus/ directory%s\n' "$DIM" "$OFF"; return 0; }
-
-    heading "ACATS BONUS" "post-Ada-83 features, now the default: protected types, controlled types, child units, general and anonymous access types, subprogram pointers, expression functions, if/case expressions, aspects, generic formal defaults, streams, generalized references, iterators and for-of loops, Ada 95 unit names, dot notation; and coverage salvaged from tagged-blocked tests"
-
-    local line tail_line
-    line=$(sh acats-bonus/run.sh "$TURBOADA" 2>&1) || true
-    printf '%s\n' "$line" | sed -n '/^FAILED/s/^/  /p'
-    tail_line=$(printf '%s\n' "$line" | tail -1)
-    BONUS_PASS=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); BONUS_PASS=${BONUS_PASS:-0}
-    BONUS_FAIL=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); BONUS_FAIL=${BONUS_FAIL:-0}
-
-    local graded=$((BONUS_PASS + BONUS_FAIL))
-    printf '\n  %s%s%s\n' "$BOLD" "$tail_line" "$OFF"
-    rate_bar "ACATS BONUS" "$BONUS_PASS" "$((graded > 0 ? graded : 1))"
-    return 0
+baseline_source(){
+    if [[ -f $BASELINE ]]; then printf '%s' "$BASELINE"
+    elif [[ $BASELINE == test.baseline && -f acats.baseline ]]; then printf 'acats.baseline'
+    fi
 }
 
-run_debug_tests(){
-    DBG_PASS=0 DBG_FAIL=0 DBG_PEND=0
-    [[ -d debug ]] || { printf '  %sno debug/ directory%s\n' "$DIM" "$OFF"; return 0; }
-
-    heading "DEBUGGING" "-g DWARF and gdb sessions, --dump-tree and --dump-rep"
-
-    local line tail_line p f d
-    line=$(sh debug/run.sh "$TURBOADA" 2>&1) || true
-    [[ -n ${RESULTS_DIR:-} ]] && printf '%s\n' "$line" > "$RESULTS_DIR/debug.log"
-    printf '%s\n' "$line" | { grep -E '^(FAILED|  ---|    )' || true; } | sed 's/^/  /'
-    tail_line=$(printf '%s\n' "$line" | tail -1)
-    p=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); p=${p:-0}
-    f=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); f=${f:-0}
-    d=$(sed -n 's/.*[^0-9]\([0-9]\+\) pending.*/\1/p' <<<"$tail_line"); d=${d:-0}
-    DBG_PASS=$p DBG_FAIL=$f DBG_PEND=$d
-
-    local dbg_total=$((DBG_PASS + DBG_FAIL + DBG_PEND))
-    printf '\n  %s%d debug tests: %d passed, %d failed, %d pending%s\n' \
-        "$BOLD" "$dbg_total" "$DBG_PASS" "$DBG_FAIL" "$DBG_PEND" "$OFF"
-    rate_bar DEBUGGING "$DBG_PASS" "$((DBG_PASS + DBG_FAIL))"
-
-    [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' DBG=%d/%d DBGF=%d DBGP=%d\n' \
-            "$DBG_PASS" "$((DBG_PASS + DBG_FAIL))" "$DBG_FAIL" "$DBG_PEND" \
-            >> "$RESULTS_DIR/test_summary.txt"
-    return 0
+baseline_rows(){
+    local file
+    file=$(baseline_source)
+    [[ -n $file ]] || return 0
+    awk -F'\t' 'NF == 2 { print "acats\t" $1 "\t" $2; next } NF >= 3 { print $1 "\t" $2 "\t" $3 }' "$file"
 }
 
-run_repro_tests(){
-    REPRO_PASS=0 REPRO_FAIL=0
-    [[ -f repro/run.sh ]] || { printf '  %sno repro/run.sh%s\n' "$DIM" "$OFF"; return 0; }
+compare_to_baseline(){
+    REGRESSIONS=0
+    local source
+    source=$(baseline_source)
+    [[ -n $source ]] ||
+        printf '\n  %sno baseline at %s -- run %s to create one; every failure counts as a regression%s\n' \
+            "$DIM" "$BASELINE" "\`$SELF bless\`" "$OFF"
+    local -A BL RES
+    local suite name status _d
+    while IFS=$'\t' read -r suite name status; do [[ -n $name ]] && BL[$suite/$name]=$status; done < <(baseline_rows)
+    while IFS=$'\t' read -r suite name status _d; do [[ -n $name ]] && RES[$suite/$name]=$status; done < "$RESULTS_TSV"
 
-    heading "REPRODUCERS" "the program each fix was landed with, run in isolation and judged by its header"
+    local -a regr=() prog=() chg=() new=() miss=()
+    local k b r shared=0 was=0 now=0
+    for k in "${!RES[@]}"; do
+        b=${BL[$k]:-__absent__}; r=${RES[$k]}
+        if [[ $b != __absent__ ]]; then
+            shared=$((shared + 1))
+            [[ $b == pass ]] && was=$((was + 1))
+            [[ $r == pass ]] && now=$((now + 1))
+        fi
+        if   [[ $b == __absent__ && $r == fail ]]; then regr+=("$k new->fail")
+        elif [[ $b == __absent__ ]]; then new+=("$k $r")
+        elif [[ $b == "$r" ]];      then :
+        elif [[ $b == pass ]];      then regr+=("$k $b->$r")
+        elif [[ $r == pass ]];      then prog+=("$k $b->$r")
+        else                             chg+=("$k $b->$r"); fi
+    done
+    local -A SELECTED_SUITES=()
+    for k in "${!RES[@]}"; do SELECTED_SUITES[${k%%/*}]=1; done
+    for k in "${!BL[@]}"; do
+        [[ -n ${SELECTED_SUITES[${k%%/*}]:-} && -z ${RES[$k]:-} ]] && miss+=("$k ${BL[$k]}")
+    done
+    REGRESSIONS=${#regr[@]}
 
-    local line tail_line
-    line=$(bash repro/run.sh "$TURBOADA" 2>&1) || true
-    printf '%s\n' "$line" | sed -n '/^FAILED/s/^/  /p'
-    tail_line=$(printf '%s\n' "$line" | tail -1)
-    REPRO_PASS=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); REPRO_PASS=${REPRO_PASS:-0}
-    REPRO_FAIL=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); REPRO_FAIL=${REPRO_FAIL:-0}
-
-    local repro_total=$((REPRO_PASS + REPRO_FAIL))
-    printf '\n  %s%s%s\n' "$BOLD" "$tail_line" "$OFF"
-    rate_bar REPRODUCERS "$REPRO_PASS" "$((repro_total > 0 ? repro_total : 1))"
-
-    [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' RP=%d/%d RPF=%d\n' "$REPRO_PASS" "$repro_total" "$REPRO_FAIL" \
-            >> "$RESULTS_DIR/test_summary.txt"
-    return 0
+    heading "BASELINE DIFF" "${source:-none}"
+    emit_group(){ local tag=$1 colour=$2; shift 2; (($#)) || return 0
+                  printf '  %s%s (%d)%s\n' "$colour" "$tag" "$#" "$OFF"
+                  printf '    %s\n' "$@" | sort; printf '\n'; }
+    emit_group "REGRESSIONS"  "$BAD"  ${regr[@]+"${regr[@]}"}
+    emit_group "PROGRESSIONS" "$GOOD" ${prog[@]+"${prog[@]}"}
+    emit_group "CHANGED"      "$BOLD" ${chg[@]+"${chg[@]}"}
+    emit_group "NEW"          "$BOLD" ${new[@]+"${new[@]}"}
+    emit_group "MISSING"      "$BOLD" ${miss[@]+"${miss[@]}"}
+    ((shared > 0)) && printf '  %spassing%s  %d of %d shared, was %d, %s\n' \
+        "$DIM" "$OFF" "$now" "$shared" "$was" "$(change "$now" "$was")"
+    printf '  %s%d regression(s), %d progression(s), %d changed, %d new, %d missing%s\n' \
+        "$DIM" ${#regr[@]} ${#prog[@]} ${#chg[@]} ${#new[@]} ${#miss[@]} "$OFF"
+    ((REGRESSIONS==0)) && printf '  %sOK -- no regressions vs baseline%s\n' "$GOOD" "$OFF" \
+                       || printf '  %sREGRESSED -- %d test(s) that passed in the baseline, or are new, now fail%s\n' \
+                              "$BAD" "$REGRESSIONS" "$OFF"
 }
 
-run_fuzz_tests(){
-    FUZZ_PASS=0 FUZZ_FAIL=0
-    [[ -f fuzz/run.sh ]] || { printf '  %sno fuzz/run.sh%s\n' "$DIM" "$OFF"; return 0; }
+write_baseline(){
+    local tmp; tmp=$(mktemp)
+    baseline_rows > "$tmp"
+    local -A NEW
+    local suite name status _d
+    while IFS=$'\t' read -r suite name status _d; do [[ -n $name ]] && NEW[$suite$'\t'$name]=$status; done < "$RESULTS_TSV"
+    { while IFS=$'\t' read -r suite name status; do
+          [[ -n $name && -z ${NEW[$suite$'\t'$name]:-} ]] && printf '%s\t%s\t%s\n' "$suite" "$name" "$status"
+      done < "$tmp"
+      for name in "${!NEW[@]}"; do printf '%s\t%s\n' "$name" "${NEW[$name]}"; done
+    } | sort -t$'\t' -k1,1 -k2,2 > "$BASELINE.new"
+    mv "$BASELINE.new" "$BASELINE"
+    rm -f "$tmp"
+    printf '\n  %sbaseline%s written to %s, %d tests recorded\n' \
+        "$BOLD" "$OFF" "$BASELINE" "$(wc -l < "$BASELINE")"
+}
 
-    heading "FUZZ" "the feature-matrix corpus: every feature alone and crossed with every other, judged by class"
-
-    local line tail_line
-    line=$(bash fuzz/run.sh "$TURBOADA" 2>&1) || true
-    printf '%s\n' "$line" | sed -n '/^FAILED/s/^/  /p'
-    tail_line=$(printf '%s\n' "$line" | tail -1)
-    FUZZ_PASS=$(sed -n 's/.*[^0-9]\([0-9]\+\) passed.*/\1/p' <<<"$tail_line"); FUZZ_PASS=${FUZZ_PASS:-0}
-    FUZZ_FAIL=$(sed -n 's/.*[^0-9]\([0-9]\+\) failed.*/\1/p' <<<"$tail_line"); FUZZ_FAIL=${FUZZ_FAIL:-0}
-
-    local fuzz_total=$((FUZZ_PASS + FUZZ_FAIL))
-    printf '\n  %s%s%s\n' "$BOLD" "$tail_line" "$OFF"
-    rate_bar FUZZ "$FUZZ_PASS" "$((fuzz_total > 0 ? fuzz_total : 1))"
-
-    [[ -n ${RESULTS_DIR:-} && -f $RESULTS_DIR/test_summary.txt ]] &&
-        printf ' FZ=%d/%d FZF=%d\n' "$FUZZ_PASS" "$fuzz_total" "$FUZZ_FAIL" \
-            >> "$RESULTS_DIR/test_summary.txt"
-    return 0
+select_items(){
+    ITEMS=$(mktemp)
+    discover "$@" > "$ITEMS"
 }
 
 ALL_PROGRAMS="sieve matmul lu recurse strings numerics checks exceptions memory tasking taskflood taskselect taskelse indirect monitor finalizer wraparound"
@@ -1219,7 +2038,7 @@ peak_rss(){
 }
 
 install_gnat(){
-    if [ "$HOST_TARGET" = windows ]; then
+    if [ "$TA_HOST" = windows ]; then
         gnat_note="no GNAT; get one with Alire (https://alire.ada.dev): alr toolchain --select"
         return 1
     fi
@@ -1244,7 +2063,7 @@ have_gnat(){
     command -v gnatmake >/dev/null 2>&1 || install_gnat
 }
 
-corpus_ready(){ unpack_suite "$HERE" acats; }
+corpus_ready(){ ensure_corpus; }
 
 corpus_files(){
     local f; local -a all=()
@@ -2096,9 +2915,7 @@ bench_main(){
     SUITES=${SUITES:-2} RT=${RT:-0} FLOOR=${FLOOR:-0.002}
     LOAD_MAX=${LOAD_MAX:-2.0} FORCE=${FORCE:-0} NO_PIN=${NO_PIN:-0} TSV_DIR=${TSV_DIR:-}
 
-    BENCH_TA=${TURBOADA:-$HERE/bin-$HOST_TARGET/ta}
-    [ -x "$BENCH_TA" ] || [ ! -x "$BENCH_TA.exe" ] || BENCH_TA=$BENCH_TA.exe
-    [ -x "$BENCH_TA" ] || [ ! -x "$HERE/ta" ] || BENCH_TA=$HERE/ta
+    BENCH_TA=$(find_compiler) || BENCH_TA=$HERE/bin-$TA_HOST/ta
 
     BENCH_WORK=$(mktemp -d "${TMPDIR:-/tmp}/turboada-bench-XXXXXX")
     seed=$BENCH_WORK/seed
@@ -2107,7 +2924,8 @@ bench_main(){
 
     bench_pinning
     hide_cursor
-    [ -x "$BENCH_TA" ] || { pulse "building the compiler"; make -C "$HERE" -s ta >/dev/null 2>&1; pulse_stop; }
+    [ -x "$BENCH_TA" ] || { pulse "building the compiler"; make -C "$HERE" -s ta >/dev/null 2>&1; pulse_stop
+                            BENCH_TA=$(find_compiler) || BENCH_TA=$HERE/bin-$TA_HOST/ta; }
     [ -x "$BENCH_TA" ] || die "cannot build $BENCH_TA"
     write_programs
 
@@ -2129,116 +2947,11 @@ bench_main(){
     echo
 }
 
-usage(){ cat <<TEXT
-Usage: $SELF [COMMAND] [ARGUMENT]
+gating(){ awk -F'\t' '($3 == "fail" && $1 != "debug") || ($3 == "skip" && $1 == "acats")' "$RESULTS_TSV"; }
 
-Test and measure the TurboAda compiler: the ACATS conformance suite, the
-extension tests, the project-file tests, the acats-bonus and debugging
-suites, the reproducers, the fuzz corpus, and the benchmarks.  With no
-arguments, runs every test.
-
-Commands:
-  run [SELECTOR]     run the suite and print a report (the default)
-  check [SELECTOR]   run, then diff against the baseline; exit 1 on regression
-  ci                 run every test, print the first failures' logs, write the
-                     step summary when GitHub Actions asks, exit 1 on any failure
-                     or on a test that never ran
-  bless [SELECTOR]   run, then write the results as the new baseline
-  list [SELECTOR]    list the tests a selector expands to
-  extensions         run only the extension tests
-  project            run only the project-file tests (gpr and gpj)
-  debug              run only the debugging feature tests (-g, gdb, --dump-*);
-                     cases whose feature has not merged yet count as pending
-  bonus              run only the acats-bonus suite: ACATS 4.2 tests for the
-                     post-Ada-83 features, admitted by default and refused
-                     under -ada83, sanitized to Ada 83 plus
-                     the feature under test; every test either passes or
-                     fails, and a b-test passes only when each of its marked
-                     lines draws a diagnostic
-  repro              run only the reproducers: the program each fix was landed
-                     with, under repro/, run in isolation and judged by the
-                     expectation lines in its header (see repro/run.sh)
-  fuzz               run only the fuzz corpus: the feature-matrix swarm's
-                     generated A/B/C tests under fuzz/; what ships is what
-                     passes, so every one must (see fuzz/run.sh)
-  bench [MODE]       measure rather than test; see Benchmark modes below
-  help               display this help and exit
-
-A full run (no selector, or \`all') ends with the extension tests: the Ada
-programs under extensions/, which cover what ACATS cannot see -- the _ada_
-symbol prefix on library subprograms, and the Command_Line vendor package.
-They are counted separately, as X= and XF= in the run summary.
-
-Selectors:
-  all                every test (default)
-  a, b, c, d, e, l   one ACATS class
-  PREFIX             a filename prefix, such as c45 or c45347
-
-Benchmark modes, reached as \`$SELF bench MODE' or \`bash test-bench.sh MODE':
-  stages              where compile time goes: front end against back end
-  parser              front end against input size, to expose non-linear cost
-  corpus              throughput over the conformance suite, slowest inputs named
-  compare REFERENCE   this compiler against another build of it, with deltas
-  profile             the functions in turboada.c that compiling spends time in
-  codegen             run time of the generated code, against GNAT where present
-  memory              peak memory of the compiler and of what it produces
-  all                 every mode but compare and profile (the default)
-
-To compare two builds, keep the old binary and name it:
-
-  cp bin-*/ta /tmp/before && make && ./$SELF bench compare /tmp/before
-
-Environment:
-  TURBOADA              compiler to test (default: bin-<platform>/ta, built
-                     with make if it is missing)
-  OPT                the flag the tests link with (default: -O2); under bench,
-                     the level alone (default: 2)
-  JOBS, NPROC        parallel workers (default: the processor count)
-  TEST_TIMEOUT       per-test run cap in seconds (default: 30)
-  COMPILE_TIMEOUT    per-unit compile/bind cap in seconds (default: 30)
-  LINK_TIMEOUT       per-test link cap in seconds (default: 20)
-  STARTUP_TIMEOUT    compiler startup/version cap in seconds (default: 30)
-  BUILD_TIMEOUT      compiler rebuild cap in seconds (default: 300)
-  WORKER_TIMEOUT     last-resort cap around one complete test worker
-  KILL_GRACE         seconds after TERM before timeout sends KILL (default: 2)
-  BASELINE           baseline manifest path (default: acats.baseline)
-  SLOWEST            slowest tests or inputs to name (default: 12)
-  KEEP_WORK          set to 1 to keep the working trees
-  TAP                set to 1 to also write a TAP stream
-  NO_ANIMATE         set to 1 to draw no progress indicators
-  NO_COLOUR          set to 1 to draw no colour
-
-Benchmark environment:
-  REPEATS            timed repetitions after warmup (default: 7)
-  WARMUP             untimed runs before measuring (default: 1)
-  CORPUS             files to take from the conformance suite (default: 300)
-  ONLY               run only the named programs, space separated
-  NO_GNAT            set to 1 to skip GNAT
-
-codegen mode only, where the two compilers are compared directly:
-  CODEGEN_REPEATS    timed repetitions of each pair (default: 25)
-  CODEGEN_WARMUP     untimed runs of each binary first (default: 3)
-  SUITES             whole passes of the suite, to show the ratios hold (default: 2)
-  BENCH_CPU          core to pin both binaries to (default: the last one)
-  BENCH_CPUS_TASK    cores for the programs with tasks (default: the last two)
-  RT                 set to 1 to run at SCHED_FIFO priority 50 as well
-  FLOOR              seconds below which a MAD is treated as timer noise (default: 0.002)
-  LOAD_MAX           one-minute load average above which the run refuses (default: 2.0)
-  FORCE              set to 1 to measure anyway on a busy machine
-  TSV_DIR            directory to write suite<N>.tsv into, one row per program
-  NO_PIN             set to 1 to measure without taskset, nice or chrt
-
-Each run writes results to test_results/ID/ and logs to acats_logs/ID/, where
-ID is unique to the run, so concurrent runs do not overwrite one another.
-TEXT
-}
-
-show_first_failures(){
-    [[ -f ${RESULTS_TSV:-} ]] || return 0
-    local max=${CI_MAX_FAILURES:-0} name status detail stage
-    awk -F'\t' -v m="$max" '$3 != "pass" && (m <= 0 || ++n <= m) { print $1 "\t" $3 "\t" $4 }' "$RESULTS_TSV" |
-    while IFS=$'\t' read -r name status detail; do
-        echo "--- $name  [$status]  $detail"
+show_failure_log(){
+    local suite=$1 name=$2 stage
+    if [[ $suite == acats ]]; then
         for stage in err out; do
             [[ -s $LOGS_DIR/$name.$stage ]] || continue
             echo "  [$stage]"; head -6 "$LOGS_DIR/$name.$stage" | sed 's/^/    /'
@@ -2247,99 +2960,148 @@ show_first_failures(){
             [[ -s $LOGS_DIR/$name.$stage ]] || continue
             echo "  [$stage]"; tail -20 "$LOGS_DIR/$name.$stage" | sed 's/^/    /'
         done
+    elif [[ $suite == debug ]]; then
+        [[ -s $TA_LOGS/debug/$name.log ]] && grep -E '^(FAILED|PENDING|  ---|    )' "$TA_LOGS/debug/$name.log"
+    elif [[ -s $TA_LOGS/$suite/$name.log ]]; then
+        tail -25 "$TA_LOGS/$suite/$name.log" | sed 's/^/    /'
+    fi
+    return 0
+}
+
+show_first_failures(){
+    local max=${CI_MAX_FAILURES:-0} suite name status detail
+    gating | awk -v m="$max" 'm <= 0 || ++n <= m' |
+    while IFS=$'\t' read -r suite name status detail; do
+        echo "--- $suite/$name  [$status]  $detail"
+        show_failure_log "$suite" "$name"
     done
 }
 
-run_ci(){
-    run_selector all "ACATS RUN — all"
-    run_extension_tests; run_project_tests; run_bonus_tests
-    run_debug_tests; run_repro_tests; run_fuzz_tests
-    local summary="$RESULTS_DIR/test_summary.txt" failed skipped
-    [[ -f $summary ]] || { echo "::error::the suite produced no summary; it did not run to completion"; exit 1; }
-    printf '\n===== suite stats (%s) =====\n' "${CI_PLATFORM:-$(uname -s)}"; cat "$summary"; printf '=============================\n\n'
+show_debug_failures(){
+    local suite name status detail
+    awk -F'\t' '$1 == "debug" && $3 == "fail"' "$RESULTS_TSV" |
+    while IFS=$'\t' read -r suite name status detail; do
+        echo "--- debug/$name  [$status]  $detail"
+        show_failure_log debug "$name"
+    done
+}
+
+ci_report(){
+    local summary=$RUN_DIR/test_summary.txt platform=${CI_PLATFORM:-$(uname -s)} suite missing=''
+    [[ -s $summary ]] || { echo "::error::the suite produced no summary; it did not run to completion"; exit 1; }
+    for suite in $CI_SUITES; do
+        suite_enabled "$suite" || continue
+        awk -F'\t' -v s="$suite" '$1 == s { found = 1; exit } END { exit !found }' "$RESULTS_TSV" || missing+=" $suite"
+    done
+    printf '\n===== suite stats (%s) =====\n' "$platform"; cat "$summary"; printf '=============================\n\n'
     [[ -n ${GITHUB_STEP_SUMMARY:-} ]] &&
-        { printf '### %s\n```\n' "${CI_PLATFORM:-$(uname -s)}"; cat "$summary"; printf '```\n'; } >> "$GITHUB_STEP_SUMMARY"
-    failed=$(sed -n 's/.*[[:space:]]F=\([0-9]\{1,\}\).*/\1/p' "$summary")
-    skipped=$(sed -n 's/.*[[:space:]]S=\([0-9]\{1,\}\).*/\1/p' "$summary")
-    local counts="${failed:-0} ACATS failed, ${skipped:-0} never ran, ${EXT_FAIL:-0} extension, ${PROJ_FAIL:-0} project, ${BONUS_FAIL:-0} bonus, ${DBG_FAIL:-0} debug (non-gating), ${REPRO_FAIL:-0} reproducer, ${FUZZ_FAIL:-0} fuzz failures"
+        { printf '### %s\n```\n' "$platform"; cat "$summary"; printf '```\n'; } >> "$GITHUB_STEP_SUMMARY"
+    if [[ -n $missing ]]; then
+        echo "::error::$platform: no verdict at all from:$missing; the suite did not run to completion"
+        exit 1
+    fi
+    n(){ awk -F'\t' -v s="$1" -v v="$2" '$1 == s && $3 == v { c++ } END { print c + 0 }' "$RESULTS_TSV"; }
+    local af as xf pf bf df rf ff gf counts
+    af=$(n acats fail) as=$(n acats skip) xf=$(n extensions fail) pf=$(n project fail)
+    bf=$(n bonus fail) df=$(n debug fail) rf=$(n repro fail) ff=$(n fuzz fail) gf=$(n gameplay fail)
+    counts="$af ACATS failed, $as never ran, $xf extension, $pf project, $bf bonus, $df debug (non-gating), $rf reproducer, $ff fuzz, $gf gameplay failures"
     #  Debug/DWARF cases depend on the host's gdb/lldb/lldb-dap/python and
     #  their Ada support, which varies by platform; a failure there is
     #  reported in full (expected vs got) but does not gate the suite.
-    if (( ${DBG_FAIL:-0} )) && [[ -s ${RESULTS_DIR:-}/debug.log ]]; then
-        echo "::warning::${CI_PLATFORM:-$(uname -s)}: ${DBG_FAIL} debug test(s) failed (non-gating); detail follows"
-        grep -E '^(FAILED|  ---|    )' "$RESULTS_DIR/debug.log"
+    if ((df)); then
+        echo "::warning::$platform: $df debug test(s) failed (non-gating); detail follows"
+        show_debug_failures
         if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
             {
-                printf '\n<details><summary>debug failures on %s — non-gating (host gdb/lldb/python dependent)</summary>\n\n```\n' \
-                    "${CI_PLATFORM:-$(uname -s)}"
-                grep -E '^(FAILED|  ---|    )' "$RESULTS_DIR/debug.log"
+                printf '\n<details><summary>debug failures on %s — non-gating (host gdb/lldb/python dependent)</summary>\n\n```\n' "$platform"
+                show_debug_failures
                 printf '```\n</details>\n'
             } >> "$GITHUB_STEP_SUMMARY"
         fi
     fi
-    (( ${failed:-0} + ${skipped:-0} + ${EXT_FAIL:-0} + ${PROJ_FAIL:-0} + ${BONUS_FAIL:-0} + ${REPRO_FAIL:-0} + ${FUZZ_FAIL:-0} )) || { echo "$counts"; return 0; }
+    ((af + as + xf + pf + bf + rf + ff + gf)) || { echo "$counts"; return 0; }
     echo "$counts"
     show_first_failures
     if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
         {
             printf '\n**%s**\n\n' "$counts"
-            printf '<details><summary>failing tests on %s</summary>\n\n```\n' "${CI_PLATFORM:-$(uname -s)}"
+            printf '<details><summary>failing tests on %s</summary>\n\n```\n' "$platform"
             show_first_failures
             printf '```\n</details>\n'
         } >> "$GITHUB_STEP_SUMMARY"
     fi
-    echo "::error::${CI_PLATFORM:-$(uname -s)}: $counts"
+    echo "::error::$platform: $counts"
     exit 1
 }
+
+suite_of(){ case $1 in
+    x|extensions) echo extensions ;;
+    p|project)    echo project ;;
+    b83|bonus)    echo bonus ;;
+    dbg|debug)    echo debug ;;
+    rp|repro)     echo repro ;;
+    fz|fuzz)      echo fuzz ;;
+    gp|gameplay)  echo gameplay ;;
+    acats)        echo acats ;;
+    *)            return 1 ;;
+esac; }
 
 main(){
     if [[ ${1:-} == bench ]]; then shift; bench_main "$@"; return; fi
 
-    local cmd=${1:-run}; shift || true
+    local -a args=()
+    JOBS_OPTION='' ACCEPT_OPTION=0
+    while (($#)); do
+        case $1 in
+            -j)       (($# > 1)) || die "-j needs a number of workers"; JOBS_OPTION=$2; shift 2 ;;
+            -j[0-9]*) JOBS_OPTION=${1#-j}; shift ;;
+            --accept) ACCEPT_OPTION=1; shift ;;
+            --only)   (($# > 1)) || die "--only needs a suite list"; ONLY_SUITES=$2; shift 2 ;;
+            --only=*) ONLY_SUITES=${1#--only=}; shift ;;
+            --skip)   (($# > 1)) || die "--skip needs a suite list"; SKIP_SUITES=$2; shift 2 ;;
+            --skip=*) SKIP_SUITES=${1#--skip=}; shift ;;
+            *)        args+=("$1"); shift ;;
+        esac
+    done
+    [[ -z $JOBS_OPTION || $JOBS_OPTION =~ ^[1-9][0-9]*$ ]] || die "-j wants a positive number, not '$JOBS_OPTION'"
+    set -- ${args[@]+"${args[@]}"}
+
+    local cmd=${1:-run} suite item title
+    shift || true
+    SELECTION=()
     case $cmd in
         h|help|-h|--help) usage; return ;;
+        run|g|check|bless|list) SELECTION=("${@:-all}") ;;
+        q)  SELECTION=("${@:-c32}") ;;
+        ci) SELECTION=($CI_SUITES) ;;
+        *)  suite=$(suite_of "$cmd") || { usage >&2; exit 2; }
+            if [[ $suite == gameplay ]] && (($#)); then SELECTION=("gameplay/$(IFS=/; printf '%s' "$*")")
+            elif (($#)); then for item; do SELECTION+=("$suite/$item"); done; else SELECTION=("$suite"); fi ;;
     esac
 
-    acats_setup
+    if [[ $cmd == list ]]; then
+        ensure_corpus || die "the test corpus is missing and tests.zip cannot be unpacked"
+        discover "${SELECTION[@]}" | tr ':' '/'
+        return
+    fi
+
+    engine_setup
+    select_items "${SELECTION[@]}"
     case $cmd in
-        run|g)   run_selector "${1:-all}" "ACATS RUN — ${1:-all}"
-                 if [[ ${1:-all} == all ]]; then
-                     run_extension_tests
-                     run_project_tests
-                     run_bonus_tests
-                     run_debug_tests
-                     run_repro_tests
-                     run_fuzz_tests
-                 fi ;;
-        q)       run_selector "${1:-c32}" "ACATS RUN — ${1:-c32}" ;;
-        ci)      run_ci ;;
-        check)   run_selector "${1:-all}" "ACATS CHECK — ${1:-all}"
-                 [[ ${1:-all} == all ]] && { run_extension_tests; run_project_tests; run_bonus_tests; run_debug_tests; run_repro_tests; run_fuzz_tests; }
-                 compare_to_baseline
-                 ((REGRESSIONS==0 && ${EXT_FAIL:-0}==0 && ${PROJ_FAIL:-0}==0 && ${DBG_FAIL:-0}==0 && ${REPRO_FAIL:-0}==0 && ${FUZZ_FAIL:-0}==0)) || exit 1 ;;
-        extensions|x)
-                 run_extension_tests
-                 ((${EXT_FAIL:-0}==0)) || exit 1 ;;
-        project|p)
-                 run_project_tests
-                 ((${PROJ_FAIL:-0}==0)) || exit 1 ;;
-        bonus|b83)
-                 run_bonus_tests
-                 ((${BONUS_FAIL:-0}==0)) || exit 1 ;;
-        debug|dbg)
-                 run_debug_tests
-                 ((${DBG_FAIL:-0}==0)) || exit 1 ;;
-        repro|rp)
-                 run_repro_tests
-                 ((${REPRO_FAIL:-0}==0)) || exit 1 ;;
-        fuzz|fz)
-                 run_fuzz_tests
-                 ((${FUZZ_FAIL:-0}==0)) || exit 1 ;;
-        bless)   run_selector "${1:-all}" "ACATS BLESS — ${1:-all}"
-                 write_baseline ;;
-        list)    local -a SELECTED=(); selector_files "${1:-all}"
-                 local f; for f in "${SELECTED[@]}"; do basename "$f" .ada; done ;;
-        *)       usage; exit 2 ;;
+        check) title="CHECK" ;;
+        bless) title="BLESS" ;;
+        ci)    title="CI RUN" ;;
+        *)     title="RUN" ;;
+    esac
+    run_pool "$ITEMS" "$title — ${SELECTION[*]}"
+    rm -f "$ITEMS"
+
+    case $cmd in
+        check) compare_to_baseline; ((REGRESSIONS == 0)) || exit 1 ;;
+        bless) write_baseline ;;
+        ci)    ci_report ;;
+        run|g|q) ;;
+        *)     if awk -F'\t' '$3 == "fail" { found = 1 } END { exit !found }' "$RESULTS_TSV"; then exit 1; fi ;;
     esac
 }
 main "$@"

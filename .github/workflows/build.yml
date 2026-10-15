@@ -54,8 +54,8 @@ jobs:
         with:
           name: results-${{ inputs.platform }}
           path: |
-            test_results/**/results.tsv
-            test_results/**/test_summary.txt
-            acats_logs/**
+            test_results/*/results.tsv
+            test_results/*/test_summary.txt
+            test_results/*/logs/**
           if-no-files-found: ignore
           retention-days: 14

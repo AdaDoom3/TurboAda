@@ -4,13 +4,15 @@ CFLAGS = -O3 -Wall -std=gnu2x
 STAGE = if [ -t 1 ]; then printf '  \033[2m%s\033[0m\n' "$(1)"; \
         else printf '  %s\n' "$(1)"; fi
 
-HOST_SYSTEM   := $(shell uname -s)
-HOST_MACHINE  := $(shell uname -m)
-HOST_IS_MACOS := $(filter Darwin,$(HOST_SYSTEM))
-HOST_IS_GCC   := $(shell echo | $(CC) -dM -E - 2>/dev/null \
-                         | grep -q __clang__ || echo yes)
+HOST_SYSTEM     := $(shell uname -s)
+HOST_MACHINE    := $(shell uname -m)
+HOST_IS_MACOS   := $(filter Darwin,$(HOST_SYSTEM))
+HOST_IS_WINDOWS := $(filter MINGW% MSYS% CYGWIN%,$(HOST_SYSTEM))
+HOST_IS_GCC     := $(shell echo | $(CC) -dM -E - 2>/dev/null \
+                           | grep -q __clang__ || echo yes)
 
-WHOLE_PROGRAM := $(if $(HOST_IS_GCC),-fwhole-program)
+LTO_SCHEDULE  := $(if $(HOST_IS_WINDOWS),-flto=1 -flto-partition=one,-flto=auto)
+WHOLE_PROGRAM := $(if $(HOST_IS_GCC),-fwhole-program $(LTO_SCHEDULE))
 TUNE          := $(if $(HOST_IS_GCC)$(filter x86_64 amd64,$(HOST_MACHINE)),\
                       -march=native)
 
@@ -26,7 +28,10 @@ LINUX_CROSS_COMPILER := $(or \
 
 RUNTIME     = turboada-runtime.ada
 LEGACY      = turboada-runtime-legacy.ada
-RUNTIMES    = $(RUNTIME) $(LEGACY)
+APIS        = turboada-runtime-apis.ada
+RUNTIMES    = $(RUNTIME) $(LEGACY) $(APIS)
+EXAMPLE     = turboada-example-game
+ASSET_ARCHIVE = $(EXAMPLE)-assets.zip
 MANUAL      = turboada-manual.md
 VSIX        = turboada.vsix
 BUNDLE      = turboada-extension.html
@@ -80,20 +85,24 @@ BUILD_EXECUTABLE = $(if $(SLICES),\
                      $(LIPO) -create -output $(call Slice_Path,) $(SLICES),\
                      $(call Compile_Slice,))
 
-LLVM_PRESENT_Darwin = ls /opt/homebrew/opt/llvm/lib/libLLVM.dylib \
-                         /usr/local/opt/llvm/lib/libLLVM.dylib \
-                         /Library/Developer/CommandLineTools/usr/lib/libLLVM.dylib \
-                         2>/dev/null | grep -q .
-LLVM_PRESENT_Linux  = ldconfig -p 2>/dev/null | grep -q libLLVM
-LLVM_INSTALL_Darwin = Install brew install llvm
-LLVM_INSTALL_Linux  = Install apt-get install -y --no-install-recommends llvm; \
-                      Install dnf install -y llvm-libs; \
-                      Install pacman -S --noconfirm llvm-libs; \
-                      Install zypper install -y libLLVM; \
-                      Install apk add llvm-libs
-LLVM_PRESENT = $(or $(LLVM_PRESENT_$(HOST_SYSTEM)),$(LLVM_PRESENT_Linux))
-LLVM_INSTALL = $(or $(LLVM_INSTALL_$(HOST_SYSTEM)),$(LLVM_INSTALL_Linux))
-LLVM_SUDO    = $(if $(HOST_IS_MACOS),,$(SUDO))
+LLVM_PRESENT_Darwin  = ls /opt/homebrew/opt/llvm/lib/libLLVM.dylib \
+                          /usr/local/opt/llvm/lib/libLLVM.dylib \
+                          /Library/Developer/CommandLineTools/usr/lib/libLLVM.dylib \
+                          2>/dev/null | grep -q .
+LLVM_PRESENT_Linux   = ldconfig -p 2>/dev/null | grep -q libLLVM
+LLVM_PRESENT_Windows = ls bin-$(HOST_TARGET)/LLVM-C.dll 2>/dev/null | grep -q .
+LLVM_INSTALL_Darwin  = Install brew install llvm
+LLVM_INSTALL_Linux   = Install apt-get install -y --no-install-recommends llvm; \
+                       Install dnf install -y llvm-libs; \
+                       Install pacman -S --noconfirm llvm-libs; \
+                       Install zypper install -y libLLVM; \
+                       Install apk add llvm-libs
+LLVM_INSTALL_Windows = Install unzip -qoj $(LIBRARY_SOURCE) LLVM-C.dll \
+                         -d bin-$(HOST_TARGET)
+LLVM_HOST    = $(if $(HOST_IS_WINDOWS),Windows,$(HOST_SYSTEM))
+LLVM_PRESENT = $(or $(LLVM_PRESENT_$(LLVM_HOST)),$(LLVM_PRESENT_Linux))
+LLVM_INSTALL = $(or $(LLVM_INSTALL_$(LLVM_HOST)),$(LLVM_INSTALL_Linux))
+LLVM_SUDO    = $(if $(HOST_IS_MACOS)$(HOST_IS_WINDOWS),,$(SUDO))
 
 HOST_TARGET := $(if $(HOST_IS_MACOS),macos,linux)
 TARGET      ?= $(HOST_TARGET)
@@ -102,9 +111,9 @@ CROSS       := $(filter-out $(HOST_TARGET),$(TARGET))
 COMPILER_linux            = $(if $(CROSS),$(LINUX_CROSS_COMPILER),$(CC))
 COMPILER_macos            = $(if $(CROSS),o64-clang,$(CC))
 COMPILER_windows          = x86_64-w64-mingw32-gcc
-COMPILER_FLAGS_linux      = -O3 -Wall -g0 -std=gnu17 -march=x86-64 -mtune=generic
+COMPILER_FLAGS_linux      = -O3 -Wall -g0 -std=gnu17 -march=x86-64 -mtune=generic -flto=auto
 COMPILER_FLAGS_macos      = -O3 -Wall -g0 -std=gnu2x
-COMPILER_FLAGS_windows    = -O2 -Wall -g0 -std=gnu2x -static
+COMPILER_FLAGS_windows    = -O2 -Wall -g0 -std=gnu2x -static -flto=auto
 ARCHITECTURES_macos       = arm64 x86_64
 SUFFIX_windows            = .exe
 ARTWORK_linux             = $(ICON).png
@@ -117,6 +126,8 @@ ICON_BUILD_macos          = $(ICON_ICNS) > $(BIN_DIR)/$(ICON).icns; \
 ICON_BUILD_windows        = $(ICON_ICO) > $(BIN_DIR)/$(ICON).ico
 LAUNCHER_linux            = turboada.desktop
 RESOURCE_COMPILER_windows = x86_64-w64-mingw32-windres
+SHARED_LIBRARIES_linux    = linux/*
+SHARED_LIBRARIES_macos    = macos/*
 SHARED_LIBRARIES_windows  = *.dll
 
 $(if $(COMPILER_$(TARGET)),,\
@@ -134,6 +145,7 @@ LIBRARY_SOURCE   = bin-libraries.zip
 EXECUTABLE       = ta$(SUFFIX)
 HOST_BINARY      = bin-$(HOST_TARGET)/ta
 HOST_RUNTIMES    = $(addprefix bin-$(HOST_TARGET)/,$(RUNTIMES))
+HOST_LIBRARIES   = bin-$(HOST_TARGET)/.bundled-libraries
 RESOURCE_OBJECT  = $(if $(RESOURCE_COMPILER),staging/$(ICON).o)
 
 LIPO := $(shell command -v lipo || command -v llvm-lipo || \
@@ -143,7 +155,7 @@ SUDO := $(shell [ $$(id -u) -eq 0 ] || echo sudo)
 ARCHIVE       = builds/bin-$(TARGET).zip
 PROOF         = staging/proof
 VERSION      := $(shell bash .github/version.sh)
-MINGW_RUNTIME = 'libwinpthread\|libgcc_s\|libstdc++\|libiconv\|libxml2\|libzstd\|zlib1'
+MINGW_RUNTIME = 'libwinpthread\|libgcc_s\|libstdc++\|libiconv\|libxml2\|libzstd'
 
 PROVE_CONTENTS_linux   = :
 PROVE_CONTENTS_macos   = archs=$$($(LIPO) -archs $(PROOF)/ta); \
@@ -167,11 +179,24 @@ PROVE_RUNS = $(if $(CROSS),echo "$(ARCHIVE) was built for $(TARGET) and cannot r
     'end Legacy;' > legacy.adb && \
   ./$(EXECUTABLE) legacy.adb -o legacy && \
   { ./legacy | grep -xF "legacy units served" >/dev/null || \
-    { echo "the packaged compiler cannot serve $(LEGACY)"; exit 1; }; })
+    { echo "the packaged compiler cannot serve $(LEGACY)"; exit 1; }; } && \
+  printf '%s\n' 'with Interfaces.C.Strings, Text_IO, Zlib;' 'procedure Apis is' 'begin' \
+    '  Text_IO.Put_Line ("zlib " & Interfaces.C.Strings.Value (Zlib.zlibVersion));' \
+    'end Apis;' > apis.adb && \
+  ./$(EXECUTABLE) apis.adb -o apis && \
+  { ./apis | grep -q '^zlib 1\.' || \
+    { echo "the packaged compiler cannot serve $(APIS) or load zlib"; exit 1; }; })
+
+BUILD_EXAMPLE = $(if $(CROSS),\
+  cp $(ASSET_ARCHIVE) $(BIN_DIR)/ && \
+    echo "  cross package: $(EXAMPLE) ships as source and asset zip; the built compiler cannot run here to build it",\
+  unzip -qo $(ASSET_ARCHIVE) -d $(BIN_DIR) && \
+  ./$(BIN_DIR)/$(EXECUTABLE) $(EXAMPLE).ada -o $(BIN_DIR)/$(EXAMPLE)$(SUFFIX) && \
+    rm -f $(BIN_DIR)/$(EXAMPLE)$(SUFFIX).native.ll $(BIN_DIR)/$(EXAMPLE)$(SUFFIX).native.ali)
 
 all: ta provision-llvm
 
-ta: $(HOST_BINARY) $(HOST_RUNTIMES)
+ta: $(HOST_BINARY) $(HOST_RUNTIMES) $(HOST_LIBRARIES)
 
 $(HOST_BINARY): turboada.c
 	@mkdir -p $(@D)
@@ -183,6 +208,14 @@ $(HOST_RUNTIMES): bin-$(HOST_TARGET)/%: %
 	@mkdir -p $(@D)
 	@$(call STAGE,copying $< beside the compiler)
 	cp $< $@
+
+$(HOST_LIBRARIES): $(wildcard $(LIBRARY_SOURCE))
+	@mkdir -p $(@D)
+	@$(call STAGE,unpacking the libraries programs load beside the compiler)
+	test ! -f $(LIBRARY_SOURCE) || ! command -v unzip >/dev/null || \
+	  unzip -qoj $(LIBRARY_SOURCE) '$(SHARED_LIBRARIES_$(HOST_TARGET))' \
+	    -d $(@D) || test $$? -eq 11
+	touch $@
 
 provision-llvm:
 	@$(LLVM_PRESENT) && exit 0; \
@@ -211,11 +244,14 @@ package: turboada.c $(RUNTIMES) $(ICON_SOURCE) $(BIN_DIR)/$(VSIX)
 	@$(call STAGE,compiling turboada.c for $(TARGET))
 	$(BUILD_EXECUTABLE)
 	cp $(RUNTIMES) $(BIN_DIR)/
+	cp $(EXAMPLE).ada $(BIN_DIR)/
 	test -z "$(LAUNCHER)" || printf '%s\n' '[Desktop Entry]' 'Type=Application' \
 	  'Name=TurboAda' 'Comment=TurboAda compiler' 'Exec=ta %F' 'Icon=$(ICON)' \
 	  'Terminal=true' 'Categories=Development;Building;' > $(BIN_DIR)/$(LAUNCHER)
 	test -z "$(SHARED_LIBRARIES)" || \
 	  unzip -qoj $(LIBRARY_SOURCE) '$(SHARED_LIBRARIES)' -d $(BIN_DIR)
+	@$(call STAGE,building $(EXAMPLE) with the packaged compiler)
+	$(BUILD_EXAMPLE)
 	@$(call STAGE,packing $(ARCHIVE))
 	@mkdir -p builds && rm -f $(ARCHIVE)
 	cd $(BIN_DIR) && zip -qr $(abspath $(ARCHIVE)) .
@@ -260,6 +296,6 @@ clean: clean-test
 	rm -rf staging builds $(BIN_DIRS)
 
 clean-test:
-	rm -rf test_results acats_logs acats/report.ll
+	rm -rf test_results acats_logs .acats-unpack.*
 
 .PHONY: all ta package vsix provision-llvm clean clean-test
